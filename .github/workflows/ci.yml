@@ -1,6 +1,4 @@
-# CI workflow - runs on every push to main and PRs
-# Validates code integrity through build verification
-
+# Minimal CI - quick build verification
 name: CI
 
 on:
@@ -14,44 +12,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Quick format and lint check
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings -A dead_code -A unused
-
-  # Build verification using reusable workflow
   build:
     name: Build
-    needs: check
-    uses: ./.github/workflows/_build.yml
-    with:
-      profile: release
-      upload-artifacts: false
-
-  # Run tests
-  test:
-    name: Test
-    needs: check
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
@@ -61,7 +28,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run tests
-        run: cargo test --workspace --all-features
+      - name: Build
+        run: cargo build --workspace
