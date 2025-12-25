@@ -1,5 +1,5 @@
 [package]
-name = "sentinel"
+name = "sentinel-proxy"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
