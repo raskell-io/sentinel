@@ -76,6 +76,10 @@ http-body-util = "0.1"
 httpdate = "1.0"
 html-escape = "0.2"
 
+# Compression
+flate2 = "1.0"
+brotli = "7.0"
+
 # System
 nix = { version = "0.29", features = ["signal"] }
 libc = "0.2"
