@@ -2,11 +2,11 @@
 
 # Build arguments
 ARG RUST_VERSION=1.85
-ARG DEBIAN_VERSION=bookworm-slim
+ARG DEBIAN_VARIANT=slim-bookworm
 
 ################################################################################
 # Create a stage for building the application
-FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+FROM rust:${RUST_VERSION}-${DEBIAN_VARIANT} AS builder
 
 # Install build dependencies
 RUN apt-get update && \
@@ -61,7 +61,7 @@ RUN cargo build --release --workspace && \
 
 ################################################################################
 # Create runtime stage for the proxy
-FROM debian:${DEBIAN_VERSION} AS runtime-base
+FROM debian:bookworm-slim AS runtime-base
 
 # Install runtime dependencies
 RUN apt-get update && \

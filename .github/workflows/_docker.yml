@@ -33,17 +33,6 @@ jobs:
       contents: read
       packages: write
 
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - name: proxy
-            dockerfile_target: proxy
-          - name: echo-agent
-            dockerfile_target: echo-agent
-          - name: ratelimit-agent
-            dockerfile_target: ratelimit-agent
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,7 +52,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.target.name }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ inputs.version }}
             type=raw,value=latest,enable=${{ inputs.latest }}
@@ -72,11 +61,11 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          target: ${{ matrix.target.dockerfile_target }}
+          target: proxy
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            RUST_VERSION=1.83
+            RUST_VERSION=1.85
