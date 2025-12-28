@@ -10,27 +10,31 @@
 //! # Module Structure
 //!
 //! - [`cache`]: File caching with pre-computed compression
+//! - [`compression`]: Content encoding and compression utilities
+//! - [`range`]: HTTP Range request handling
 
 mod cache;
+mod compression;
+mod range;
 
 pub use cache::{CachedFile, CacheStats, FileCache};
+pub use compression::ContentEncoding;
 
 use anyhow::Result;
 use bytes::Bytes;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use http::{header, Method, Request, Response, StatusCode};
 use http_body_util::Full;
 use mime_guess::from_path;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tracing::{debug, error, warn};
+use tracing::warn;
 
 use sentinel_config::StaticFileConfig;
+
+use compression::{compress_content, negotiate_encoding, should_compress};
+use range::serve_range_request;
 
 // ============================================================================
 // Constants
@@ -44,41 +48,6 @@ const MAX_CACHE_FILE_SIZE: u64 = 1024 * 1024;
 
 /// File size threshold for memory-mapped serving (10MB)
 const MMAP_THRESHOLD: u64 = 10 * 1024 * 1024;
-
-// ============================================================================
-// Content Encoding
-// ============================================================================
-
-/// Content encoding preference
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ContentEncoding {
-    Identity,
-    Gzip,
-    Brotli,
-}
-
-impl ContentEncoding {
-    fn as_str(&self) -> &'static str {
-        match self {
-            ContentEncoding::Identity => "identity",
-            ContentEncoding::Gzip => "gzip",
-            ContentEncoding::Brotli => "br",
-        }
-    }
-}
-
-// ============================================================================
-// Range Requests
-// ============================================================================
-
-/// Parsed Range header
-#[derive(Debug, Clone)]
-struct RangeSpec {
-    /// Start byte (inclusive)
-    start: u64,
-    /// End byte (inclusive)
-    end: u64,
-}
 
 // ============================================================================
 // Static File Server
@@ -240,18 +209,28 @@ impl StaticFileServer {
         let content_type = self.get_content_type(file_path);
 
         // Negotiate content encoding
-        let encoding =
-            if self.config.compress && Self::should_compress(&content_type) && file_size >= MIN_COMPRESS_SIZE {
-                Self::negotiate_encoding(req)
-            } else {
-                ContentEncoding::Identity
-            };
+        let encoding = if self.config.compress
+            && should_compress(&content_type)
+            && file_size >= MIN_COMPRESS_SIZE
+        {
+            negotiate_encoding(req)
+        } else {
+            ContentEncoding::Identity
+        };
 
         // Check for Range header
         if let Some(range_header) = req.headers().get(header::RANGE) {
-            return self
-                .serve_range_request(req, file_path, file_size, &content_type, &etag, modified, range_header)
-                .await;
+            return serve_range_request(
+                req,
+                file_path,
+                file_size,
+                &content_type,
+                &etag,
+                modified,
+                range_header,
+                &self.config.cache_control,
+            )
+            .await;
         }
 
         // Check cache for small files
@@ -353,194 +332,6 @@ impl StaticFileServer {
             .to_string()
     }
 
-    /// Check if content type should be compressed
-    fn should_compress(content_type: &str) -> bool {
-        content_type.starts_with("text/")
-            || content_type.contains("javascript")
-            || content_type.contains("json")
-            || content_type.contains("xml")
-            || content_type.contains("svg")
-            || content_type == "application/wasm"
-    }
-
-    /// Negotiate content encoding based on Accept-Encoding header
-    fn negotiate_encoding<B>(req: &Request<B>) -> ContentEncoding {
-        if let Some(accept_encoding) = req.headers().get(header::ACCEPT_ENCODING) {
-            if let Ok(accept_str) = accept_encoding.to_str() {
-                // Check for brotli first (better compression)
-                if accept_str.contains("br") {
-                    return ContentEncoding::Brotli;
-                }
-                // Fall back to gzip
-                if accept_str.contains("gzip") {
-                    return ContentEncoding::Gzip;
-                }
-            }
-        }
-        ContentEncoding::Identity
-    }
-
-    /// Parse Range header
-    fn parse_range_header(range_str: &str, file_size: u64) -> Result<Vec<RangeSpec>> {
-        if !range_str.starts_with("bytes=") {
-            return Ok(vec![]);
-        }
-
-        let ranges_str = &range_str[6..];
-        let mut ranges = Vec::new();
-
-        for range_part in ranges_str.split(',') {
-            let range_part = range_part.trim();
-
-            if range_part.starts_with('-') {
-                // Suffix range: -500 means last 500 bytes
-                let suffix: u64 = range_part[1..].parse()?;
-                if suffix > file_size {
-                    ranges.push(RangeSpec {
-                        start: 0,
-                        end: file_size - 1,
-                    });
-                } else {
-                    ranges.push(RangeSpec {
-                        start: file_size - suffix,
-                        end: file_size - 1,
-                    });
-                }
-            } else if range_part.ends_with('-') {
-                // Open-ended range: 500- means from byte 500 to end
-                let start: u64 = range_part[..range_part.len() - 1].parse()?;
-                if start < file_size {
-                    ranges.push(RangeSpec {
-                        start,
-                        end: file_size - 1,
-                    });
-                }
-            } else if let Some(dash_pos) = range_part.find('-') {
-                // Full range: 0-499 means bytes 0 to 499
-                let start: u64 = range_part[..dash_pos].parse()?;
-                let end: u64 = range_part[dash_pos + 1..].parse()?;
-                if start <= end && start < file_size {
-                    ranges.push(RangeSpec {
-                        start,
-                        end: end.min(file_size - 1),
-                    });
-                }
-            }
-        }
-
-        Ok(ranges)
-    }
-
-    /// Serve a range request (206 Partial Content)
-    async fn serve_range_request<B>(
-        &self,
-        req: &Request<B>,
-        file_path: &Path,
-        file_size: u64,
-        content_type: &str,
-        etag: &str,
-        modified: std::time::SystemTime,
-        range_header: &http::HeaderValue,
-    ) -> Result<Response<Full<Bytes>>> {
-        // Check If-Range header
-        if let Some(if_range) = req.headers().get(header::IF_RANGE) {
-            if let Ok(if_range_str) = if_range.to_str() {
-                if if_range_str.starts_with('"') || if_range_str.starts_with("W/") {
-                    if if_range_str.trim_matches('"') != etag.trim_matches('"') {
-                        return self
-                            .serve_full_file(file_path, content_type, file_size, etag, modified)
-                            .await;
-                    }
-                } else if let Ok(if_range_time) = httpdate::parse_http_date(if_range_str) {
-                    if modified > if_range_time {
-                        return self
-                            .serve_full_file(file_path, content_type, file_size, etag, modified)
-                            .await;
-                    }
-                }
-            }
-        }
-
-        // Parse Range header
-        let range_str = range_header.to_str().map_err(|_| anyhow::anyhow!("Invalid Range header"))?;
-        let ranges = Self::parse_range_header(range_str, file_size)?;
-
-        if ranges.is_empty() {
-            return Ok(Response::builder()
-                .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header(header::CONTENT_RANGE, format!("bytes */{}", file_size))
-                .body(Full::new(Bytes::new()))?);
-        }
-
-        if ranges.len() > 1 {
-            warn!("Multi-range requests not yet supported, serving first range only");
-        }
-
-        let range = &ranges[0];
-
-        if range.start > range.end || range.end >= file_size {
-            return Ok(Response::builder()
-                .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header(header::CONTENT_RANGE, format!("bytes */{}", file_size))
-                .body(Full::new(Bytes::new()))?);
-        }
-
-        let content_length = range.end - range.start + 1;
-        let content = if req.method() == Method::HEAD {
-            Bytes::new()
-        } else {
-            let mut file = fs::File::open(file_path).await?;
-            file.seek(std::io::SeekFrom::Start(range.start)).await?;
-
-            let mut buffer = vec![0u8; content_length as usize];
-            file.read_exact(&mut buffer).await?;
-            Bytes::from(buffer)
-        };
-
-        debug!(
-            path = ?file_path,
-            range_start = range.start,
-            range_end = range.end,
-            total_size = file_size,
-            "Serving range request"
-        );
-
-        Ok(Response::builder()
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::CONTENT_LENGTH, content_length)
-            .header(
-                header::CONTENT_RANGE,
-                format!("bytes {}-{}/{}", range.start, range.end, file_size),
-            )
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::ETAG, etag)
-            .header(header::LAST_MODIFIED, httpdate::fmt_http_date(modified))
-            .body(Full::new(content))?)
-    }
-
-    /// Serve a full file (for failed If-Range or non-range requests)
-    async fn serve_full_file(
-        &self,
-        file_path: &Path,
-        content_type: &str,
-        file_size: u64,
-        etag: &str,
-        modified: std::time::SystemTime,
-    ) -> Result<Response<Full<Bytes>>> {
-        let content = fs::read(file_path).await?;
-
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::CONTENT_LENGTH, file_size)
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::ETAG, etag)
-            .header(header::LAST_MODIFIED, httpdate::fmt_http_date(modified))
-            .header(header::CACHE_CONTROL, &self.config.cache_control)
-            .body(Full::new(Bytes::from(content)))?)
-    }
-
     /// Serve a small file (read into memory)
     async fn serve_small_file<B>(
         &self,
@@ -557,7 +348,7 @@ impl StaticFileServer {
 
         // Compress if needed
         let (final_content, content_encoding) = if encoding != ContentEncoding::Identity {
-            match self.compress_content(&content, encoding) {
+            match compress_content(&content, encoding) {
                 Ok(compressed) if compressed.len() < content.len() => (compressed, Some(encoding)),
                 _ => (content.clone(), None),
             }
@@ -567,14 +358,14 @@ impl StaticFileServer {
 
         // Cache the file
         if file_size < MAX_CACHE_FILE_SIZE {
-            let gzip_content = if Self::should_compress(content_type) {
-                self.compress_content(&content, ContentEncoding::Gzip).ok()
+            let gzip_content = if should_compress(content_type) {
+                compress_content(&content, ContentEncoding::Gzip).ok()
             } else {
                 None
             };
 
-            let brotli_content = if Self::should_compress(content_type) {
-                self.compress_content(&content, ContentEncoding::Brotli).ok()
+            let brotli_content = if should_compress(content_type) {
+                compress_content(&content, ContentEncoding::Brotli).ok()
             } else {
                 None
             };
@@ -644,15 +435,16 @@ impl StaticFileServer {
         encoding: ContentEncoding,
     ) -> Result<Response<Full<Bytes>>> {
         // Determine best content to serve based on encoding preference
-        let (content, content_encoding) = match encoding {
-            ContentEncoding::Brotli if cached.brotli_content.is_some() => {
-                (cached.brotli_content.unwrap(), Some(ContentEncoding::Brotli))
-            }
-            ContentEncoding::Gzip if cached.gzip_content.is_some() => {
-                (cached.gzip_content.unwrap(), Some(ContentEncoding::Gzip))
-            }
-            _ => (cached.content.clone(), None),
-        };
+        let (content, content_encoding) =
+            match (encoding, &cached.brotli_content, &cached.gzip_content) {
+                (ContentEncoding::Brotli, Some(brotli), _) => {
+                    (brotli.clone(), Some(ContentEncoding::Brotli))
+                }
+                (ContentEncoding::Gzip, _, Some(gzip)) => {
+                    (gzip.clone(), Some(ContentEncoding::Gzip))
+                }
+                _ => (cached.content.clone(), None),
+            };
 
         // For HEAD, return empty body
         let body = if req.method() == Method::HEAD {
@@ -698,27 +490,6 @@ impl StaticFileServer {
             .header(header::LAST_MODIFIED, httpdate::fmt_http_date(modified))
             .header(header::CACHE_CONTROL, &self.config.cache_control)
             .body(Full::new(Bytes::new()))?)
-    }
-
-    /// Compress content
-    fn compress_content(&self, content: &Bytes, encoding: ContentEncoding) -> Result<Bytes> {
-        match encoding {
-            ContentEncoding::Gzip => {
-                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-                encoder.write_all(content)?;
-                let compressed = encoder.finish()?;
-                Ok(Bytes::from(compressed))
-            }
-            ContentEncoding::Brotli => {
-                let mut compressed = Vec::new();
-                {
-                    let mut encoder = brotli::CompressorWriter::new(&mut compressed, 4096, 4, 22);
-                    encoder.write_all(content)?;
-                }
-                Ok(Bytes::from(compressed))
-            }
-            ContentEncoding::Identity => Ok(content.clone()),
-        }
     }
 
     /// Generate directory listing

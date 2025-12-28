@@ -9,8 +9,8 @@ use tokio::sync::RwLock;
 
 use tracing::{debug, info};
 
-use crate::types::{SentinelError, SentinelResult, UpstreamTarget};
-use super::{LoadBalancer, RequestContext, TargetSelection};
+use super::{LoadBalancer, RequestContext, TargetSelection, UpstreamTarget};
+use sentinel_common::errors::{SentinelError, SentinelResult};
 
 /// Load metric type for P2C selection
 #[derive(Debug, Clone, Copy)]

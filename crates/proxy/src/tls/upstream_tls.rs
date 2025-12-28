@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use webpki::TrustAnchor;
 
-use crate::types::{SentinelError, SentinelResult};
+use sentinel_common::errors::{SentinelError, SentinelResult};
 
 /// TLS version enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

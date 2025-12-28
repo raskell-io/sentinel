@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::types::{SentinelError, SentinelResult, UpstreamTarget};
-use super::{LoadBalancer, RequestContext, TargetSelection};
+use super::{LoadBalancer, RequestContext, TargetSelection, UpstreamTarget};
+use sentinel_common::errors::{SentinelError, SentinelResult};
 
 /// Configuration for adaptive load balancing
 #[derive(Debug, Clone)]
@@ -393,7 +393,8 @@ impl AdaptiveBalancer {
             }
         }
 
-        Some(scores.last().unwrap().index)
+        // Fallback for floating point edge case - scores is guaranteed non-empty here
+        scores.last().map(|s| s.index)
     }
 }
 

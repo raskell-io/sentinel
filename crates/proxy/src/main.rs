@@ -26,13 +26,11 @@ mod config;
 mod errors;
 mod health;
 mod http3;
+mod http_helpers;
 mod metrics;
 mod reload;
-mod request;
-mod response;
 mod routing;
 mod static_files;
-mod types;
 mod upstream;
 mod validation;
 
@@ -300,7 +298,7 @@ impl SentinelProxy {
 
     /// Get or generate correlation ID
     fn get_correlation_id(&self, session: &Session) -> String {
-        request::get_or_create_correlation_id(session)
+        http_helpers::get_or_create_correlation_id(session)
     }
 
     /// Apply security headers
@@ -546,7 +544,7 @@ impl ProxyHttp for SentinelProxy {
                             .method(req_header.method.clone())
                             .uri(req_header.uri.clone())
                             .body(())
-                            .unwrap();
+                            .expect("request builder with valid method and uri cannot fail");
                         (path, static_req)
                     };
 
@@ -746,7 +744,7 @@ impl ProxyHttp for SentinelProxy {
                                 .method(method)
                                 .uri(uri)
                                 .body(())
-                                .unwrap(),
+                                .expect("request builder with valid method and uri cannot fail"),
                             body_slice,
                             &path,
                             &ctx.correlation_id,

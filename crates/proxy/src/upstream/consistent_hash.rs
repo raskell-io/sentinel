@@ -7,8 +7,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::types::{SentinelError, SentinelResult, UpstreamTarget};
-use super::{LoadBalancer, RequestContext, TargetSelection};
+use super::{LoadBalancer, RequestContext, TargetSelection, UpstreamTarget};
+use sentinel_common::errors::{SentinelError, SentinelResult};
 use async_trait::async_trait;
 use tracing::{debug, info, warn};
 

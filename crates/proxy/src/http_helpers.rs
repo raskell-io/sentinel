@@ -1,0 +1,233 @@
+//! HTTP request and response helpers for Sentinel proxy
+//!
+//! This module provides utilities for:
+//! - Extracting request information from Pingora sessions
+//! - Writing HTTP responses to Pingora sessions
+//! - Generating and managing correlation IDs
+//!
+//! These helpers reduce boilerplate in the main proxy logic and ensure
+//! consistent handling of HTTP operations.
+
+use bytes::Bytes;
+use http::Response;
+use http_body_util::{BodyExt, Full};
+use pingora::http::ResponseHeader;
+use pingora::prelude::*;
+use pingora::proxy::Session;
+use std::collections::HashMap;
+
+use crate::routing::RequestInfo;
+
+// ============================================================================
+// Request Helpers
+// ============================================================================
+
+/// Extract request info from a Pingora session
+///
+/// Builds a `RequestInfo` struct from the session's request headers,
+/// suitable for route matching and processing.
+///
+/// # Example
+///
+/// ```ignore
+/// let request_info = extract_request_info(session);
+/// let route = router.match_request(&request_info);
+/// ```
+pub fn extract_request_info(session: &Session) -> RequestInfo {
+    let req_header = session.req_header();
+
+    let mut headers = HashMap::new();
+    for (name, value) in req_header.headers.iter() {
+        if let Ok(value_str) = value.to_str() {
+            headers.insert(name.as_str().to_lowercase(), value_str.to_string());
+        }
+    }
+
+    let host = headers.get("host").cloned().unwrap_or_default();
+    let path = req_header.uri.path().to_string();
+
+    RequestInfo {
+        method: req_header.method.as_str().to_string(),
+        path: path.clone(),
+        host,
+        headers,
+        query_params: RequestInfo::parse_query_params(&path),
+    }
+}
+
+/// Extract or generate a correlation ID from request headers
+///
+/// Looks for existing correlation ID headers in order of preference:
+/// 1. `x-correlation-id`
+/// 2. `x-request-id`
+/// 3. `x-trace-id`
+///
+/// If none are found, generates a new UUID v4.
+///
+/// # Example
+///
+/// ```ignore
+/// let correlation_id = get_or_create_correlation_id(session);
+/// tracing::info!(correlation_id = %correlation_id, "Processing request");
+/// ```
+pub fn get_or_create_correlation_id(session: &Session) -> String {
+    let req_header = session.req_header();
+
+    // Check for existing correlation ID headers (in order of preference)
+    const CORRELATION_HEADERS: [&str; 3] = ["x-correlation-id", "x-request-id", "x-trace-id"];
+
+    for header_name in &CORRELATION_HEADERS {
+        if let Some(value) = req_header.headers.get(*header_name) {
+            if let Ok(id) = value.to_str() {
+                return id.to_string();
+            }
+        }
+    }
+
+    // Generate new correlation ID
+    uuid::Uuid::new_v4().to_string()
+}
+
+// ============================================================================
+// Response Helpers
+// ============================================================================
+
+/// Write an HTTP response to a Pingora session
+///
+/// Handles the conversion from `http::Response<Full<Bytes>>` to Pingora's
+/// format and writes it to the session.
+///
+/// # Arguments
+///
+/// * `session` - The Pingora session to write to
+/// * `response` - The HTTP response to write
+/// * `keepalive_secs` - Keepalive timeout in seconds (None = disable keepalive)
+///
+/// # Returns
+///
+/// Returns `Ok(())` on success or an error if writing fails.
+///
+/// # Example
+///
+/// ```ignore
+/// let response = Response::builder()
+///     .status(200)
+///     .body(Full::new(Bytes::from("OK")))?;
+/// write_response(session, response, Some(60)).await?;
+/// ```
+pub async fn write_response(
+    session: &mut Session,
+    response: Response<Full<Bytes>>,
+    keepalive_secs: Option<u64>,
+) -> Result<(), Box<Error>> {
+    let status = response.status().as_u16();
+
+    // Collect headers to owned strings to avoid lifetime issues
+    let headers_owned: Vec<(String, String)> = response
+        .headers()
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_str().to_string(),
+                v.to_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+
+    // Extract body bytes
+    let full_body = response.into_body();
+    let body_bytes: Bytes = BodyExt::collect(full_body)
+        .await
+        .map(|collected| collected.to_bytes())
+        .unwrap_or_default();
+
+    // Build Pingora response header
+    let mut resp_header = ResponseHeader::build(status, None)?;
+    for (key, value) in headers_owned {
+        resp_header.insert_header(key, &value)?;
+    }
+
+    // Write response to session
+    session.set_keepalive(keepalive_secs);
+    session
+        .write_response_header(Box::new(resp_header), false)
+        .await?;
+    session.write_response_body(Some(body_bytes), true).await?;
+
+    Ok(())
+}
+
+/// Write an error response to a Pingora session
+///
+/// Convenience wrapper for error responses with status code, body, and content type.
+///
+/// # Arguments
+///
+/// * `session` - The Pingora session to write to
+/// * `status` - HTTP status code
+/// * `body` - Response body as string
+/// * `content_type` - Content-Type header value
+pub async fn write_error(
+    session: &mut Session,
+    status: u16,
+    body: &str,
+    content_type: &str,
+) -> Result<(), Box<Error>> {
+    let mut resp_header = ResponseHeader::build(status, None)?;
+    resp_header.insert_header("Content-Type", content_type)?;
+    resp_header.insert_header("Content-Length", &body.len().to_string())?;
+
+    session.set_keepalive(None);
+    session
+        .write_response_header(Box::new(resp_header), false)
+        .await?;
+    session
+        .write_response_body(Some(Bytes::copy_from_slice(body.as_bytes())), true)
+        .await?;
+
+    Ok(())
+}
+
+/// Write a plain text error response
+///
+/// Shorthand for `write_error` with `text/plain; charset=utf-8` content type.
+pub async fn write_text_error(
+    session: &mut Session,
+    status: u16,
+    message: &str,
+) -> Result<(), Box<Error>> {
+    write_error(session, status, message, "text/plain; charset=utf-8").await
+}
+
+/// Write a JSON error response
+///
+/// Creates a JSON object with `error` and optional `message` fields.
+///
+/// # Example
+///
+/// ```ignore
+/// // Produces: {"error":"not_found","message":"Resource does not exist"}
+/// write_json_error(session, 404, "not_found", Some("Resource does not exist")).await?;
+/// ```
+pub async fn write_json_error(
+    session: &mut Session,
+    status: u16,
+    error: &str,
+    message: Option<&str>,
+) -> Result<(), Box<Error>> {
+    let body = match message {
+        Some(msg) => format!(r#"{{"error":"{}","message":"{}"}}"#, error, msg),
+        None => format!(r#"{{"error":"{}"}}"#, error),
+    };
+    write_error(session, status, &body, "application/json").await
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    // Integration tests require mocking Pingora session.
+    // See crates/proxy/tests/ for integration test examples.
+}

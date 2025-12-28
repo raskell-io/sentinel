@@ -119,7 +119,7 @@ fn status_handler(state: &BuiltinHandlerState, request_id: &str) -> Response<Ful
         .header("X-Request-Id", request_id)
         .header("Cache-Control", "no-cache, no-store, must-revalidate")
         .body(Full::new(Bytes::from(body)))
-        .unwrap()
+        .expect("static response builder with valid headers cannot fail")
 }
 
 /// Health check handler
@@ -139,7 +139,7 @@ fn health_handler(request_id: &str) -> Response<Full<Bytes>> {
         .header("X-Request-Id", request_id)
         .header("Cache-Control", "no-cache, no-store, must-revalidate")
         .body(Full::new(Bytes::from(body)))
-        .unwrap()
+        .expect("static response builder with valid headers cannot fail")
 }
 
 /// Prometheus metrics handler
@@ -161,7 +161,7 @@ fn metrics_handler(request_id: &str) -> Response<Full<Bytes>> {
         .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
         .header("X-Request-Id", request_id)
         .body(Full::new(Bytes::from(metrics)))
-        .unwrap()
+        .expect("static response builder with valid headers cannot fail")
 }
 
 /// 404 Not Found handler
@@ -183,7 +183,7 @@ fn not_found_handler(request_id: &str) -> Response<Full<Bytes>> {
         .header("Content-Type", "application/json; charset=utf-8")
         .header("X-Request-Id", request_id)
         .body(Full::new(Bytes::from(body_bytes)))
-        .unwrap()
+        .expect("static response builder with valid headers cannot fail")
 }
 
 #[cfg(test)]

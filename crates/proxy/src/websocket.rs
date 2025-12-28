@@ -25,7 +25,7 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::types::{SentinelError, SentinelResult};
+use sentinel_common::errors::{SentinelError, SentinelResult};
 
 /// WebSocket magic string for handshake
 const WS_MAGIC: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

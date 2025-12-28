@@ -542,7 +542,7 @@ impl Http3Config {
 impl Default for Http3Config {
     fn default() -> Self {
         Self {
-            listen_addr: "0.0.0.0:443".parse().unwrap(),
+            listen_addr: "0.0.0.0:443".parse().expect("hardcoded valid address"),
             tls: Http3TlsConfig::default(),
             transport: QuicTransportConfig::default(),
             http3: Http3Settings::default(),
