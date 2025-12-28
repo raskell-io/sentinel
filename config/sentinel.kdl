@@ -6,7 +6,7 @@ server {
     worker-threads 0  // 0 = number of CPU cores
     max-connections 10000
     graceful-shutdown-timeout-secs 30
-    daemon false
+    daemon #false
     pid-file "/var/run/sentinel.pid"
 }
 
@@ -31,8 +31,8 @@ listeners {
             cert-file "/etc/sentinel/certs/server.crt"
             key-file "/etc/sentinel/certs/server.key"
             min-version "TLS1.2"
-            ocsp-stapling true
-            session-resumption true
+            ocsp-stapling #true
+            session-resumption #true
             cipher-suites {
                 - "TLS_AES_128_GCM_SHA256"
                 - "TLS_AES_256_GCM_SHA384"
@@ -69,7 +69,7 @@ filters {
         agent "waf-agent"
         timeout-ms 200
         failure-mode "closed"
-        inspect-body true
+        inspect-body #true
     }
 
     // Built-in rate limit filter (alternative to agent)
@@ -127,9 +127,9 @@ routes {
             }
         }
 
-        // Filter chain: executed in array order
-        filters ["auth" "rate-limit"]
-        waf-enabled true
+        // Filter chain: executed in order
+        filters "auth" "rate-limit"
+        waf-enabled #true
 
         circuit-breaker {
             failure-threshold 5
@@ -143,7 +143,7 @@ routes {
             timeout-ms 5000
             backoff-base-ms 100
             backoff-max-ms 2000
-            retryable-status-codes [502 503 504]
+            retryable-status-codes 502 503 504
         }
     }
 
@@ -200,8 +200,8 @@ routes {
 
         policies {
             timeout-secs 3600  // 1 hour for WebSocket
-            buffer-requests false
-            buffer-responses false
+            buffer-requests #false
+            buffer-responses #false
         }
     }
 
@@ -293,7 +293,7 @@ upstreams {
 
         tls {
             sni "cdn.example.com"
-            insecure-skip-verify false
+            insecure-skip-verify #false
         }
     }
 
@@ -350,7 +350,7 @@ agents {
         transport "unix_socket" {
             path "/var/run/sentinel/auth.sock"
         }
-        events ["request_headers"]
+        events "request_headers"
         timeout-ms 100
         failure-mode "closed"  // Fail-closed for auth
 
@@ -367,7 +367,7 @@ agents {
         transport "unix_socket" {
             path "/var/run/sentinel/ratelimit.sock"
         }
-        events ["request_headers"]
+        events "request_headers"
         timeout-ms 50
         failure-mode "open"  // Fail-open for rate limiting
     }
@@ -377,7 +377,7 @@ agents {
         transport "unix_socket" {
             path "/var/run/sentinel/waf.sock"
         }
-        events ["request_headers" "request_body"]
+        events "request_headers" "request_body"
         timeout-ms 200
         failure-mode "closed"
         max-request-body-bytes 1048576  // 1MB
@@ -396,31 +396,25 @@ waf {
 
         exclusions {
             exclusion {
-                rule-ids ["920350" "920420"]
+                rule-ids "920350" "920420"
                 scope "global"
             }
             exclusion {
-                rule-ids ["941100"]
+                rule-ids "941100"
                 scope "path" "/api/v1/upload"
             }
         }
     }
 
     mode "prevention"  // "detection" or "prevention"
-    audit-log true
+    audit-log #true
 
     body-inspection {
-        inspect-request-body true
-        inspect-response-body false
+        inspect-request-body #true
+        inspect-response-body #false
         max-inspection-bytes 1048576  // 1MB
-        content-types [
-            "application/x-www-form-urlencoded"
-            "multipart/form-data"
-            "application/json"
-            "application/xml"
-            "text/xml"
-        ]
-        decompress true
+        content-types "application/x-www-form-urlencoded" "multipart/form-data" "application/json" "application/xml" "text/xml"
+        decompress #true
         max-decompression-ratio 100.0
     }
 }
@@ -466,19 +460,19 @@ limits {
 // Observability configuration
 observability {
     metrics {
-        enabled true
+        enabled #true
         address "0.0.0.0:9090"
         path "/metrics"
-        high-cardinality false
+        high-cardinality #false
     }
 
     logging {
         level "info"  // "trace", "debug", "info", "warn", "error"
         format "json"  // "json" or "pretty"
-        timestamps true
+        timestamps #true
 
         access-log {
-            enabled true
+            enabled #true
             file "/var/log/sentinel/access.log"
             format "combined"
             buffer-size 8192
