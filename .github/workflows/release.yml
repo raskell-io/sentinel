@@ -87,7 +87,7 @@ jobs:
     uses: ./.github/workflows/_docker.yml
     with:
       version: ${{ needs.validate.outputs.version }}
-      push: ${{ github.event_name == 'release' }}
+      push: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.dry-run == false) }}
       latest: true
     permissions:
       contents: read
