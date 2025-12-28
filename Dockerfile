@@ -39,8 +39,8 @@ RUN mkdir -p crates/proxy/src && echo "fn main() {}" > crates/proxy/src/main.rs 
     mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
     mkdir -p agents/echo/src && echo "fn main() {}" > agents/echo/src/main.rs
 
-# Build dependencies (this layer will be cached)
-RUN cargo build --release --workspace
+# Build dependencies for proxy only (this layer will be cached)
+RUN cargo build --release --package sentinel-proxy
 
 # Remove dummy source files
 RUN rm -rf crates/*/src agents/*/src
@@ -48,16 +48,14 @@ RUN rm -rf crates/*/src agents/*/src
 # Copy actual source code
 COPY crates/ crates/
 COPY agents/ agents/
-COPY src/ src/
 
 # Touch the main files to ensure they're newer than the deps
 RUN find . -name "main.rs" -exec touch {} \; && \
     find . -name "lib.rs" -exec touch {} \;
 
-# Build release binaries with optimizations
-RUN cargo build --release --workspace && \
-    strip /app/target/release/sentinel && \
-    strip /app/target/release/sentinel-echo-agent
+# Build release binary with optimizations (proxy only)
+RUN cargo build --release --package sentinel-proxy && \
+    strip /app/target/release/sentinel
 
 ################################################################################
 # Create runtime stage for the proxy
@@ -128,103 +126,5 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sentinel", "-c", "/etc/sentinel/config.kdl"]
 
 ################################################################################
-# Echo agent runtime stage (reference implementation for testing)
-FROM runtime-base AS echo-agent
-
-# Copy agent binary
-COPY --from=builder /app/target/release/sentinel-echo-agent /usr/local/bin/
-
-# Switch to non-root user
-USER sentinel
-
-# Environment variables
-ENV RUST_LOG=info,sentinel_echo_agent=debug
-
-# Use tini for proper signal handling
-ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Default command
-CMD ["sentinel-echo-agent", "--socket", "/var/run/sentinel/echo.sock"]
-
-################################################################################
-# Development stage with proxy + echo agent
-FROM runtime-base AS dev
-
-# Install supervisor for running multiple processes
-RUN apt-get update && \
-    apt-get install -y supervisor \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy binaries
-COPY --from=builder /app/target/release/sentinel /usr/local/bin/
-COPY --from=builder /app/target/release/sentinel-echo-agent /usr/local/bin/
-
-# Copy configuration examples
-COPY config/ /etc/sentinel/config-examples/
-
-# Create supervisord configuration
-RUN <<SUPERVISOR_EOF cat > /etc/supervisor/conf.d/sentinel.conf
-[supervisord]
-nodaemon=true
-user=sentinel
-logfile=/var/log/sentinel/supervisord.log
-
-[program:proxy]
-command=/usr/local/bin/sentinel -c /etc/sentinel/config.kdl
-user=sentinel
-autostart=true
-autorestart=true
-stdout_logfile=/var/log/sentinel/proxy.log
-stderr_logfile=/var/log/sentinel/proxy-error.log
-
-[program:echo]
-command=/usr/local/bin/sentinel-echo-agent --socket /var/run/sentinel/echo.sock
-user=sentinel
-autostart=true
-autorestart=true
-stdout_logfile=/var/log/sentinel/echo.log
-stderr_logfile=/var/log/sentinel/echo-error.log
-SUPERVISOR_EOF
-
-# Create startup script
-RUN <<STARTUP_EOF cat > /usr/local/bin/start-sentinel && chmod +x /usr/local/bin/start-sentinel
-#!/bin/bash
-set -e
-
-echo "Starting Sentinel dev container..."
-
-# Copy example configs if not present
-if [ ! -f /etc/sentinel/config.kdl ]; then
-    echo "No config found, copying example..."
-    cp /etc/sentinel/config-examples/examples/basic.kdl /etc/sentinel/config.kdl
-fi
-
-# Start supervisord
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/sentinel.conf
-STARTUP_EOF
-
-# Switch to non-root user
-USER sentinel
-
-# Environment variables
-ENV RUST_LOG=info \
-    SENTINEL_CONFIG=/etc/sentinel/config.kdl
-
-# Expose ports
-EXPOSE 8080 8443 9090
-
-# Health check
-HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:9090/health || exit 1
-
-# Use tini for proper signal handling
-ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Default command
-CMD ["/usr/local/bin/start-sentinel"]
-
-################################################################################
-# NOTE: Additional agents (ratelimit, waf, denylist, etc.) are available as
-# separate repositories. See https://github.com/raskell-io for community agents
-# or create your own using the agent template:
-#   cargo generate --git https://github.com/raskell-io/sentinel --path agent-template
+# NOTE: Additional agents (echo, ratelimit, waf, etc.) are available as
+# separate repositories. See https://github.com/raskell-io for community agents.
