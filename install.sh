@@ -142,31 +142,26 @@ install_binary() {
 
     # Check if we can write to the install directory
     if [ ! -d "$install_dir" ]; then
-        info "Creating directory ${install_dir}..."
         if ! mkdir -p "$install_dir" 2>/dev/null; then
             if [ "$install_dir" = "$INSTALL_DIR" ]; then
-                warn "Cannot create ${INSTALL_DIR}, falling back to ${FALLBACK_DIR}"
                 install_dir="$FALLBACK_DIR"
-                mkdir -p "$install_dir"
-            else
-                error "Cannot create ${install_dir}"
+                mkdir -p "$install_dir" 2>/dev/null || true
             fi
         fi
     fi
 
     # Try to install
-    info "Installing to ${install_dir}/${BINARY_NAME}..."
     if ! cp "$binary_path" "${install_dir}/${BINARY_NAME}" 2>/dev/null; then
         if [ "$install_dir" = "$INSTALL_DIR" ]; then
             # Try with sudo
-            info "Requesting elevated permissions..."
             if command -v sudo >/dev/null 2>&1; then
+                info "Installing to ${install_dir}/${BINARY_NAME} (requires sudo)..."
                 sudo cp "$binary_path" "${install_dir}/${BINARY_NAME}"
                 sudo chmod +x "${install_dir}/${BINARY_NAME}"
             else
-                warn "Cannot write to ${INSTALL_DIR}, falling back to ${FALLBACK_DIR}"
                 install_dir="$FALLBACK_DIR"
                 mkdir -p "$install_dir"
+                info "Installing to ${install_dir}/${BINARY_NAME}..."
                 cp "$binary_path" "${install_dir}/${BINARY_NAME}"
                 chmod +x "${install_dir}/${BINARY_NAME}"
             fi
@@ -174,10 +169,12 @@ install_binary() {
             error "Failed to install to ${install_dir}"
         fi
     else
+        info "Installing to ${install_dir}/${BINARY_NAME}..."
         chmod +x "${install_dir}/${BINARY_NAME}"
     fi
 
-    echo "$install_dir"
+    # Return the install directory via a file to avoid stdout pollution
+    echo "$install_dir" > "${tmp_dir}/.install_dir"
 }
 
 # Check if directory is in PATH
@@ -227,7 +224,8 @@ main() {
     download_binary "$version" "$os" "$arch" "$tmp_dir"
 
     # Install
-    local final_dir=$(install_binary "$tmp_dir" "$INSTALL_DIR")
+    install_binary "$tmp_dir" "$INSTALL_DIR"
+    local final_dir=$(cat "${tmp_dir}/.install_dir")
 
     # Success!
     echo ""
