@@ -30,16 +30,16 @@ pub struct ActiveHealthChecker {
     /// Health checker implementation
     checker: Arc<dyn HealthCheckImpl>,
     /// Health status per target
-    health_status: Arc<RwLock<HashMap<String, HealthStatus>>>,
+    health_status: Arc<RwLock<HashMap<String, TargetHealthInfo>>>,
     /// Check task handles
     check_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
     /// Shutdown signal
     shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>,
 }
 
-/// Health status for a target
+/// Health status information for a target
 #[derive(Debug, Clone)]
-pub struct HealthStatus {
+pub struct TargetHealthInfo {
     /// Is target healthy
     pub healthy: bool,
     /// Consecutive successes
@@ -134,7 +134,7 @@ impl ActiveHealthChecker {
             self.health_status
                 .write()
                 .await
-                .insert(address.clone(), HealthStatus::new());
+                .insert(address.clone(), TargetHealthInfo::new());
 
             // Spawn health check task
             let handle = self.spawn_check_task(address);
@@ -256,12 +256,12 @@ impl ActiveHealthChecker {
     }
 
     /// Get health status for a target
-    pub async fn get_status(&self, target: &str) -> Option<HealthStatus> {
+    pub async fn get_status(&self, target: &str) -> Option<TargetHealthInfo> {
         self.health_status.read().await.get(target).cloned()
     }
 
     /// Get all health statuses
-    pub async fn get_all_statuses(&self) -> HashMap<String, HealthStatus> {
+    pub async fn get_all_statuses(&self) -> HashMap<String, TargetHealthInfo> {
         self.health_status.read().await.clone()
     }
 
@@ -309,7 +309,7 @@ impl ActiveHealthChecker {
     }
 }
 
-impl HealthStatus {
+impl TargetHealthInfo {
     /// Create new health status (initially healthy)
     pub fn new() -> Self {
         Self {
@@ -543,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_status() {
-        let status = HealthStatus::new();
+        let status = TargetHealthInfo::new();
         assert!(status.healthy);
         assert_eq!(status.health_score(), 1.0);
         assert!(!status.is_degraded());

@@ -5,6 +5,7 @@
 use anyhow::Result;
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};
+use http_body_util::BodyExt;
 use sentinel_config::{
     ApiSchemaConfig, Config, ErrorFormat, ErrorPage, ErrorPageConfig, ListenerConfig,
     MatchCondition, RouteConfig, ServiceType, StaticFileConfig, UpstreamConfig,
@@ -54,7 +55,7 @@ mod tests {
         let req = Request::get("/").body(()).unwrap();
         let response = server.serve(&req, "/").await?;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = response.into_body();
+        let body = response.into_body().collect().await?.to_bytes();
         assert_eq!(&body[..], index_content);
 
         // Test serving CSS file
@@ -114,7 +115,7 @@ mod tests {
         let req = Request::get("/app/route/123").body(()).unwrap();
         let response = server.serve(&req, "/app/route/123").await?;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = response.into_body();
+        let body = response.into_body().collect().await?.to_bytes();
         assert_eq!(&body[..], spa_content);
 
         Ok(())
@@ -259,7 +260,7 @@ mod tests {
         assert_eq!(response.headers().get("X-Error-Code").unwrap(), "NOT_FOUND");
 
         // Verify JSON response body
-        let body = response.into_body();
+        let body = response.into_body().collect().await?.to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body)?;
         assert_eq!(json["status"], 404);
         assert_eq!(json["request_id"], "req-001");
@@ -300,7 +301,7 @@ mod tests {
         );
 
         // Verify HTML response contains expected elements
-        let body = response.into_body();
+        let body = response.into_body().collect().await?.to_bytes();
         let html = String::from_utf8(body.to_vec())?;
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("500"));
@@ -354,7 +355,7 @@ mod tests {
             "application/xml; charset=utf-8"
         );
 
-        let body = response.into_body();
+        let body = response.into_body().collect().await?.to_bytes();
         let xml = String::from_utf8(body.to_vec())?;
         assert!(xml.contains("<?xml version="));
         assert!(xml.contains("<error>"));

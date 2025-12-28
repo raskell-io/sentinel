@@ -335,7 +335,7 @@ impl StaticFileServer {
     /// Serve a small file (read into memory)
     async fn serve_small_file<B>(
         &self,
-        req: &Request<B>,
+        _req: &Request<B>,
         file_path: &Path,
         content_type: &str,
         file_size: u64,

@@ -12,6 +12,10 @@ keywords = ["proxy", "reverse-proxy", "http", "security", "pingora"]
 categories = ["network-programming", "web-programming::http-server"]
 readme = "../../README.md"
 
+[lib]
+name = "sentinel_proxy"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sentinel"
 path = "src/main.rs"

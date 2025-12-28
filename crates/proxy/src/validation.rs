@@ -3,8 +3,6 @@
 //! This module provides JSON Schema validation for API routes,
 //! supporting both request and response validation with OpenAPI integration.
 
-#![allow(dead_code, unused_imports)]
-
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};

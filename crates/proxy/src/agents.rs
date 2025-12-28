@@ -4,8 +4,6 @@
 //! auth, rate limiting, and custom logic. It implements the SPOE-inspired
 //! protocol with bounded behavior and failure isolation.
 
-#![allow(dead_code)]
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sentinel_agent_protocol::{
     AgentClient, AgentResponse, Decision, EventType, HeaderOp,
