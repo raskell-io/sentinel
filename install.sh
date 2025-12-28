@@ -190,8 +190,8 @@ check_path() {
 main() {
     echo ""
     printf "${BLUE}┌─────────────────────────────────────┐${NC}\n"
-    printf "${BLUE}│${NC}     ${GREEN}Sentinel${NC} Installer             ${BLUE}│${NC}\n"
-    printf "${BLUE}│${NC}     Security-first reverse proxy   ${BLUE}│${NC}\n"
+    printf "${BLUE}│${NC}     ${GREEN}Sentinel${NC} Installer              ${BLUE}│${NC}\n"
+    printf "${BLUE}│${NC}     Security-first reverse proxy    ${BLUE}│${NC}\n"
     printf "${BLUE}└─────────────────────────────────────┘${NC}\n"
     echo ""
 
