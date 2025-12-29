@@ -115,12 +115,11 @@ impl ProxyHttp for SentinelProxy {
             "Built request info for route matching"
         );
 
-        // Match route
+        // Match route (using sync parking_lot::RwLock for better performance)
         let route_start = std::time::Instant::now();
         let route_match = self
             .route_matcher
             .read()
-            .await
             .match_request(&request_info)
             .ok_or_else(|| {
                 warn!(
@@ -135,6 +134,7 @@ impl ProxyHttp for SentinelProxy {
         let route_duration = route_start.elapsed();
 
         ctx.route_id = Some(route_match.route_id.to_string());
+        ctx.route_config = Some(route_match.config.clone());
 
         trace!(
             correlation_id = %ctx.trace_id,
@@ -339,43 +339,36 @@ impl ProxyHttp for SentinelProxy {
             "Starting request filter phase"
         );
 
-        // First, determine the route for this request (needed before upstream_peer)
-        let req_header = session.req_header();
-        let route_info = {
-            let mut headers = HashMap::new();
-            for (name, value) in req_header.headers.iter() {
-                if let Ok(value_str) = value.to_str() {
-                    headers.insert(name.as_str().to_lowercase(), value_str.to_string());
-                }
-            }
-            let host = headers.get("host").cloned().unwrap_or_default();
-            let request_info = RequestInfo {
-                path: req_header.uri.path().to_string(),
-                method: req_header.method.as_str().to_string(),
-                host,
-                headers,
-                query_params: HashMap::new(),
-            };
-            self.route_matcher.read().await.match_request(&request_info)
-        };
-
-        // Handle static file routes
-        if let Some(route_match) = &route_info {
-            if route_match.config.service_type == sentinel_config::ServiceType::Static {
+        // Use cached route config from upstream_peer (avoids duplicate route matching)
+        // Handle static file and builtin routes
+        if let Some(route_config) = ctx.route_config.clone() {
+            if route_config.service_type == sentinel_config::ServiceType::Static {
                 trace!(
                     correlation_id = %ctx.trace_id,
-                    route_id = %route_match.route_id,
+                    route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
                     "Handling static file route"
                 );
-                return self.handle_static_route(session, ctx, route_match).await;
-            } else if route_match.config.service_type == sentinel_config::ServiceType::Builtin {
+                // Create a minimal RouteMatch for the handler
+                let route_match = crate::routing::RouteMatch {
+                    route_id: sentinel_common::RouteId::new(ctx.route_id.as_deref().unwrap_or("")),
+                    config: route_config.clone(),
+                    policies: route_config.policies.clone(),
+                };
+                return self.handle_static_route(session, ctx, &route_match).await;
+            } else if route_config.service_type == sentinel_config::ServiceType::Builtin {
                 trace!(
                     correlation_id = %ctx.trace_id,
-                    route_id = %route_match.route_id,
-                    builtin_handler = ?route_match.config.builtin_handler,
+                    route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
+                    builtin_handler = ?route_config.builtin_handler,
                     "Handling builtin route"
                 );
-                return self.handle_builtin_route(session, ctx, route_match).await;
+                // Create a minimal RouteMatch for the handler
+                let route_match = crate::routing::RouteMatch {
+                    route_id: sentinel_common::RouteId::new(ctx.route_id.as_deref().unwrap_or("")),
+                    config: route_config.clone(),
+                    policies: route_config.policies.clone(),
+                };
+                return self.handle_builtin_route(session, ctx, &route_match).await;
             }
         }
 

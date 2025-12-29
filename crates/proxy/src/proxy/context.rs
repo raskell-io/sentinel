@@ -3,7 +3,10 @@
 //! The `RequestContext` struct maintains state throughout a single request,
 //! including timing, routing decisions, and metadata for logging.
 
+use std::sync::Arc;
 use std::time::Instant;
+
+use sentinel_config::{RouteConfig, ServiceType};
 
 /// Request context maintained throughout the request lifecycle.
 ///
@@ -21,6 +24,8 @@ pub struct RequestContext {
     // === Routing ===
     /// Selected route ID
     pub(crate) route_id: Option<String>,
+    /// Cached route configuration (avoids duplicate route matching)
+    pub(crate) route_config: Option<Arc<RouteConfig>>,
     /// Selected upstream
     pub(crate) upstream: Option<String>,
     /// Number of upstream attempts
@@ -56,6 +61,7 @@ impl RequestContext {
             start_time: Instant::now(),
             trace_id: String::new(),
             route_id: None,
+            route_config: None,
             upstream: None,
             upstream_attempts: 0,
             method: String::new(),
@@ -107,6 +113,18 @@ impl RequestContext {
     #[inline]
     pub fn upstream(&self) -> Option<&str> {
         self.upstream.as_deref()
+    }
+
+    /// Get the cached route configuration, if set.
+    #[inline]
+    pub fn route_config(&self) -> Option<&Arc<RouteConfig>> {
+        self.route_config.as_ref()
+    }
+
+    /// Get the service type from cached route config.
+    #[inline]
+    pub fn service_type(&self) -> Option<ServiceType> {
+        self.route_config.as_ref().map(|c| c.service_type.clone())
     }
 
     /// Get the number of upstream attempts.

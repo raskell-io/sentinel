@@ -4,8 +4,10 @@
 //! to configured routes based on various criteria (path, host, headers, etc.)
 //! with support for priority-based evaluation.
 
+use dashmap::DashMap;
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info, trace, warn};
 
@@ -19,8 +21,8 @@ pub struct RouteMatcher {
     routes: Vec<CompiledRoute>,
     /// Default route ID if no match found
     default_route: Option<RouteId>,
-    /// Cache for frequently matched routes (LRU-style)
-    cache: Arc<parking_lot::RwLock<RouteCache>>,
+    /// Cache for frequently matched routes (lock-free concurrent access)
+    cache: Arc<RouteCache>,
 }
 
 /// Compiled route with pre-processed match conditions
@@ -63,16 +65,14 @@ enum HostMatcher {
     Regex(Regex),
 }
 
-/// Route cache for performance
+/// Route cache for performance (lock-free concurrent access)
 struct RouteCache {
-    /// Cache entries (cache key -> route ID)
-    entries: HashMap<String, RouteId>,
+    /// Cache entries (cache key -> route ID) - lock-free concurrent map
+    entries: DashMap<String, RouteId>,
     /// Maximum cache size
     max_size: usize,
-    /// Access counter for LRU eviction
-    access_counter: u64,
-    /// Access timestamps for cache entries
-    access_times: HashMap<String, u64>,
+    /// Current entry count (approximate, for eviction decisions)
+    entry_count: AtomicUsize,
 }
 
 impl RouteMatcher {
@@ -126,7 +126,7 @@ impl RouteMatcher {
         Ok(Self {
             routes: compiled_routes,
             default_route: default_route.map(RouteId::new),
-            cache: Arc::new(parking_lot::RwLock::new(RouteCache::new(1000))),
+            cache: Arc::new(RouteCache::new(1000)),
         })
     }
 
@@ -139,9 +139,11 @@ impl RouteMatcher {
             "Starting route matching"
         );
 
-        // Check cache first
+        // Check cache first (lock-free read)
         let cache_key = req.cache_key();
-        if let Some(route_id) = self.cache.write().get(&cache_key) {
+        if let Some(route_id_ref) = self.cache.get(&cache_key) {
+            let route_id = route_id_ref.clone();
+            drop(route_id_ref); // Release the ref before further processing
             trace!(
                 route_id = %route_id,
                 cache_key = %cache_key,
@@ -190,10 +192,8 @@ impl RouteMatcher {
                     "Route matched"
                 );
 
-                // Update cache
-                self.cache
-                    .write()
-                    .insert(cache_key.clone(), route.id.clone());
+                // Update cache (lock-free insert)
+                self.cache.insert(cache_key.clone(), route.id.clone());
 
                 trace!(
                     route_id = %route.id,
@@ -243,15 +243,14 @@ impl RouteMatcher {
 
     /// Clear the route cache
     pub fn clear_cache(&self) {
-        self.cache.write().clear();
+        self.cache.clear();
     }
 
     /// Get cache statistics
     pub fn cache_stats(&self) -> CacheStats {
-        let cache = self.cache.read();
         CacheStats {
-            entries: cache.entries.len(),
-            max_size: cache.max_size,
+            entries: self.cache.len(),
+            max_size: self.cache.max_size,
             hit_rate: 0.0, // TODO: Track hits and misses
         }
     }
@@ -420,55 +419,61 @@ impl RouteCache {
     /// Create a new route cache
     fn new(max_size: usize) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: DashMap::with_capacity(max_size),
             max_size,
-            access_counter: 0,
-            access_times: HashMap::new(),
+            entry_count: AtomicUsize::new(0),
         }
     }
 
-    /// Get a route from cache
-    fn get(&mut self, key: &str) -> Option<RouteId> {
-        if let Some(route_id) = self.entries.get(key) {
-            self.access_counter += 1;
-            self.access_times
-                .insert(key.to_string(), self.access_counter);
-            Some(route_id.clone())
-        } else {
-            None
+    /// Get a route from cache (lock-free)
+    fn get(&self, key: &str) -> Option<dashmap::mapref::one::Ref<'_, String, RouteId>> {
+        self.entries.get(key)
+    }
+
+    /// Insert a route into cache (lock-free)
+    fn insert(&self, key: String, route_id: RouteId) {
+        // Check if we need to evict (approximate check to avoid overhead)
+        let current_count = self.entry_count.load(Ordering::Relaxed);
+        if current_count >= self.max_size {
+            // Evict ~10% of entries randomly for simplicity
+            // This is faster than true LRU and good enough for a cache
+            self.evict_random();
+        }
+
+        if self.entries.insert(key, route_id).is_none() {
+            // Only increment if this was a new entry
+            self.entry_count.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Insert a route into cache
-    fn insert(&mut self, key: String, route_id: RouteId) {
-        // Evict least recently used if at capacity
-        if self.entries.len() >= self.max_size {
-            self.evict_lru();
-        }
+    /// Evict random entries when cache is full
+    fn evict_random(&self) {
+        let to_evict = self.max_size / 10; // Evict ~10%
+        let mut evicted = 0;
 
-        self.access_counter += 1;
-        self.access_times.insert(key.clone(), self.access_counter);
-        self.entries.insert(key, route_id);
+        // Iterate and remove some entries
+        self.entries.retain(|_, _| {
+            if evicted < to_evict {
+                evicted += 1;
+                false // Remove this entry
+            } else {
+                true // Keep this entry
+            }
+        });
+
+        // Update count (approximate)
+        self.entry_count.store(self.entries.len(), Ordering::Relaxed);
     }
 
-    /// Evict the least recently used entry
-    fn evict_lru(&mut self) {
-        if let Some((key, _)) = self
-            .access_times
-            .iter()
-            .min_by_key(|(_, &time)| time)
-            .map(|(k, v)| (k.clone(), *v))
-        {
-            self.entries.remove(&key);
-            self.access_times.remove(&key);
-        }
+    /// Get current cache size
+    fn len(&self) -> usize {
+        self.entries.len()
     }
 
     /// Clear all cache entries
-    fn clear(&mut self) {
+    fn clear(&self) {
         self.entries.clear();
-        self.access_times.clear();
-        self.access_counter = 0;
+        self.entry_count.store(0, Ordering::Relaxed);
     }
 }
 

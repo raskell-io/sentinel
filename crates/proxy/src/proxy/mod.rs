@@ -14,12 +14,12 @@ mod http_trait;
 pub use context::RequestContext;
 
 use anyhow::{Context, Result};
+use parking_lot::RwLock;
 use pingora::http::ResponseHeader;
 use pingora::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -227,10 +227,10 @@ impl SentinelProxy {
                         // Reload routes and upstreams
                         let new_config = config_manager_clone.current();
 
-                        // Update route matcher
+                        // Update route matcher (sync parking_lot::RwLock)
                         if let Ok(new_matcher) = RouteMatcher::new(new_config.routes.clone(), None)
                         {
-                            *route_matcher.write().await = new_matcher;
+                            *route_matcher.write() = new_matcher;
                             info!("Routes reloaded successfully");
                         }
 

@@ -915,13 +915,41 @@ impl UpstreamPool {
         ))
     }
 
-    /// Create new peer connection
+    /// Create new peer connection with connection pooling options
     fn create_peer(&self, selection: &TargetSelection) -> SentinelResult<HttpPeer> {
-        let peer = HttpPeer::new(
+        let mut peer = HttpPeer::new(
             &selection.address,
             false,
             String::new(),
         );
+
+        // Configure connection pooling options for better performance
+        // idle_timeout enables Pingora's connection pooling - connections are
+        // kept alive and reused for this duration
+        peer.options.idle_timeout = Some(self.connection_pool.idle_timeout);
+
+        // Connection timeouts
+        peer.options.connection_timeout = Some(Duration::from_secs(5));
+        peer.options.total_connection_timeout = Some(Duration::from_secs(10));
+
+        // Read/write timeouts
+        peer.options.read_timeout = Some(Duration::from_secs(60));
+        peer.options.write_timeout = Some(Duration::from_secs(60));
+
+        // Enable TCP keepalive for long-lived connections
+        peer.options.tcp_keepalive = Some(pingora::protocols::TcpKeepalive {
+            idle: Duration::from_secs(60),
+            interval: Duration::from_secs(10),
+            count: 3,
+        });
+
+        trace!(
+            upstream_id = %self.id,
+            target = %selection.address,
+            idle_timeout_secs = self.connection_pool.idle_timeout.as_secs(),
+            "Created peer with connection pooling options"
+        );
+
         Ok(peer)
     }
 
