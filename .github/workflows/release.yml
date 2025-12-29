@@ -137,7 +137,6 @@ jobs:
     environment: release  # Optional: use GitHub environment for additional protection
     permissions:
       contents: write
-      id-token: write  # Required for Trusted Publishing OIDC
     outputs:
       commit-sha: ${{ steps.commit.outputs.sha }}
     steps:
@@ -181,12 +180,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Trusted Publishing: Get short-lived token via OIDC (no API token secret needed)
-      # Token is automatically set as CARGO_REGISTRY_TOKEN
-      - name: Authenticate with crates.io
-        uses: rust-lang/crates-io-auth-action@v1
-
       - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           # Publish in dependency order with retry logic
           CRATES=(
