@@ -114,6 +114,7 @@ jobs:
           push: ${{ inputs.push }}
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}-amd64
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false  # Disable to create single-arch image, not manifest list
 
       # Build and push ARM64 image
       - name: Build and push ARM64 image
@@ -127,6 +128,7 @@ jobs:
           push: ${{ inputs.push }}
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}-arm64
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false  # Disable to create single-arch image, not manifest list
 
       # Create and push multi-arch manifest
       - name: Create multi-arch manifest
