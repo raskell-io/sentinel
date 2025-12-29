@@ -27,7 +27,7 @@ proxy:
   replicaCount: 3
 
   image:
-    repository: sentinel/proxy
+    repository: ghcr.io/raskell-io/sentinel
     pullPolicy: IfNotPresent
     tag: ""  # Defaults to chart appVersion
 
@@ -240,7 +240,7 @@ ratelimit:
   replicaCount: 2
 
   image:
-    repository: sentinel/ratelimit-agent
+    repository: ghcr.io/raskell-io/sentinel-ratelimit
     pullPolicy: IfNotPresent
     tag: ""
 
@@ -290,7 +290,7 @@ waf:
   replicaCount: 2
 
   image:
-    repository: sentinel/waf-agent
+    repository: ghcr.io/raskell-io/sentinel-waf
     pullPolicy: IfNotPresent
     tag: ""
 
@@ -362,7 +362,7 @@ denylist:
   replicaCount: 1
 
   image:
-    repository: sentinel/denylist-agent
+    repository: ghcr.io/raskell-io/sentinel-denylist
     pullPolicy: IfNotPresent
     tag: ""
 
@@ -394,7 +394,7 @@ echo:
   replicaCount: 1
 
   image:
-    repository: sentinel/echo-agent
+    repository: ghcr.io/raskell-io/sentinel-echo-agent
     pullPolicy: IfNotPresent
     tag: ""
 

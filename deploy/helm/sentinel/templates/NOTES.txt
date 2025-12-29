@@ -1,0 +1,98 @@
+
+Sentinel has been deployed successfully!
+
+{{- if .Values.proxy.enabled }}
+================================================================================
+                              SENTINEL PROXY
+================================================================================
+
+{{- if contains "NodePort" .Values.proxy.service.type }}
+  Get the proxy URL by running:
+    export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "sentinel.fullname" . }}-proxy)
+    export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+    echo "Sentinel Proxy: http://$NODE_IP:$NODE_PORT"
+{{- else if contains "LoadBalancer" .Values.proxy.service.type }}
+  Get the proxy URL by running:
+    NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+    kubectl get svc --namespace {{ .Release.Namespace }} {{ include "sentinel.fullname" . }}-proxy -w
+{{- else if contains "ClusterIP" .Values.proxy.service.type }}
+  Get the proxy URL by running:
+    export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "sentinel.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=proxy" -o jsonpath="{.items[0].metadata.name}")
+    kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:{{ .Values.proxy.service.httpTargetPort }}
+    echo "Sentinel Proxy: http://127.0.0.1:8080"
+{{- end }}
+
+  Metrics endpoint: http://<proxy-ip>:{{ .Values.proxy.service.metricsPort }}/metrics
+  Health endpoint:  http://<proxy-ip>:{{ .Values.proxy.service.metricsPort }}/health
+{{- end }}
+
+{{- if .Values.proxy.ingress.enabled }}
+
+  Ingress has been configured. Access Sentinel at:
+{{- range $host := .Values.proxy.ingress.hosts }}
+  {{- range .paths }}
+    http{{ if $.Values.proxy.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.monitoring.enabled }}
+
+================================================================================
+                              MONITORING
+================================================================================
+
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+  ServiceMonitor has been created for Prometheus Operator.
+  Ensure your Prometheus instance is configured to scrape the {{ .Release.Namespace }} namespace.
+{{- end }}
+
+{{- if .Values.monitoring.grafana.enabled }}
+  Grafana dashboards have been provisioned:
+  {{- if .Values.monitoring.grafana.dashboards.proxy }}
+  - Sentinel Proxy Overview
+  {{- end }}
+  {{- if .Values.monitoring.grafana.dashboards.waf }}
+  - Sentinel WAF
+  {{- end }}
+{{- end }}
+{{- end }}
+
+{{- if or .Values.waf.enabled .Values.ratelimit.enabled .Values.denylist.enabled .Values.echo.enabled }}
+
+================================================================================
+                              AGENTS
+================================================================================
+
+  Enabled agents:
+{{- if .Values.waf.enabled }}
+  - WAF Agent ({{ .Values.waf.replicaCount }} replicas)
+{{- end }}
+{{- if .Values.ratelimit.enabled }}
+  - Rate Limit Agent ({{ .Values.ratelimit.replicaCount }} replicas)
+{{- end }}
+{{- if .Values.denylist.enabled }}
+  - Denylist Agent ({{ .Values.denylist.replicaCount }} replicas)
+{{- end }}
+{{- if .Values.echo.enabled }}
+  - Echo Agent ({{ .Values.echo.replicaCount }} replicas) [testing]
+{{- end }}
+{{- end }}
+
+================================================================================
+                              USEFUL COMMANDS
+================================================================================
+
+  # View proxy logs
+  kubectl logs -f -l app.kubernetes.io/name={{ include "sentinel.name" . }},app.kubernetes.io/component=proxy -n {{ .Release.Namespace }}
+
+  # View configuration
+  kubectl get configmap {{ include "sentinel.fullname" . }}-proxy-config -n {{ .Release.Namespace }} -o yaml
+
+  # Check pod status
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }}
+
+  # Validate configuration
+  kubectl exec -it deploy/{{ include "sentinel.fullname" . }}-proxy -n {{ .Release.Namespace }} -- sentinel --config /etc/sentinel/config.kdl --dry-run
+
+For more information, visit: https://sentinel.raskell.io/docs/

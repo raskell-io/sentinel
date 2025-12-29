@@ -1,0 +1,55 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sentinel.fullname" . }}-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  {{- with .Values.proxy.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.proxy.service.type }}
+  {{- if .Values.proxy.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.proxy.service.loadBalancerIP }}
+  {{- end }}
+  {{- if .Values.proxy.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.proxy.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.proxy.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if .Values.proxy.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.proxy.service.sessionAffinity }}
+  {{- with .Values.proxy.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  ports:
+    - name: http
+      port: {{ .Values.proxy.service.httpPort }}
+      targetPort: {{ .Values.proxy.service.httpTargetPort }}
+      protocol: TCP
+      {{- if and (eq .Values.proxy.service.type "NodePort") .Values.proxy.service.httpNodePort }}
+      nodePort: {{ .Values.proxy.service.httpNodePort }}
+      {{- end }}
+    - name: https
+      port: {{ .Values.proxy.service.httpsPort }}
+      targetPort: {{ .Values.proxy.service.httpsTargetPort }}
+      protocol: TCP
+      {{- if and (eq .Values.proxy.service.type "NodePort") .Values.proxy.service.httpsNodePort }}
+      nodePort: {{ .Values.proxy.service.httpsNodePort }}
+      {{- end }}
+    - name: metrics
+      port: {{ .Values.proxy.service.metricsPort }}
+      targetPort: {{ .Values.proxy.service.metricsPort }}
+      protocol: TCP
+  selector:
+    {{- include "sentinel.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+{{- end }}

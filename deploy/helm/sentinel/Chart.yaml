@@ -4,10 +4,10 @@ description: A production-grade reverse proxy platform with WAF, rate limiting, 
 type: application
 
 # Chart version - follows SemVer
-version: 1.0.0
+version: 0.1.3
 
 # Application version
-appVersion: "0.1.0"
+appVersion: "0.1.3"
 
 # Keywords for searching
 keywords:
@@ -20,7 +20,7 @@ keywords:
   - rust
 
 # Project home and sources
-home: https://github.com/raskell-io/sentinel
+home: https://sentinel.raskell.io
 sources:
   - https://github.com/raskell-io/sentinel
 
@@ -36,23 +36,10 @@ icon: https://raw.githubusercontent.com/raskell-io/sentinel/main/docs/logo.png
 # Minimum Kubernetes version
 kubeVersion: ">=1.21.0-0"
 
-# Dependencies (if using external charts)
-dependencies:
-  # Optional: Prometheus operator for monitoring
-  - name: kube-prometheus-stack
-    version: "~45.0.0"
-    repository: https://prometheus-community.github.io/helm-charts
-    condition: monitoring.enabled
-    tags:
-      - monitoring
-
-  # Optional: Jaeger for distributed tracing
-  - name: jaeger
-    version: "~0.71.0"
-    repository: https://jaegertracing.github.io/helm-charts
-    condition: tracing.enabled
-    tags:
-      - tracing
+# Note: Prometheus and Jaeger are recommended but not bundled.
+# Install them separately using their official Helm charts:
+#   - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   - helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
 
 # Annotations for additional metadata
 annotations:
@@ -78,5 +65,5 @@ annotations:
   artifacthub.io/prerelease: "false"
 
   # Chart documentation
-  documentation.url: https://sentinel.rs/docs/deployment/helm
+  documentation.url: https://sentinel.raskell.io/docs/deployment/kubernetes/
   support.url: https://github.com/raskell-io/sentinel/issues
