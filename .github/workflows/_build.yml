@@ -75,33 +75,48 @@ jobs:
       - name: Build workspace
         run: |
           TARGET="${{ matrix.config.target }}"
-          if [ "${{ inputs.profile }}" = "release" ]; then
-            cargo build --release --workspace --target "$TARGET"
+          PROFILE="${{ inputs.profile }}"
+
+          # Check if we need cross-compilation
+          HOST_TARGET=$(rustc -vV | grep host | cut -d' ' -f2)
+
+          if [ "$HOST_TARGET" = "$TARGET" ]; then
+            echo "Building natively for $TARGET"
+            if [ "$PROFILE" = "release" ]; then
+              cargo build --release --workspace
+            else
+              cargo build --workspace
+            fi
+            echo "BUILD_DIR=target" >> $GITHUB_ENV
           else
-            cargo build --workspace --target "$TARGET"
+            echo "Cross-compiling from $HOST_TARGET to $TARGET"
+            if [ "$PROFILE" = "release" ]; then
+              cargo build --release --workspace --target "$TARGET"
+            else
+              cargo build --workspace --target "$TARGET"
+            fi
+            echo "BUILD_DIR=target/$TARGET" >> $GITHUB_ENV
           fi
 
       - name: Strip binaries (Linux)
         if: matrix.config.os == 'ubuntu-latest' && inputs.profile == 'release'
         run: |
-          TARGET="${{ matrix.config.target }}"
-          strip target/$TARGET/release/sentinel || true
-          strip target/$TARGET/release/sentinel-echo-agent || true
+          strip $BUILD_DIR/release/sentinel || true
+          strip $BUILD_DIR/release/sentinel-echo-agent || true
 
       - name: Prepare artifacts
         if: inputs.upload-artifacts
         run: |
           mkdir -p artifacts
-          TARGET="${{ matrix.config.target }}"
           if [ "${{ inputs.profile }}" = "release" ]; then
-            BUILD_DIR="target/$TARGET/release"
+            SRC_DIR="$BUILD_DIR/release"
           else
-            BUILD_DIR="target/$TARGET/debug"
+            SRC_DIR="$BUILD_DIR/debug"
           fi
 
           # Copy binaries
-          cp "$BUILD_DIR/sentinel" artifacts/ 2>/dev/null || true
-          cp "$BUILD_DIR/sentinel-echo-agent" artifacts/ 2>/dev/null || true
+          cp "$SRC_DIR/sentinel" artifacts/ 2>/dev/null || true
+          cp "$SRC_DIR/sentinel-echo-agent" artifacts/ 2>/dev/null || true
 
           # Create version file if version provided
           if [ -n "${{ inputs.version }}" ]; then
