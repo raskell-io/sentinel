@@ -4,8 +4,22 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - 'crates/**'
+      - 'agents/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/_build.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'crates/**'
+      - 'agents/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/_build.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
