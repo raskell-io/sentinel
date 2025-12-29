@@ -74,26 +74,29 @@ jobs:
 
       - name: Build workspace
         run: |
+          TARGET="${{ matrix.config.target }}"
           if [ "${{ inputs.profile }}" = "release" ]; then
-            cargo build --release --workspace
+            cargo build --release --workspace --target "$TARGET"
           else
-            cargo build --workspace
+            cargo build --workspace --target "$TARGET"
           fi
 
       - name: Strip binaries (Linux)
         if: matrix.config.os == 'ubuntu-latest' && inputs.profile == 'release'
         run: |
-          strip target/release/sentinel || true
-          strip target/release/sentinel-echo-agent || true
+          TARGET="${{ matrix.config.target }}"
+          strip target/$TARGET/release/sentinel || true
+          strip target/$TARGET/release/sentinel-echo-agent || true
 
       - name: Prepare artifacts
         if: inputs.upload-artifacts
         run: |
           mkdir -p artifacts
+          TARGET="${{ matrix.config.target }}"
           if [ "${{ inputs.profile }}" = "release" ]; then
-            BUILD_DIR="target/release"
+            BUILD_DIR="target/$TARGET/release"
           else
-            BUILD_DIR="target/debug"
+            BUILD_DIR="target/$TARGET/debug"
           fi
 
           # Copy binaries
