@@ -2,9 +2,20 @@
 //!
 //! This crate provides shared functionality used across all Sentinel components,
 //! including observability (metrics, logging, tracing), error types, and common utilities.
+//!
+//! # Module Organization
+//!
+//! - [`ids`]: Type-safe identifier newtypes (CorrelationId, RequestId, etc.)
+//! - [`types`]: Common type definitions (ByteSize, Priority, etc.)
+//! - [`errors`]: Error types and result aliases
+//! - [`limits`]: Resource limits and rate limiting
+//! - [`observability`]: Metrics, logging, and tracing
+//! - [`circuit_breaker`]: Circuit breaker state machine
+//! - [`registry`]: Generic type-safe registry abstraction
 
 pub mod circuit_breaker;
 pub mod errors;
+pub mod ids;
 pub mod limits;
 pub mod observability;
 pub mod registry;
@@ -26,8 +37,11 @@ pub use errors::{SentinelError, SentinelResult};
 // Re-export limit types
 pub use limits::{Limits, RateLimiter};
 
+// Re-export identifier types
+pub use ids::{AgentId, CorrelationId, RequestId, RouteId, UpstreamId};
+
 // Re-export common types
-pub use types::{CorrelationId, RequestId, TraceIdFormat};
+pub use types::{CircuitBreakerConfig, TraceIdFormat};
 
 // Re-export circuit breaker
 pub use circuit_breaker::CircuitBreaker;

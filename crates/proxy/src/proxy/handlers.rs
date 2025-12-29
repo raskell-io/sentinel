@@ -23,7 +23,7 @@ use crate::validation::SchemaValidator;
 use super::context::RequestContext;
 use super::SentinelProxy;
 
-use sentinel_common::types::CorrelationId;
+use sentinel_common::CorrelationId;
 
 impl SentinelProxy {
     /// Handle static file route

@@ -1,150 +1,13 @@
-//! Common type definitions for Sentinel proxy
+//! Common type definitions for Sentinel proxy.
 //!
 //! This module provides shared type definitions used throughout the platform,
 //! with a focus on type safety and operational clarity.
+//!
+//! For identifier types (CorrelationId, RequestId, etc.), see the `ids` module.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-use uuid::Uuid;
-
-/// Unique correlation ID for request tracing across components
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CorrelationId(String);
-
-impl CorrelationId {
-    /// Create a new random correlation ID
-    pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
-    }
-
-    /// Create from an existing string
-    pub fn from_string(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-
-    /// Get the inner string value
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Convert to owned String
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
-impl Default for CorrelationId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Display for CorrelationId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for CorrelationId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for CorrelationId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-/// Unique request ID for internal tracking
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct RequestId(String);
-
-impl RequestId {
-    /// Create a new random request ID
-    pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
-    }
-
-    /// Get the inner string value
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for RequestId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Display for RequestId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Route identifier
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct RouteId(String);
-
-impl RouteId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for RouteId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Upstream identifier
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct UpstreamId(String);
-
-impl UpstreamId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for UpstreamId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Agent identifier
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AgentId(String);
-
-impl AgentId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for AgentId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 /// HTTP method wrapper with validation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -207,7 +70,16 @@ pub enum TlsVersion {
     Tls13,
 }
 
-/// Trace ID format selection
+impl fmt::Display for TlsVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tls12 => write!(f, "TLS1.2"),
+            Self::Tls13 => write!(f, "TLS1.3"),
+        }
+    }
+}
+
+/// Trace ID format selection.
 ///
 /// Controls how trace IDs are generated for request tracing.
 ///
@@ -254,15 +126,6 @@ impl fmt::Display for TraceIdFormat {
         match self {
             TraceIdFormat::TinyFlake => write!(f, "tinyflake"),
             TraceIdFormat::Uuid => write!(f, "uuid"),
-        }
-    }
-}
-
-impl fmt::Display for TlsVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Tls12 => write!(f, "TLS1.2"),
-            Self::Tls13 => write!(f, "TLS1.3"),
         }
     }
 }
@@ -496,15 +359,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_correlation_id() {
-        let id1 = CorrelationId::new();
-        let id2 = CorrelationId::from_string("test-id");
-
-        assert_ne!(id1, id2);
-        assert_eq!(id2.as_str(), "test-id");
-    }
-
-    #[test]
     fn test_http_method_parsing() {
         assert_eq!(HttpMethod::from_str("GET").unwrap(), HttpMethod::GET);
         assert_eq!(HttpMethod::from_str("post").unwrap(), HttpMethod::POST);
@@ -532,5 +386,18 @@ mod tests {
         assert_eq!(ByteSize(2048).to_string(), "2.00KB");
         assert_eq!(ByteSize(1024 * 1024).to_string(), "1.00MB");
         assert_eq!(ByteSize(1024 * 1024 * 1024).to_string(), "1.00GB");
+    }
+
+    #[test]
+    fn test_trace_id_format() {
+        assert_eq!(TraceIdFormat::from_str_loose("uuid"), TraceIdFormat::Uuid);
+        assert_eq!(
+            TraceIdFormat::from_str_loose("tinyflake"),
+            TraceIdFormat::TinyFlake
+        );
+        assert_eq!(
+            TraceIdFormat::from_str_loose("unknown"),
+            TraceIdFormat::TinyFlake
+        );
     }
 }

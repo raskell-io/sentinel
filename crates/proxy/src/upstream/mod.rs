@@ -14,8 +14,8 @@ use tracing::{debug, info};
 
 use sentinel_common::{
     errors::{SentinelError, SentinelResult},
-    types::{CircuitBreakerConfig, LoadBalancingAlgorithm, RetryPolicy, UpstreamId},
-    CircuitBreaker,
+    types::{CircuitBreakerConfig, LoadBalancingAlgorithm, RetryPolicy},
+    CircuitBreaker, UpstreamId,
 };
 use sentinel_config::{HealthCheck as HealthCheckConfig, UpstreamConfig};
 

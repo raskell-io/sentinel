@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, trace, warn};
 
-use sentinel_common::types::{Priority, RouteId};
+use sentinel_common::types::Priority;
+use sentinel_common::RouteId;
 use sentinel_config::{MatchCondition, RouteConfig, RoutePolicies};
 
 /// Route matcher for efficient route selection

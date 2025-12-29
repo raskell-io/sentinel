@@ -1,7 +1,7 @@
 //! Agent call context.
 
 use sentinel_agent_protocol::RequestMetadata;
-use sentinel_common::types::CorrelationId;
+use sentinel_common::CorrelationId;
 
 /// Agent call context.
 ///
