@@ -120,7 +120,7 @@ jobs:
       latest: false
     permissions:
       contents: read
-      packages: read
+      packages: write  # Required by nested workflow even when not pushing
 
   # ============================================================
   # PHASE 2: Publishing - Only runs after ALL builds succeed
