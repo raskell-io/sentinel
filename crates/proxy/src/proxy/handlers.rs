@@ -34,6 +34,7 @@ impl SentinelProxy {
         route_match: &RouteMatch,
     ) -> Result<bool, Box<Error>> {
         ctx.route_id = Some(route_match.route_id.to_string());
+        ctx.trace_id = self.get_trace_id(session);
         let route_id = route_match.route_id.as_str();
 
         if let Some(static_server) = self.static_servers.get(route_id).await {
