@@ -5,6 +5,7 @@
 
 use sentinel_common::errors::{SentinelError, SentinelResult};
 use sentinel_config::Config;
+use tracing::{debug, trace, warn};
 
 use super::ConfigValidator;
 
@@ -18,12 +19,20 @@ pub struct RouteValidator;
 #[async_trait::async_trait]
 impl ConfigValidator for RouteValidator {
     async fn validate(&self, config: &Config) -> SentinelResult<()> {
+        trace!(route_count = config.routes.len(), "Running route validator");
+
         // Most validation is now handled by Config's validate_config_semantics
         // This validator handles runtime-specific checks
 
         // Check for routes with both upstream and static-files (ambiguous config)
         for route in &config.routes {
+            trace!(route_id = %route.id, "Validating route");
+
             if route.upstream.is_some() && route.static_files.is_some() {
+                warn!(
+                    route_id = %route.id,
+                    "Route has both upstream and static-files configured"
+                );
                 return Err(SentinelError::Config {
                     message: format!(
                         "Route '{}' has both 'upstream' and 'static-files' configured.\n\
@@ -40,7 +49,18 @@ impl ConfigValidator for RouteValidator {
         // Check for static routes with non-existent root directories
         for route in &config.routes {
             if let Some(ref static_config) = route.static_files {
+                trace!(
+                    route_id = %route.id,
+                    root = %static_config.root.display(),
+                    "Checking static files root directory"
+                );
+
                 if !static_config.root.exists() {
+                    warn!(
+                        route_id = %route.id,
+                        root = %static_config.root.display(),
+                        "Static files root directory does not exist"
+                    );
                     return Err(SentinelError::Config {
                         message: format!(
                             "Route '{}' static files root directory '{}' does not exist.\n\
@@ -61,6 +81,11 @@ impl ConfigValidator for RouteValidator {
                 }
 
                 if !static_config.root.is_dir() {
+                    warn!(
+                        route_id = %route.id,
+                        root = %static_config.root.display(),
+                        "Static files root is not a directory"
+                    );
                     return Err(SentinelError::Config {
                         message: format!(
                             "Route '{}' static files root '{}' is not a directory.\n\
@@ -74,6 +99,7 @@ impl ConfigValidator for RouteValidator {
             }
         }
 
+        debug!("Route validation passed");
         Ok(())
     }
 
@@ -92,12 +118,27 @@ pub struct UpstreamValidator;
 #[async_trait::async_trait]
 impl ConfigValidator for UpstreamValidator {
     async fn validate(&self, config: &Config) -> SentinelResult<()> {
+        trace!(upstream_count = config.upstreams.len(), "Running upstream validator");
+
         // Most validation is now handled by Config's validate_config_semantics
         // This validator handles runtime-specific checks
 
         for (name, upstream) in &config.upstreams {
+            trace!(
+                upstream_id = %name,
+                target_count = upstream.targets.len(),
+                "Validating upstream"
+            );
+
             // Validate target addresses can be parsed (supports hostnames)
             for (i, target) in upstream.targets.iter().enumerate() {
+                trace!(
+                    upstream_id = %name,
+                    target_index = i,
+                    address = %target.address,
+                    "Validating target address"
+                );
+
                 // Try as socket address first
                 if target.address.parse::<std::net::SocketAddr>().is_ok() {
                     continue;
@@ -112,6 +153,13 @@ impl ConfigValidator for UpstreamValidator {
                         }
                     }
                 }
+
+                warn!(
+                    upstream_id = %name,
+                    target_index = i,
+                    address = %target.address,
+                    "Invalid target address format"
+                );
 
                 return Err(SentinelError::Config {
                     message: format!(
@@ -134,14 +182,14 @@ impl ConfigValidator for UpstreamValidator {
 
             // Warn about upstreams with only one target (no redundancy)
             if upstream.targets.len() == 1 {
-                tracing::warn!(
-                    upstream = %name,
-                    "Upstream '{}' has only one target. Consider adding more targets for redundancy.",
-                    name
+                warn!(
+                    upstream_id = %name,
+                    "Upstream has only one target - consider adding more for redundancy"
                 );
             }
         }
 
+        debug!("Upstream validation passed");
         Ok(())
     }
 

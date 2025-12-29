@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::{LoadBalancer, RequestContext, TargetSelection, UpstreamTarget};
 use sentinel_common::errors::{SentinelError, SentinelResult};
@@ -215,11 +215,30 @@ pub struct AdaptiveBalancer {
 
 impl AdaptiveBalancer {
     pub fn new(targets: Vec<UpstreamTarget>, config: AdaptiveConfig) -> Self {
+        trace!(
+            target_count = targets.len(),
+            adjustment_interval_secs = config.adjustment_interval.as_secs(),
+            min_weight_ratio = config.min_weight_ratio,
+            max_weight_ratio = config.max_weight_ratio,
+            error_threshold = config.error_threshold,
+            latency_threshold_ms = config.latency_threshold.as_millis() as u64,
+            ewma_decay = config.ewma_decay,
+            circuit_breaker = config.circuit_breaker,
+            min_requests = config.min_requests,
+            "Creating adaptive balancer"
+        );
+
         let original_weights: Vec<f64> = targets.iter().map(|t| t.weight as f64).collect();
         let metrics = original_weights
             .iter()
             .map(|&w| PerformanceMetrics::new(w))
             .collect();
+
+        debug!(
+            target_count = targets.len(),
+            total_weight = original_weights.iter().sum::<f64>(),
+            "Adaptive balancer initialized"
+        );
 
         Self {
             config,
@@ -235,11 +254,21 @@ impl AdaptiveBalancer {
     async fn adjust_weights(&self) {
         let mut last_adjustment = self.last_global_adjustment.write().await;
 
-        if last_adjustment.elapsed() < self.config.adjustment_interval {
+        let elapsed = last_adjustment.elapsed();
+        if elapsed < self.config.adjustment_interval {
+            trace!(
+                elapsed_secs = elapsed.as_secs(),
+                interval_secs = self.config.adjustment_interval.as_secs(),
+                "Skipping weight adjustment (interval not reached)"
+            );
             return;
         }
 
-        debug!("Adjusting weights based on performance metrics");
+        debug!(
+            elapsed_secs = elapsed.as_secs(),
+            target_count = self.targets.len(),
+            "Adjusting weights based on performance metrics"
+        );
 
         for (i, metric) in self.metrics.iter().enumerate() {
             let requests = metric.total_requests.load(Ordering::Relaxed);
@@ -329,15 +358,28 @@ impl AdaptiveBalancer {
 
     /// Calculate scores for all healthy targets
     async fn calculate_scores(&self) -> Vec<TargetScore> {
+        trace!(
+            target_count = self.targets.len(),
+            "Calculating scores for all targets"
+        );
+
         let health = self.health_status.read().await;
         let mut scores = Vec::new();
 
         for (i, target) in self.targets.iter().enumerate() {
             let target_id = format!("{}:{}", target.address, target.port);
             let is_healthy = health.get(&target_id).copied().unwrap_or(true);
+            let circuit_open = *self.metrics[i].circuit_open.read().await;
 
             // Skip unhealthy or circuit-broken targets
-            if !is_healthy || *self.metrics[i].circuit_open.read().await {
+            if !is_healthy || circuit_open {
+                trace!(
+                    target_index = i,
+                    target_id = %target_id,
+                    is_healthy = is_healthy,
+                    circuit_open = circuit_open,
+                    "Skipping target from scoring"
+                );
                 continue;
             }
 
@@ -350,6 +392,19 @@ impl AdaptiveBalancer {
             let error_penalty = ewma_error * 100.0; // Scale error rate
             let latency_penalty = (ewma_latency / 10.0).max(0.0); // Normalize latency
             let score = weight / (1.0 + connections + error_penalty + latency_penalty);
+
+            trace!(
+                target_index = i,
+                target_id = %target_id,
+                weight = weight,
+                connections = connections,
+                ewma_error = ewma_error,
+                ewma_latency_ms = ewma_latency,
+                error_penalty = error_penalty,
+                latency_penalty = latency_penalty,
+                score = score,
+                "Calculated target score"
+            );
 
             scores.push(TargetScore {
                 index: i,
@@ -365,18 +420,29 @@ impl AdaptiveBalancer {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        trace!(
+            scored_count = scores.len(),
+            top_score = scores.first().map(|s| s.score).unwrap_or(0.0),
+            "Scores calculated and sorted"
+        );
+
         scores
     }
 
     /// Select target using weighted random selection based on scores
     async fn weighted_select(&self, scores: &[TargetScore]) -> Option<usize> {
         if scores.is_empty() {
+            trace!("No scores provided for weighted selection");
             return None;
         }
 
         // Calculate total score
         let total_score: f64 = scores.iter().map(|s| s.score).sum();
         if total_score <= 0.0 {
+            trace!(
+                fallback_index = scores[0].index,
+                "Total score is zero, using fallback"
+            );
             return Some(scores[0].index); // Fallback to first
         }
 
@@ -385,22 +451,42 @@ impl AdaptiveBalancer {
         let mut rng = thread_rng();
         let threshold = rng.gen::<f64>() * total_score;
 
+        trace!(
+            total_score = total_score,
+            threshold = threshold,
+            candidate_count = scores.len(),
+            "Performing weighted random selection"
+        );
+
         let mut cumulative = 0.0;
         for score in scores {
             cumulative += score.score;
             if cumulative >= threshold {
+                trace!(
+                    selected_index = score.index,
+                    selected_score = score.score,
+                    cumulative = cumulative,
+                    "Selected target via weighted random"
+                );
                 return Some(score.index);
             }
         }
 
         // Fallback for floating point edge case - scores is guaranteed non-empty here
-        scores.last().map(|s| s.index)
+        let fallback = scores.last().map(|s| s.index);
+        trace!(
+            fallback_index = ?fallback,
+            "Using fallback selection (floating point edge case)"
+        );
+        fallback
     }
 }
 
 #[async_trait]
 impl LoadBalancer for AdaptiveBalancer {
     async fn select(&self, _context: Option<&RequestContext>) -> SentinelResult<TargetSelection> {
+        trace!("Adaptive select started");
+
         // Periodically adjust weights
         self.adjust_weights().await;
 
@@ -408,6 +494,7 @@ impl LoadBalancer for AdaptiveBalancer {
         let scores = self.calculate_scores().await;
 
         if scores.is_empty() {
+            warn!("Adaptive: No healthy targets available");
             return Err(SentinelError::NoHealthyUpstream);
         }
 
@@ -415,27 +502,37 @@ impl LoadBalancer for AdaptiveBalancer {
         let target_index = self
             .weighted_select(&scores)
             .await
-            .ok_or(SentinelError::NoHealthyUpstream)?;
+            .ok_or_else(|| {
+                warn!("Adaptive: Failed to select from scores");
+                SentinelError::NoHealthyUpstream
+            })?;
 
         let target = &self.targets[target_index];
         let metrics = &self.metrics[target_index];
 
         // Track connection
-        metrics.active_connections.fetch_add(1, Ordering::Relaxed);
+        let connections = metrics.active_connections.fetch_add(1, Ordering::Relaxed) + 1;
 
         let effective_weight = *metrics.effective_weight.read().await;
         let ewma_error = *metrics.ewma_error_rate.read().await;
         let ewma_latency = Duration::from_micros(*metrics.ewma_latency.read().await as u64);
 
+        let score = scores
+            .iter()
+            .find(|s| s.index == target_index)
+            .map(|s| s.score)
+            .unwrap_or(0.0);
+
         debug!(
-            "Adaptive selected target {} with score {:.2}, weight {:.2}",
-            target_index,
-            scores
-                .iter()
-                .find(|s| s.index == target_index)
-                .map(|s| s.score)
-                .unwrap_or(0.0),
-            effective_weight
+            target = %format!("{}:{}", target.address, target.port),
+            target_index = target_index,
+            score = score,
+            effective_weight = effective_weight,
+            original_weight = self.original_weights[target_index],
+            error_rate = ewma_error,
+            latency_ms = ewma_latency.as_millis() as u64,
+            connections = connections,
+            "Adaptive selected target"
         );
 
         Ok(TargetSelection {
@@ -458,26 +555,28 @@ impl LoadBalancer for AdaptiveBalancer {
                     "latency_ms".to_string(),
                     format!("{:.2}", ewma_latency.as_millis()),
                 );
-                meta.insert(
-                    "connections".to_string(),
-                    metrics
-                        .active_connections
-                        .load(Ordering::Relaxed)
-                        .to_string(),
-                );
+                meta.insert("connections".to_string(), connections.to_string());
                 meta
             },
         })
     }
 
     async fn report_health(&self, address: &str, healthy: bool) {
+        trace!(
+            address = %address,
+            healthy = healthy,
+            "Adaptive reporting target health"
+        );
+
         let mut health = self.health_status.write().await;
         let previous = health.insert(address.to_string(), healthy);
 
         if previous != Some(healthy) {
             info!(
-                "Adaptive: Target {} health changed from {:?} to {}",
-                address, previous, healthy
+                address = %address,
+                previous = ?previous,
+                healthy = healthy,
+                "Adaptive target health changed"
             );
 
             // Find target index and reset its weight on health change
@@ -493,8 +592,9 @@ impl LoadBalancer for AdaptiveBalancer {
                             .consecutive_failures
                             .store(0, Ordering::Relaxed);
                         info!(
-                            "Reset target {} to original weight {:.2} on recovery",
-                            i, original
+                            target_index = i,
+                            original_weight = original,
+                            "Reset target to original weight on recovery"
                         );
                     }
                     break;
@@ -517,15 +617,27 @@ impl LoadBalancer for AdaptiveBalancer {
             }
         }
 
+        trace!(
+            total = self.targets.len(),
+            healthy = targets.len(),
+            "Adaptive healthy targets"
+        );
+
         targets
     }
 
     async fn release(&self, selection: &TargetSelection) {
         if let Some(index_str) = selection.metadata.get("target_index") {
             if let Ok(index) = index_str.parse::<usize>() {
-                self.metrics[index]
+                let connections = self.metrics[index]
                     .active_connections
-                    .fetch_sub(1, Ordering::Relaxed);
+                    .fetch_sub(1, Ordering::Relaxed) - 1;
+                trace!(
+                    target_index = index,
+                    address = %selection.address,
+                    connections = connections,
+                    "Adaptive released connection"
+                );
             }
         }
     }
@@ -538,6 +650,13 @@ impl LoadBalancer for AdaptiveBalancer {
     ) {
         if let Some(index_str) = selection.metadata.get("target_index") {
             if let Ok(index) = index_str.parse::<usize>() {
+                trace!(
+                    target_index = index,
+                    address = %selection.address,
+                    success = success,
+                    latency_ms = latency.map(|l| l.as_millis() as u64),
+                    "Adaptive recording result"
+                );
                 self.metrics[index]
                     .record_result(success, latency, &self.config)
                     .await;

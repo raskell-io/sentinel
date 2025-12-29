@@ -7,6 +7,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
+use tracing::{debug, trace};
 
 /// Maximum age for cached files (1 hour)
 const DEFAULT_MAX_AGE_SECS: u64 = 3600;
@@ -51,6 +52,17 @@ impl FileCache {
     /// * `max_size` - Maximum total cache size in bytes
     /// * `max_age_secs` - Maximum age of cached entries in seconds
     pub fn new(max_size: usize, max_age_secs: u64) -> Self {
+        trace!(
+            max_size_mb = max_size / (1024 * 1024),
+            max_age_secs = max_age_secs,
+            "Creating file cache"
+        );
+
+        debug!(
+            max_size_mb = max_size / (1024 * 1024),
+            "File cache initialized"
+        );
+
         Self {
             entries: DashMap::new(),
             max_size,
@@ -60,30 +72,59 @@ impl FileCache {
 
     /// Create a cache with default settings (100MB, 1 hour)
     pub fn with_defaults() -> Self {
+        trace!("Creating file cache with default settings");
         Self::new(100 * 1024 * 1024, DEFAULT_MAX_AGE_SECS)
     }
 
     /// Get a cached file by path
     pub fn get(&self, path: &std::path::Path) -> Option<CachedFile> {
-        self.entries.get(path).map(|entry| entry.clone())
+        let result = self.entries.get(path).map(|entry| entry.clone());
+        trace!(
+            path = %path.display(),
+            hit = result.is_some(),
+            "Cache lookup"
+        );
+        result
     }
 
     /// Insert a file into the cache
     pub fn insert(&self, path: PathBuf, file: CachedFile) {
+        let file_size = file.size;
+
         // Simple cache eviction - remove old entries
         self.evict_stale();
 
         // Check cache size limit (simplified entry count limit)
         if self.entries.len() > 1000 {
+            trace!(
+                current_entries = self.entries.len(),
+                "Cache entry limit reached, evicting oldest"
+            );
             self.evict_oldest(100);
         }
 
-        self.entries.insert(path, file);
+        self.entries.insert(path.clone(), file);
+
+        trace!(
+            path = %path.display(),
+            size = file_size,
+            entry_count = self.entries.len(),
+            "Inserted file into cache"
+        );
     }
 
     /// Remove stale entries from the cache
     fn evict_stale(&self) {
+        let before = self.entries.len();
         self.entries.retain(|_, v| v.is_fresh());
+        let evicted = before - self.entries.len();
+        if evicted > 0 {
+            trace!(
+                evicted = evicted,
+                remaining = self.entries.len(),
+                "Evicted stale cache entries"
+            );
+        }
     }
 
     /// Remove the N oldest entries from the cache
@@ -96,9 +137,18 @@ impl FileCache {
 
         oldest.sort_by_key(|e| e.1);
 
+        let mut evicted = 0;
         for (path, _) in oldest.iter().take(count) {
             self.entries.remove(path);
+            evicted += 1;
         }
+
+        trace!(
+            requested = count,
+            evicted = evicted,
+            remaining = self.entries.len(),
+            "Evicted oldest cache entries"
+        );
     }
 
     /// Get current cache statistics
@@ -113,17 +163,31 @@ impl FileCache {
             })
             .sum();
 
-        CacheStats {
+        let stats = CacheStats {
             entry_count: self.entries.len(),
             total_size,
             total_compressed,
             max_size: self.max_size,
-        }
+        };
+
+        trace!(
+            entry_count = stats.entry_count,
+            total_size_kb = stats.total_size / 1024,
+            compressed_size_kb = stats.total_compressed / 1024,
+            "Retrieved cache stats"
+        );
+
+        stats
     }
 
     /// Clear all cached entries
     pub fn clear(&self) {
+        let count = self.entries.len();
         self.entries.clear();
+        debug!(
+            cleared_entries = count,
+            "File cache cleared"
+        );
     }
 }
 

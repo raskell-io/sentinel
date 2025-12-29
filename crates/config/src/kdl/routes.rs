@@ -3,6 +3,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tracing::trace;
 
 use crate::routes::*;
 
@@ -10,6 +11,7 @@ use super::helpers::{get_bool_entry, get_first_arg_string, get_int_entry, get_st
 
 /// Parse routes configuration block
 pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
+    trace!("Parsing routes configuration block");
     let mut routes = Vec::new();
 
     if let Some(children) = node.children() {
@@ -18,6 +20,8 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                 let id = get_first_arg_string(child).ok_or_else(|| {
                     anyhow::anyhow!("Route requires an ID argument, e.g., route \"api\" {{ ... }}")
                 })?;
+
+                trace!(route_id = %id, "Parsing route");
 
                 // Parse matches
                 let matches = parse_match_conditions(child)?;
@@ -56,6 +60,15 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     ServiceType::Web
                 };
 
+                trace!(
+                    route_id = %id,
+                    service_type = ?service_type,
+                    match_count = matches.len(),
+                    filter_count = filters.len(),
+                    has_upstream = upstream.is_some(),
+                    "Parsed route"
+                );
+
                 routes.push(RouteConfig {
                     id,
                     priority,
@@ -76,6 +89,7 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
         }
     }
 
+    trace!(route_count = routes.len(), "Finished parsing routes");
     Ok(routes)
 }
 

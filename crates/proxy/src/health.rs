@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::time;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use sentinel_common::{
     errors::SentinelResult,
@@ -103,24 +103,50 @@ struct GrpcHealthCheck {
 impl ActiveHealthChecker {
     /// Create new active health checker
     pub fn new(config: HealthCheckConfig) -> Self {
+        debug!(
+            check_type = ?config.check_type,
+            interval_secs = config.interval_secs,
+            timeout_secs = config.timeout_secs,
+            healthy_threshold = config.healthy_threshold,
+            unhealthy_threshold = config.unhealthy_threshold,
+            "Creating active health checker"
+        );
+
         let checker: Arc<dyn HealthCheckImpl> = match &config.check_type {
             HealthCheckType::Http {
                 path,
                 expected_status,
                 host,
-            } => Arc::new(HttpHealthCheck {
-                path: path.clone(),
-                expected_status: *expected_status,
-                host: host.clone(),
-                timeout: Duration::from_secs(config.timeout_secs),
-            }),
-            HealthCheckType::Tcp => Arc::new(TcpHealthCheck {
-                timeout: Duration::from_secs(config.timeout_secs),
-            }),
-            HealthCheckType::Grpc { service } => Arc::new(GrpcHealthCheck {
-                service: service.clone(),
-                timeout: Duration::from_secs(config.timeout_secs),
-            }),
+            } => {
+                trace!(
+                    path = %path,
+                    expected_status = expected_status,
+                    host = host.as_deref().unwrap_or("(default)"),
+                    "Configuring HTTP health check"
+                );
+                Arc::new(HttpHealthCheck {
+                    path: path.clone(),
+                    expected_status: *expected_status,
+                    host: host.clone(),
+                    timeout: Duration::from_secs(config.timeout_secs),
+                })
+            }
+            HealthCheckType::Tcp => {
+                trace!("Configuring TCP health check");
+                Arc::new(TcpHealthCheck {
+                    timeout: Duration::from_secs(config.timeout_secs),
+                })
+            }
+            HealthCheckType::Grpc { service } => {
+                trace!(
+                    service = %service,
+                    "Configuring gRPC health check"
+                );
+                Arc::new(GrpcHealthCheck {
+                    service: service.clone(),
+                    timeout: Duration::from_secs(config.timeout_secs),
+                })
+            }
         };
 
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
@@ -136,10 +162,22 @@ impl ActiveHealthChecker {
 
     /// Start health checking for targets
     pub async fn start(&self, targets: &[UpstreamTarget]) -> SentinelResult<()> {
+        info!(
+            target_count = targets.len(),
+            interval_secs = self.config.interval_secs,
+            check_type = self.checker.check_type(),
+            "Starting health checking"
+        );
+
         let mut handles = self.check_handles.write().await;
 
         for target in targets {
             let address = target.address.clone();
+
+            trace!(
+                target = %address,
+                "Initializing health status for target"
+            );
 
             // Initialize health status
             self.health_status
@@ -148,14 +186,20 @@ impl ActiveHealthChecker {
                 .insert(address.clone(), TargetHealthInfo::new());
 
             // Spawn health check task
+            debug!(
+                target = %address,
+                "Spawning health check task"
+            );
             let handle = self.spawn_check_task(address);
             handles.push(handle);
         }
 
         info!(
-            "Started health checking for {} targets, interval: {}s",
-            targets.len(),
-            self.config.interval_secs
+            target_count = targets.len(),
+            interval_secs = self.config.interval_secs,
+            healthy_threshold = self.config.healthy_threshold,
+            unhealthy_threshold = self.config.unhealthy_threshold,
+            "Health checking started successfully"
         );
 
         Ok(())
@@ -168,19 +212,32 @@ impl ActiveHealthChecker {
         let health_status = Arc::clone(&self.health_status);
         let healthy_threshold = self.config.healthy_threshold;
         let unhealthy_threshold = self.config.unhealthy_threshold;
+        let check_type = self.checker.check_type().to_string();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         tokio::spawn(async move {
             let mut interval_timer = time::interval(interval);
             interval_timer.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
+            trace!(
+                target = %target,
+                check_type = %check_type,
+                interval_ms = interval.as_millis(),
+                "Health check task started"
+            );
+
             loop {
                 tokio::select! {
                     _ = interval_timer.tick() => {
                         // Perform health check
+                        trace!(
+                            target = %target,
+                            check_type = %check_type,
+                            "Performing health check"
+                        );
                         let start = Instant::now();
                         let result = checker.check(&target).await;
-                        let _duration = start.elapsed();
+                        let check_duration = start.elapsed();
 
                         // Update health status
                         let mut status_map = health_status.write().await;
@@ -208,13 +265,18 @@ impl ActiveHealthChecker {
                                         info!(
                                             target = %target,
                                             consecutive_successes = status.consecutive_successes,
+                                            avg_response_ms = format!("{:.2}", status.avg_response_time),
+                                            total_checks = status.total_checks,
                                             "Target marked as healthy"
                                         );
                                     }
 
-                                    debug!(
+                                    trace!(
                                         target = %target,
                                         response_time_ms = response_ms,
+                                        check_duration_ms = check_duration.as_millis(),
+                                        consecutive_successes = status.consecutive_successes,
+                                        health_score = format!("{:.2}", status.health_score()),
                                         "Health check succeeded"
                                     );
                                 }
@@ -230,15 +292,19 @@ impl ActiveHealthChecker {
                                             target = %target,
                                             consecutive_failures = status.consecutive_failures,
                                             error = %error,
+                                            total_checks = status.total_checks,
+                                            health_score = format!("{:.2}", status.health_score()),
                                             "Target marked as unhealthy"
                                         );
+                                    } else {
+                                        debug!(
+                                            target = %target,
+                                            error = %error,
+                                            consecutive_failures = status.consecutive_failures,
+                                            unhealthy_threshold = unhealthy_threshold,
+                                            "Health check failed"
+                                        );
                                     }
-
-                                    debug!(
-                                        target = %target,
-                                        error = %error,
-                                        "Health check failed"
-                                    );
                                 }
                             }
                         }
@@ -249,12 +315,18 @@ impl ActiveHealthChecker {
                     }
                 }
             }
+
+            debug!(target = %target, "Health check task stopped");
         })
     }
 
     /// Stop health checking
     pub async fn stop(&self) {
-        info!("Stopping health checker");
+        let task_count = self.check_handles.read().await.len();
+        info!(
+            task_count = task_count,
+            "Stopping health checker"
+        );
 
         // Send shutdown signal
         let _ = self.shutdown_tx.send(());
@@ -264,6 +336,8 @@ impl ActiveHealthChecker {
         for handle in handles.drain(..) {
             let _ = handle.await;
         }
+
+        info!("Health checker stopped successfully");
     }
 
     /// Get health status for a target
@@ -509,6 +583,12 @@ impl PassiveHealthChecker {
         window_size: usize,
         active_checker: Option<Arc<ActiveHealthChecker>>,
     ) -> Self {
+        debug!(
+            failure_rate_threshold = format!("{:.2}", failure_rate_threshold),
+            window_size = window_size,
+            has_active_checker = active_checker.is_some(),
+            "Creating passive health checker"
+        );
         Self {
             failure_rate_threshold,
             window_size,
@@ -519,6 +599,12 @@ impl PassiveHealthChecker {
 
     /// Record request outcome
     pub async fn record_outcome(&self, target: &str, success: bool) {
+        trace!(
+            target = %target,
+            success = success,
+            "Recording request outcome"
+        );
+
         let mut outcomes = self.outcomes.write().await;
         let target_outcomes = outcomes
             .entry(target.to_string())
@@ -534,8 +620,23 @@ impl PassiveHealthChecker {
         let failures = target_outcomes.iter().filter(|&&s| !s).count();
         let failure_rate = failures as f64 / target_outcomes.len() as f64;
 
+        trace!(
+            target = %target,
+            failure_rate = format!("{:.2}", failure_rate),
+            window_samples = target_outcomes.len(),
+            failures = failures,
+            "Updated failure rate"
+        );
+
         // Mark unhealthy if failure rate exceeds threshold
         if failure_rate > self.failure_rate_threshold {
+            warn!(
+                target = %target,
+                failure_rate = format!("{:.2}", failure_rate * 100.0),
+                threshold = format!("{:.2}", self.failure_rate_threshold * 100.0),
+                window_samples = target_outcomes.len(),
+                "Failure rate exceeds threshold"
+            );
             if let Some(ref checker) = self.active_checker {
                 checker
                     .mark_unhealthy(

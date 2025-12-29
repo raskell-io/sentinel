@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tonic::transport::Channel;
+use tracing::{debug, error, trace, warn};
 
 use crate::errors::AgentProtocolError;
 use crate::grpc::{self, agent_processor_client::AgentProcessorClient};
@@ -44,12 +45,36 @@ impl AgentClient {
         path: impl AsRef<std::path::Path>,
         timeout: Duration,
     ) -> Result<Self, AgentProtocolError> {
-        let stream = UnixStream::connect(path.as_ref())
+        let id = id.into();
+        let path = path.as_ref();
+
+        trace!(
+            agent_id = %id,
+            socket_path = %path.display(),
+            timeout_ms = timeout.as_millis() as u64,
+            "Connecting to agent via Unix socket"
+        );
+
+        let stream = UnixStream::connect(path)
             .await
-            .map_err(|e| AgentProtocolError::ConnectionFailed(e.to_string()))?;
+            .map_err(|e| {
+                error!(
+                    agent_id = %id,
+                    socket_path = %path.display(),
+                    error = %e,
+                    "Failed to connect to agent via Unix socket"
+                );
+                AgentProtocolError::ConnectionFailed(e.to_string())
+            })?;
+
+        debug!(
+            agent_id = %id,
+            socket_path = %path.display(),
+            "Connected to agent via Unix socket"
+        );
 
         Ok(Self {
-            id: id.into(),
+            id,
             connection: AgentConnection::UnixSocket(stream),
             timeout,
             max_retries: 3,
@@ -67,18 +92,49 @@ impl AgentClient {
         address: impl Into<String>,
         timeout: Duration,
     ) -> Result<Self, AgentProtocolError> {
+        let id = id.into();
         let address = address.into();
+
+        trace!(
+            agent_id = %id,
+            address = %address,
+            timeout_ms = timeout.as_millis() as u64,
+            "Connecting to agent via gRPC"
+        );
+
         let channel = Channel::from_shared(address.clone())
-            .map_err(|e| AgentProtocolError::ConnectionFailed(format!("Invalid URI: {}", e)))?
+            .map_err(|e| {
+                error!(
+                    agent_id = %id,
+                    address = %address,
+                    error = %e,
+                    "Invalid gRPC URI"
+                );
+                AgentProtocolError::ConnectionFailed(format!("Invalid URI: {}", e))
+            })?
             .timeout(timeout)
             .connect()
             .await
-            .map_err(|e| AgentProtocolError::ConnectionFailed(format!("gRPC connect failed: {}", e)))?;
+            .map_err(|e| {
+                error!(
+                    agent_id = %id,
+                    address = %address,
+                    error = %e,
+                    "Failed to connect to agent via gRPC"
+                );
+                AgentProtocolError::ConnectionFailed(format!("gRPC connect failed: {}", e))
+            })?;
 
         let client = AgentProcessorClient::new(channel);
 
+        debug!(
+            agent_id = %id,
+            address = %address,
+            "Connected to agent via gRPC"
+        );
+
         Ok(Self {
-            id: id.into(),
+            id,
             connection: AgentConnection::Grpc(client),
             timeout,
             max_retries: 3,

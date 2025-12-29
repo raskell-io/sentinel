@@ -21,6 +21,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use tracing::{debug, info, trace, warn};
 use validator::Validate;
 
 use sentinel_common::{
@@ -149,6 +150,12 @@ impl Config {
     /// Load configuration from a file
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+
+        trace!(
+            path = %path.display(),
+            "Loading configuration from file"
+        );
+
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {:?}", path))?;
 
@@ -157,12 +164,30 @@ impl Config {
             .and_then(|ext| ext.to_str())
             .unwrap_or("kdl");
 
-        match extension {
+        debug!(
+            path = %path.display(),
+            format = extension,
+            content_length = content.len(),
+            "Read configuration file"
+        );
+
+        let config = match extension {
             "kdl" => Self::from_kdl(&content),
             "json" => Self::from_json(&content),
             "toml" => Self::from_toml(&content),
             _ => Err(anyhow::anyhow!("Unsupported config format: {}", extension)),
-        }
+        }?;
+
+        info!(
+            path = %path.display(),
+            routes = config.routes.len(),
+            upstreams = config.upstreams.len(),
+            agents = config.agents.len(),
+            listeners = config.listeners.len(),
+            "Configuration loaded successfully"
+        );
+
+        Ok(config)
     }
 
     /// Load the default embedded configuration.
@@ -171,10 +196,12 @@ impl Config {
     /// embedded KDL configuration, falling back to the programmatic default
     /// if KDL parsing fails for any reason.
     pub fn default_embedded() -> Result<Self> {
+        trace!("Loading embedded default configuration");
+
         Self::from_kdl(DEFAULT_CONFIG_KDL).or_else(|e| {
-            tracing::warn!(
-                "Failed to parse embedded KDL config, using programmatic default: {}",
-                e
+            warn!(
+                error = %e,
+                "Failed to parse embedded KDL config, using programmatic default"
             );
             Ok(create_default_config())
         })
@@ -182,6 +209,10 @@ impl Config {
 
     /// Parse configuration from KDL format
     pub fn from_kdl(content: &str) -> Result<Self> {
+        trace!(
+            content_length = content.len(),
+            "Parsing KDL configuration"
+        );
         let doc: ::kdl::KdlDocument = content.parse().map_err(|e: ::kdl::KdlError| {
             use miette::Diagnostic;
 
@@ -254,25 +285,50 @@ impl Config {
 
     /// Parse configuration from JSON format
     pub fn from_json(content: &str) -> Result<Self> {
+        trace!(content_length = content.len(), "Parsing JSON configuration");
         serde_json::from_str(content).context("Failed to parse JSON configuration")
     }
 
     /// Parse configuration from TOML format
     pub fn from_toml(content: &str) -> Result<Self> {
+        trace!(content_length = content.len(), "Parsing TOML configuration");
         toml::from_str(content).context("Failed to parse TOML configuration")
     }
 
     /// Validate the configuration
     pub fn validate(&self) -> SentinelResult<()> {
+        trace!(
+            routes = self.routes.len(),
+            upstreams = self.upstreams.len(),
+            agents = self.agents.len(),
+            "Starting configuration validation"
+        );
+
         Validate::validate(self).map_err(|e| SentinelError::Config {
             message: format!("Configuration validation failed: {}", e),
             source: None,
         })?;
 
+        trace!("Schema validation passed");
+
         self.validate_routes()?;
+        trace!("Route validation passed");
+
         self.validate_upstreams()?;
+        trace!("Upstream validation passed");
+
         self.validate_agents()?;
+        trace!("Agent validation passed");
+
         self.limits.validate()?;
+        trace!("Limits validation passed");
+
+        debug!(
+            routes = self.routes.len(),
+            upstreams = self.upstreams.len(),
+            agents = self.agents.len(),
+            "Configuration validation successful"
+        );
 
         Ok(())
     }
@@ -438,12 +494,26 @@ impl Config {
 
     /// Reload configuration from the same file path
     pub fn reload(&mut self, path: impl AsRef<Path>) -> SentinelResult<()> {
+        let path = path.as_ref();
+        debug!(
+            path = %path.display(),
+            "Reloading configuration"
+        );
+
         let new_config = Self::from_file(path).map_err(|e| SentinelError::Config {
             message: format!("Failed to reload configuration: {}", e),
             source: None,
         })?;
 
         new_config.validate()?;
+
+        info!(
+            path = %path.display(),
+            routes = new_config.routes.len(),
+            upstreams = new_config.upstreams.len(),
+            "Configuration reloaded successfully"
+        );
+
         *self = new_config;
         Ok(())
     }

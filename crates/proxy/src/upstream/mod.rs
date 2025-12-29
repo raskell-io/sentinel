@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, error, info, trace, warn};
 
 use sentinel_common::{
     errors::{SentinelError, SentinelResult},
@@ -316,6 +316,12 @@ impl RoundRobinBalancer {
 #[async_trait]
 impl LoadBalancer for RoundRobinBalancer {
     async fn select(&self, _context: Option<&RequestContext>) -> SentinelResult<TargetSelection> {
+        trace!(
+            total_targets = self.targets.len(),
+            algorithm = "round_robin",
+            "Selecting upstream target"
+        );
+
         let health = self.health_status.read().await;
         let healthy_targets: Vec<_> = self
             .targets
@@ -324,11 +330,24 @@ impl LoadBalancer for RoundRobinBalancer {
             .collect();
 
         if healthy_targets.is_empty() {
+            warn!(
+                total_targets = self.targets.len(),
+                algorithm = "round_robin",
+                "No healthy upstream targets available"
+            );
             return Err(SentinelError::NoHealthyUpstream);
         }
 
         let index = self.current.fetch_add(1, Ordering::Relaxed) % healthy_targets.len();
         let target = healthy_targets[index];
+
+        trace!(
+            selected_target = %target.full_address(),
+            healthy_count = healthy_targets.len(),
+            index = index,
+            algorithm = "round_robin",
+            "Selected target via round robin"
+        );
 
         Ok(TargetSelection {
             address: target.full_address(),
@@ -338,6 +357,12 @@ impl LoadBalancer for RoundRobinBalancer {
     }
 
     async fn report_health(&self, address: &str, healthy: bool) {
+        trace!(
+            target = %address,
+            healthy = healthy,
+            algorithm = "round_robin",
+            "Updating target health status"
+        );
         self.health_status
             .write()
             .await
@@ -383,6 +408,12 @@ impl LeastConnectionsBalancer {
 #[async_trait]
 impl LoadBalancer for LeastConnectionsBalancer {
     async fn select(&self, _context: Option<&RequestContext>) -> SentinelResult<TargetSelection> {
+        trace!(
+            total_targets = self.targets.len(),
+            algorithm = "least_connections",
+            "Selecting upstream target"
+        );
+
         let health = self.health_status.read().await;
         let conns = self.connections.read().await;
 
@@ -392,26 +423,58 @@ impl LoadBalancer for LeastConnectionsBalancer {
         for target in &self.targets {
             let addr = target.full_address();
             if !*health.get(&addr).unwrap_or(&true) {
+                trace!(
+                    target = %addr,
+                    algorithm = "least_connections",
+                    "Skipping unhealthy target"
+                );
                 continue;
             }
 
             let conn_count = *conns.get(&addr).unwrap_or(&0);
+            trace!(
+                target = %addr,
+                connections = conn_count,
+                "Evaluating target connection count"
+            );
             if conn_count < min_connections {
                 min_connections = conn_count;
                 best_target = Some(target);
             }
         }
 
-        best_target
-            .map(|target| TargetSelection {
-                address: target.full_address(),
-                weight: target.weight,
-                metadata: HashMap::new(),
-            })
-            .ok_or(SentinelError::NoHealthyUpstream)
+        match best_target {
+            Some(target) => {
+                trace!(
+                    selected_target = %target.full_address(),
+                    connections = min_connections,
+                    algorithm = "least_connections",
+                    "Selected target with fewest connections"
+                );
+                Ok(TargetSelection {
+                    address: target.full_address(),
+                    weight: target.weight,
+                    metadata: HashMap::new(),
+                })
+            }
+            None => {
+                warn!(
+                    total_targets = self.targets.len(),
+                    algorithm = "least_connections",
+                    "No healthy upstream targets available"
+                );
+                Err(SentinelError::NoHealthyUpstream)
+            }
+        }
     }
 
     async fn report_health(&self, address: &str, healthy: bool) {
+        trace!(
+            target = %address,
+            healthy = healthy,
+            algorithm = "least_connections",
+            "Updating target health status"
+        );
         self.health_status
             .write()
             .await
@@ -439,6 +502,12 @@ struct WeightedBalancer {
 #[async_trait]
 impl LoadBalancer for WeightedBalancer {
     async fn select(&self, _context: Option<&RequestContext>) -> SentinelResult<TargetSelection> {
+        trace!(
+            total_targets = self.targets.len(),
+            algorithm = "weighted",
+            "Selecting upstream target"
+        );
+
         let health = self.health_status.read().await;
         let healthy_indices: Vec<_> = self
             .targets
@@ -449,21 +518,41 @@ impl LoadBalancer for WeightedBalancer {
             .collect();
 
         if healthy_indices.is_empty() {
+            warn!(
+                total_targets = self.targets.len(),
+                algorithm = "weighted",
+                "No healthy upstream targets available"
+            );
             return Err(SentinelError::NoHealthyUpstream);
         }
 
         let idx = self.current_index.fetch_add(1, Ordering::Relaxed) % healthy_indices.len();
         let target_idx = healthy_indices[idx];
         let target = &self.targets[target_idx];
+        let weight = self.weights.get(target_idx).copied().unwrap_or(1);
+
+        trace!(
+            selected_target = %target.full_address(),
+            weight = weight,
+            healthy_count = healthy_indices.len(),
+            algorithm = "weighted",
+            "Selected target via weighted round robin"
+        );
 
         Ok(TargetSelection {
             address: target.full_address(),
-            weight: self.weights.get(target_idx).copied().unwrap_or(1),
+            weight,
             metadata: HashMap::new(),
         })
     }
 
     async fn report_health(&self, address: &str, healthy: bool) {
+        trace!(
+            target = %address,
+            healthy = healthy,
+            algorithm = "weighted",
+            "Updating target health status"
+        );
         self.health_status
             .write()
             .await
@@ -489,6 +578,12 @@ struct IpHashBalancer {
 #[async_trait]
 impl LoadBalancer for IpHashBalancer {
     async fn select(&self, context: Option<&RequestContext>) -> SentinelResult<TargetSelection> {
+        trace!(
+            total_targets = self.targets.len(),
+            algorithm = "ip_hash",
+            "Selecting upstream target"
+        );
+
         let health = self.health_status.read().await;
         let healthy_targets: Vec<_> = self
             .targets
@@ -497,25 +592,40 @@ impl LoadBalancer for IpHashBalancer {
             .collect();
 
         if healthy_targets.is_empty() {
+            warn!(
+                total_targets = self.targets.len(),
+                algorithm = "ip_hash",
+                "No healthy upstream targets available"
+            );
             return Err(SentinelError::NoHealthyUpstream);
         }
 
         // Hash the client IP to select a target
-        let hash = if let Some(ctx) = context {
+        let (hash, client_ip_str) = if let Some(ctx) = context {
             if let Some(ip) = &ctx.client_ip {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 ip.hash(&mut hasher);
-                hasher.finish()
+                (hasher.finish(), Some(ip.to_string()))
             } else {
-                0
+                (0, None)
             }
         } else {
-            0
+            (0, None)
         };
 
         let idx = (hash as usize) % healthy_targets.len();
         let target = healthy_targets[idx];
+
+        trace!(
+            selected_target = %target.full_address(),
+            client_ip = client_ip_str.as_deref().unwrap_or("unknown"),
+            hash = hash,
+            index = idx,
+            healthy_count = healthy_targets.len(),
+            algorithm = "ip_hash",
+            "Selected target via IP hash"
+        );
 
         Ok(TargetSelection {
             address: target.full_address(),
@@ -525,6 +635,12 @@ impl LoadBalancer for IpHashBalancer {
     }
 
     async fn report_health(&self, address: &str, healthy: bool) {
+        trace!(
+            target = %address,
+            healthy = healthy,
+            algorithm = "ip_hash",
+            "Updating target health status"
+        );
         self.health_status
             .write()
             .await
@@ -546,6 +662,13 @@ impl UpstreamPool {
     pub async fn new(config: UpstreamConfig) -> SentinelResult<Self> {
         let id = UpstreamId::new(&config.id);
 
+        info!(
+            upstream_id = %config.id,
+            target_count = config.targets.len(),
+            algorithm = ?config.load_balancing,
+            "Creating upstream pool"
+        );
+
         // Convert config targets to internal targets
         let targets: Vec<UpstreamTarget> = config
             .targets
@@ -554,22 +677,55 @@ impl UpstreamPool {
             .collect();
 
         if targets.is_empty() {
+            error!(
+                upstream_id = %config.id,
+                "No valid upstream targets configured"
+            );
             return Err(SentinelError::Config {
                 message: "No valid upstream targets".to_string(),
                 source: None,
             });
         }
 
+        for target in &targets {
+            debug!(
+                upstream_id = %config.id,
+                target = %target.full_address(),
+                weight = target.weight,
+                "Registered upstream target"
+            );
+        }
+
         // Create load balancer
+        debug!(
+            upstream_id = %config.id,
+            algorithm = ?config.load_balancing,
+            "Creating load balancer"
+        );
         let load_balancer = Self::create_load_balancer(&config.load_balancing, &targets)?;
 
         // Create health checker if configured
         let health_checker = config
             .health_check
             .as_ref()
-            .map(|hc_config| Arc::new(UpstreamHealthChecker::new(hc_config.clone())));
+            .map(|hc_config| {
+                debug!(
+                    upstream_id = %config.id,
+                    check_type = ?hc_config.check_type,
+                    interval_secs = hc_config.interval_secs,
+                    "Creating health checker"
+                );
+                Arc::new(UpstreamHealthChecker::new(hc_config.clone()))
+            });
 
         // Create connection pool
+        debug!(
+            upstream_id = %config.id,
+            max_connections = config.connection_pool.max_connections,
+            max_idle = config.connection_pool.max_idle,
+            idle_timeout_secs = config.connection_pool.idle_timeout_secs,
+            "Creating connection pool"
+        );
         let connection_pool = Arc::new(ConnectionPool::new(
             config.connection_pool.max_connections,
             config.connection_pool.max_idle,
@@ -583,6 +739,11 @@ impl UpstreamPool {
         // Initialize circuit breakers for each target
         let mut circuit_breakers = HashMap::new();
         for target in &targets {
+            trace!(
+                upstream_id = %config.id,
+                target = %target.full_address(),
+                "Initializing circuit breaker for target"
+            );
             circuit_breakers.insert(
                 target.full_address(),
                 CircuitBreaker::new(CircuitBreakerConfig::default()),
@@ -590,7 +751,7 @@ impl UpstreamPool {
         }
 
         let pool = Self {
-            id,
+            id: id.clone(),
             targets,
             load_balancer,
             health_checker,
@@ -599,6 +760,12 @@ impl UpstreamPool {
             retry_policy: None,
             stats: Arc::new(PoolStats::default()),
         };
+
+        info!(
+            upstream_id = %id,
+            target_count = pool.targets.len(),
+            "Upstream pool created successfully"
+        );
 
         Ok(pool)
     }
@@ -648,7 +815,14 @@ impl UpstreamPool {
 
     /// Select next upstream peer
     pub async fn select_peer(&self, context: Option<&RequestContext>) -> SentinelResult<HttpPeer> {
-        self.stats.requests.fetch_add(1, Ordering::Relaxed);
+        let request_num = self.stats.requests.fetch_add(1, Ordering::Relaxed) + 1;
+
+        trace!(
+            upstream_id = %self.id,
+            request_num = request_num,
+            target_count = self.targets.len(),
+            "Starting peer selection"
+        );
 
         let mut attempts = 0;
         let max_attempts = self.targets.len() * 2;
@@ -656,35 +830,85 @@ impl UpstreamPool {
         while attempts < max_attempts {
             attempts += 1;
 
-            let selection = self.load_balancer.select(context).await?;
+            trace!(
+                upstream_id = %self.id,
+                attempt = attempts,
+                max_attempts = max_attempts,
+                "Attempting to select peer"
+            );
+
+            let selection = match self.load_balancer.select(context).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        upstream_id = %self.id,
+                        attempt = attempts,
+                        error = %e,
+                        "Load balancer selection failed"
+                    );
+                    continue;
+                }
+            };
+
+            trace!(
+                upstream_id = %self.id,
+                target = %selection.address,
+                attempt = attempts,
+                "Load balancer selected target"
+            );
 
             // Check circuit breaker
             let breakers = self.circuit_breakers.read().await;
             if let Some(breaker) = breakers.get(&selection.address) {
                 if !breaker.is_closed().await {
                     debug!(
+                        upstream_id = %self.id,
                         target = %selection.address,
+                        attempt = attempts,
                         "Circuit breaker is open, skipping target"
                     );
+                    self.stats.circuit_breaker_trips.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
             }
 
             // Try to get connection from pool
             if let Some(peer) = self.connection_pool.acquire(&selection.address).await? {
-                debug!(target = %selection.address, "Reusing pooled connection");
+                debug!(
+                    upstream_id = %self.id,
+                    target = %selection.address,
+                    attempt = attempts,
+                    "Reusing pooled connection"
+                );
                 return Ok(peer);
             }
 
             // Create new connection
-            debug!(target = %selection.address, "Creating new connection");
+            trace!(
+                upstream_id = %self.id,
+                target = %selection.address,
+                "Creating new connection to upstream"
+            );
             let peer = self.create_peer(&selection)?;
+
+            debug!(
+                upstream_id = %self.id,
+                target = %selection.address,
+                attempt = attempts,
+                "Selected upstream peer"
+            );
 
             self.stats.successes.fetch_add(1, Ordering::Relaxed);
             return Ok(peer);
         }
 
         self.stats.failures.fetch_add(1, Ordering::Relaxed);
+        error!(
+            upstream_id = %self.id,
+            attempts = attempts,
+            max_attempts = max_attempts,
+            "Failed to select upstream after max attempts"
+        );
         Err(SentinelError::upstream(
             &self.id.to_string(),
             "Failed to select upstream after max attempts",
@@ -703,17 +927,39 @@ impl UpstreamPool {
 
     /// Report connection result for a target
     pub async fn report_result(&self, target: &str, success: bool) {
+        trace!(
+            upstream_id = %self.id,
+            target = %target,
+            success = success,
+            "Reporting connection result"
+        );
+
         if success {
             if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
                 breaker.record_success().await;
+                trace!(
+                    upstream_id = %self.id,
+                    target = %target,
+                    "Recorded success in circuit breaker"
+                );
             }
             self.load_balancer.report_health(target, true).await;
         } else {
             if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
                 breaker.record_failure().await;
+                debug!(
+                    upstream_id = %self.id,
+                    target = %target,
+                    "Recorded failure in circuit breaker"
+                );
             }
             self.load_balancer.report_health(target, false).await;
             self.stats.failures.fetch_add(1, Ordering::Relaxed);
+            warn!(
+                upstream_id = %self.id,
+                target = %target,
+                "Connection failure reported for target"
+            );
         }
     }
 
@@ -724,7 +970,15 @@ impl UpstreamPool {
 
     /// Shutdown the pool
     pub async fn shutdown(&self) {
-        info!("Shutting down upstream pool: {}", self.id);
+        info!(
+            upstream_id = %self.id,
+            target_count = self.targets.len(),
+            total_requests = self.stats.requests.load(Ordering::Relaxed),
+            total_successes = self.stats.successes.load(Ordering::Relaxed),
+            total_failures = self.stats.failures.load(Ordering::Relaxed),
+            "Shutting down upstream pool"
+        );
         self.connection_pool.close_all().await;
+        debug!(upstream_id = %self.id, "Connection pool closed");
     }
 }

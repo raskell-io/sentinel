@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::errors::AgentProtocolError;
 use crate::grpc::{self, agent_processor_server::AgentProcessor, agent_processor_server::AgentProcessorServer};
@@ -67,9 +67,18 @@ impl AgentServer {
         socket_path: impl Into<std::path::PathBuf>,
         handler: Box<dyn AgentHandler>,
     ) -> Self {
+        let id = id.into();
+        let socket_path = socket_path.into();
+
+        debug!(
+            agent_id = %id,
+            socket_path = %socket_path.display(),
+            "Creating agent server"
+        );
+
         Self {
-            id: id.into(),
-            socket_path: socket_path.into(),
+            id,
+            socket_path,
             handler: Arc::from(handler),
         }
     }
@@ -78,6 +87,11 @@ impl AgentServer {
     pub async fn run(&self) -> Result<(), AgentProtocolError> {
         // Remove existing socket file if it exists
         if self.socket_path.exists() {
+            trace!(
+                agent_id = %self.id,
+                socket_path = %self.socket_path.display(),
+                "Removing existing socket file"
+            );
             std::fs::remove_file(&self.socket_path)?;
         }
 
@@ -85,22 +99,36 @@ impl AgentServer {
         let listener = UnixListener::bind(&self.socket_path)?;
 
         info!(
-            "Agent server '{}' listening on {:?}",
-            self.id, self.socket_path
+            agent_id = %self.id,
+            socket_path = %self.socket_path.display(),
+            "Agent server listening"
         );
 
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
+                    trace!(
+                        agent_id = %self.id,
+                        "Accepted new connection"
+                    );
                     let handler = Arc::clone(&self.handler);
+                    let agent_id = self.id.clone();
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_connection(stream, handler.as_ref()).await {
-                            error!("Error handling agent connection: {}", e);
+                            error!(
+                                agent_id = %agent_id,
+                                error = %e,
+                                "Error handling agent connection"
+                            );
                         }
                     });
                 }
                 Err(e) => {
-                    error!("Failed to accept connection: {}", e);
+                    error!(
+                        agent_id = %self.id,
+                        error = %e,
+                        "Failed to accept connection"
+                    );
                 }
             }
         }
@@ -111,6 +139,8 @@ impl AgentServer {
         mut stream: UnixStream,
         handler: &dyn AgentHandler,
     ) -> Result<(), AgentProtocolError> {
+        trace!("Starting connection handler");
+
         loop {
             // Read message length
             let mut len_bytes = [0u8; 4];
@@ -118,20 +148,31 @@ impl AgentServer {
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     // Client disconnected
+                    trace!("Client disconnected (EOF)");
                     return Ok(());
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    error!(error = %e, "Error reading message length");
+                    return Err(e.into());
+                }
             }
 
             let message_len = u32::from_be_bytes(len_bytes) as usize;
 
             // Check message size
             if message_len > MAX_MESSAGE_SIZE {
+                warn!(
+                    message_len = message_len,
+                    max_size = MAX_MESSAGE_SIZE,
+                    "Message too large"
+                );
                 return Err(AgentProtocolError::MessageTooLarge {
                     size: message_len,
                     max: MAX_MESSAGE_SIZE,
                 });
             }
+
+            trace!(message_len = message_len, "Reading message data");
 
             // Read message data
             let mut buffer = vec![0u8; message_len];
@@ -141,34 +182,74 @@ impl AgentServer {
             let request: AgentRequest = serde_json::from_slice(&buffer)
                 .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;
 
+            trace!(
+                event_type = ?request.event_type,
+                version = request.version,
+                "Received agent request"
+            );
+
             // Handle request based on event type
             let response = match request.event_type {
                 EventType::RequestHeaders => {
                     let event: RequestHeadersEvent = serde_json::from_value(request.payload)
                         .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;
+                    trace!(
+                        correlation_id = %event.metadata.correlation_id,
+                        method = %event.method,
+                        uri = %event.uri,
+                        "Processing request_headers event"
+                    );
                     handler.on_request_headers(event).await
                 }
                 EventType::RequestBodyChunk => {
                     let event: RequestBodyChunkEvent = serde_json::from_value(request.payload)
                         .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;
+                    trace!(
+                        correlation_id = %event.correlation_id,
+                        is_last = event.is_last,
+                        data_len = event.data.len(),
+                        "Processing request_body_chunk event"
+                    );
                     handler.on_request_body_chunk(event).await
                 }
                 EventType::ResponseHeaders => {
                     let event: ResponseHeadersEvent = serde_json::from_value(request.payload)
                         .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;
+                    trace!(
+                        correlation_id = %event.correlation_id,
+                        status = event.status,
+                        "Processing response_headers event"
+                    );
                     handler.on_response_headers(event).await
                 }
                 EventType::ResponseBodyChunk => {
                     let event: ResponseBodyChunkEvent = serde_json::from_value(request.payload)
                         .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;
+                    trace!(
+                        correlation_id = %event.correlation_id,
+                        is_last = event.is_last,
+                        data_len = event.data.len(),
+                        "Processing response_body_chunk event"
+                    );
                     handler.on_response_body_chunk(event).await
                 }
                 EventType::RequestComplete => {
                     let event: RequestCompleteEvent = serde_json::from_value(request.payload)
                         .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;
+                    trace!(
+                        correlation_id = %event.correlation_id,
+                        status = event.status,
+                        duration_ms = event.duration_ms,
+                        "Processing request_complete event"
+                    );
                     handler.on_request_complete(event).await
                 }
             };
+
+            trace!(
+                decision = ?response.decision,
+                "Sending agent response"
+            );
 
             // Send response
             let response_bytes = serde_json::to_vec(&response)
@@ -180,6 +261,8 @@ impl AgentServer {
             // Write message data
             stream.write_all(&response_bytes).await?;
             stream.flush().await?;
+
+            trace!(response_len = response_bytes.len(), "Response sent");
         }
     }
 }
@@ -226,9 +309,22 @@ impl DenylistAgent {
 #[async_trait]
 impl AgentHandler for DenylistAgent {
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
+        trace!(
+            correlation_id = %event.metadata.correlation_id,
+            uri = %event.uri,
+            client_ip = %event.metadata.client_ip,
+            "Denylist agent checking request"
+        );
+
         // Check if path is blocked
         for blocked_path in &self.blocked_paths {
             if event.uri.starts_with(blocked_path) {
+                debug!(
+                    correlation_id = %event.metadata.correlation_id,
+                    blocked_path = %blocked_path,
+                    uri = %event.uri,
+                    "Blocking request: path matched denylist"
+                );
                 return AgentResponse::block(403, Some("Forbidden path".to_string())).with_audit(
                     AuditMetadata {
                         tags: vec!["denylist".to_string(), "blocked_path".to_string()],
@@ -241,6 +337,11 @@ impl AgentHandler for DenylistAgent {
 
         // Check if IP is blocked
         if self.blocked_ips.contains(&event.metadata.client_ip) {
+            debug!(
+                correlation_id = %event.metadata.correlation_id,
+                client_ip = %event.metadata.client_ip,
+                "Blocking request: IP matched denylist"
+            );
             return AgentResponse::block(403, Some("Forbidden IP".to_string())).with_audit(
                 AuditMetadata {
                     tags: vec!["denylist".to_string(), "blocked_ip".to_string()],
@@ -250,6 +351,10 @@ impl AgentHandler for DenylistAgent {
             );
         }
 
+        trace!(
+            correlation_id = %event.metadata.correlation_id,
+            "Request allowed by denylist agent"
+        );
         AgentResponse::default_allow()
     }
 }
@@ -269,14 +374,17 @@ pub struct GrpcAgentServer {
 impl GrpcAgentServer {
     /// Create a new gRPC agent server
     pub fn new(id: impl Into<String>, handler: Box<dyn AgentHandler>) -> Self {
+        let id = id.into();
+        debug!(agent_id = %id, "Creating gRPC agent server");
         Self {
-            id: id.into(),
+            id,
             handler: Arc::from(handler),
         }
     }
 
     /// Get the tonic service for this agent
     pub fn into_service(self) -> AgentProcessorServer<GrpcAgentHandler> {
+        trace!(agent_id = %self.id, "Converting to tonic service");
         AgentProcessorServer::new(GrpcAgentHandler {
             id: self.id,
             handler: self.handler,
@@ -285,13 +393,20 @@ impl GrpcAgentServer {
 
     /// Start the gRPC server on the given address
     pub async fn run(self, addr: SocketAddr) -> Result<(), AgentProtocolError> {
-        info!("gRPC agent server '{}' listening on {}", self.id, addr);
+        info!(
+            agent_id = %self.id,
+            address = %addr,
+            "gRPC agent server listening"
+        );
 
         tonic::transport::Server::builder()
             .add_service(self.into_service())
             .serve(addr)
             .await
-            .map_err(|e| AgentProtocolError::ConnectionFailed(format!("gRPC server error: {}", e)))
+            .map_err(|e| {
+                error!(error = %e, "gRPC server error");
+                AgentProtocolError::ConnectionFailed(format!("gRPC server error: {}", e))
+            })
     }
 }
 
@@ -309,32 +424,71 @@ impl AgentProcessor for GrpcAgentHandler {
     ) -> Result<Response<grpc::AgentResponse>, Status> {
         let grpc_request = request.into_inner();
 
+        trace!(
+            agent_id = %self.id,
+            event_type = grpc_request.event_type,
+            version = grpc_request.version,
+            "Processing gRPC event"
+        );
+
         // Convert gRPC event to internal event and dispatch
         let response = match grpc_request.event {
             Some(grpc::agent_request::Event::RequestHeaders(e)) => {
                 let event = Self::convert_request_headers_from_grpc(e);
+                trace!(
+                    agent_id = %self.id,
+                    correlation_id = %event.metadata.correlation_id,
+                    "Processing request_headers via gRPC"
+                );
                 self.handler.on_request_headers(event).await
             }
             Some(grpc::agent_request::Event::RequestBodyChunk(e)) => {
                 let event = Self::convert_request_body_chunk_from_grpc(e);
+                trace!(
+                    agent_id = %self.id,
+                    correlation_id = %event.correlation_id,
+                    "Processing request_body_chunk via gRPC"
+                );
                 self.handler.on_request_body_chunk(event).await
             }
             Some(grpc::agent_request::Event::ResponseHeaders(e)) => {
                 let event = Self::convert_response_headers_from_grpc(e);
+                trace!(
+                    agent_id = %self.id,
+                    correlation_id = %event.correlation_id,
+                    "Processing response_headers via gRPC"
+                );
                 self.handler.on_response_headers(event).await
             }
             Some(grpc::agent_request::Event::ResponseBodyChunk(e)) => {
                 let event = Self::convert_response_body_chunk_from_grpc(e);
+                trace!(
+                    agent_id = %self.id,
+                    correlation_id = %event.correlation_id,
+                    "Processing response_body_chunk via gRPC"
+                );
                 self.handler.on_response_body_chunk(event).await
             }
             Some(grpc::agent_request::Event::RequestComplete(e)) => {
                 let event = Self::convert_request_complete_from_grpc(e);
+                trace!(
+                    agent_id = %self.id,
+                    correlation_id = %event.correlation_id,
+                    "Processing request_complete via gRPC"
+                );
                 self.handler.on_request_complete(event).await
             }
             None => {
+                warn!(agent_id = %self.id, "Missing event in gRPC request");
                 return Err(Status::invalid_argument("Missing event in request"));
             }
         };
+
+        trace!(
+            agent_id = %self.id,
+            decision = ?response.decision,
+            "Returning gRPC response"
+        );
 
         // Convert internal response to gRPC response
         let grpc_response = Self::convert_response_to_grpc(response);
@@ -347,11 +501,24 @@ impl AgentProcessor for GrpcAgentHandler {
     ) -> Result<Response<grpc::AgentResponse>, Status> {
         let mut stream = request.into_inner();
 
+        trace!(agent_id = %self.id, "Processing gRPC event stream");
+
         // Process all events in the stream, returning the final response
         let mut final_response = AgentResponse::default_allow();
+        let mut event_count = 0u32;
 
         while let Some(result) = stream.next().await {
-            let grpc_request = result.map_err(|e| Status::internal(format!("Stream error: {}", e)))?;
+            let grpc_request = result.map_err(|e| {
+                error!(agent_id = %self.id, error = %e, "Stream error");
+                Status::internal(format!("Stream error: {}", e))
+            })?;
+
+            event_count += 1;
+            trace!(
+                agent_id = %self.id,
+                event_count = event_count,
+                "Processing stream event"
+            );
 
             let response = match grpc_request.event {
                 Some(grpc::agent_request::Event::RequestHeaders(e)) => {
@@ -379,11 +546,24 @@ impl AgentProcessor for GrpcAgentHandler {
 
             // If any event results in a block/redirect, that becomes the final response
             if !matches!(response.decision, Decision::Allow) {
+                debug!(
+                    agent_id = %self.id,
+                    decision = ?response.decision,
+                    event_count = event_count,
+                    "Non-allow decision in stream, terminating early"
+                );
                 final_response = response;
                 break;
             }
             final_response = response;
         }
+
+        trace!(
+            agent_id = %self.id,
+            event_count = event_count,
+            decision = ?final_response.decision,
+            "Stream processing complete"
+        );
 
         let grpc_response = Self::convert_response_to_grpc(final_response);
         Ok(Response::new(grpc_response))

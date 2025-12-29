@@ -11,6 +11,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::{debug, trace};
 
 use sentinel_config::{BuiltinHandler, Config};
 
@@ -139,18 +140,39 @@ pub fn execute_handler(
     config: Option<Arc<Config>>,
     upstreams: Option<UpstreamHealthSnapshot>,
 ) -> Response<Full<Bytes>> {
-    match handler {
+    trace!(
+        handler = ?handler,
+        request_id = %request_id,
+        "Executing builtin handler"
+    );
+
+    let response = match handler {
         BuiltinHandler::Status => status_handler(state, request_id),
         BuiltinHandler::Health => health_handler(request_id),
         BuiltinHandler::Metrics => metrics_handler(request_id),
         BuiltinHandler::NotFound => not_found_handler(request_id),
         BuiltinHandler::Config => config_handler(config, request_id),
         BuiltinHandler::Upstreams => upstreams_handler(upstreams, request_id),
-    }
+    };
+
+    debug!(
+        handler = ?handler,
+        request_id = %request_id,
+        status = response.status().as_u16(),
+        "Builtin handler completed"
+    );
+
+    response
 }
 
 /// JSON status page handler
 fn status_handler(state: &BuiltinHandlerState, request_id: &str) -> Response<Full<Bytes>> {
+    trace!(
+        request_id = %request_id,
+        uptime_secs = state.uptime().as_secs(),
+        "Generating status response"
+    );
+
     let response = StatusResponse {
         status: "ok",
         version: state.version.clone(),

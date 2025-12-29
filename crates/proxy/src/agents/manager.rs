@@ -15,7 +15,7 @@ use sentinel_common::{
 };
 use sentinel_config::{AgentConfig, FailureMode};
 use tokio::sync::{RwLock, Semaphore};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use super::agent::Agent;
 use super::context::AgentCallContext;
@@ -46,11 +46,25 @@ impl AgentManager {
         agents: Vec<AgentConfig>,
         max_concurrent_calls: usize,
     ) -> SentinelResult<Self> {
+        info!(
+            agent_count = agents.len(),
+            max_concurrent_calls = max_concurrent_calls,
+            "Creating agent manager"
+        );
+
         let mut agent_map = HashMap::new();
         let mut pools = HashMap::new();
         let mut breakers = HashMap::new();
 
         for config in agents {
+            debug!(
+                agent_id = %config.id,
+                transport = ?config.transport,
+                timeout_ms = config.timeout_ms,
+                failure_mode = ?config.failure_mode,
+                "Configuring agent"
+            );
+
             let pool = Arc::new(AgentConnectionPool::new(
                 10, // max connections
                 2,  // min idle
@@ -65,6 +79,11 @@ impl AgentManager {
                     .unwrap_or_else(CircuitBreakerConfig::default),
             ));
 
+            trace!(
+                agent_id = %config.id,
+                "Creating agent instance"
+            );
+
             let agent = Arc::new(Agent::new(
                 config.clone(),
                 Arc::clone(&pool),
@@ -74,7 +93,17 @@ impl AgentManager {
             agent_map.insert(config.id.clone(), agent);
             pools.insert(config.id.clone(), pool);
             breakers.insert(config.id.clone(), circuit_breaker);
+
+            debug!(
+                agent_id = %config.id,
+                "Agent configured successfully"
+            );
         }
+
+        info!(
+            configured_agents = agent_map.len(),
+            "Agent manager created successfully"
+        );
 
         Ok(Self {
             agents: Arc::new(RwLock::new(agent_map)),
@@ -168,6 +197,13 @@ impl AgentManager {
         route_agents: &[String],
         ctx: &AgentCallContext,
     ) -> SentinelResult<AgentDecision> {
+        trace!(
+            correlation_id = %ctx.correlation_id,
+            event_type = ?event_type,
+            route_agents = ?route_agents,
+            "Starting agent event processing"
+        );
+
         // Get relevant agents for this route and event type
         let agents = self.agents.read().await;
         let relevant_agents: Vec<_> = route_agents
@@ -177,6 +213,11 @@ impl AgentManager {
             .collect();
 
         if relevant_agents.is_empty() {
+            trace!(
+                correlation_id = %ctx.correlation_id,
+                event_type = ?event_type,
+                "No relevant agents for event, allowing request"
+            );
             return Ok(AgentDecision::default_allow());
         }
 
@@ -184,15 +225,34 @@ impl AgentManager {
             correlation_id = %ctx.correlation_id,
             event_type = ?event_type,
             agent_count = relevant_agents.len(),
+            agent_ids = ?relevant_agents.iter().map(|a| a.id()).collect::<Vec<_>>(),
             "Processing event through agents"
         );
 
         // Process through each agent sequentially
         let mut combined_decision = AgentDecision::default_allow();
 
-        for agent in relevant_agents {
+        for (agent_index, agent) in relevant_agents.iter().enumerate() {
+            trace!(
+                correlation_id = %ctx.correlation_id,
+                agent_id = %agent.id(),
+                agent_index = agent_index,
+                event_type = ?event_type,
+                "Processing event through agent"
+            );
+
             // Acquire semaphore permit
+            trace!(
+                correlation_id = %ctx.correlation_id,
+                agent_id = %agent.id(),
+                "Acquiring agent call semaphore permit"
+            );
             let _permit = self.call_semaphore.acquire().await.map_err(|_| {
+                error!(
+                    correlation_id = %ctx.correlation_id,
+                    agent_id = %agent.id(),
+                    "Failed to acquire agent call semaphore permit"
+                );
                 SentinelError::Internal {
                     message: "Failed to acquire agent call permit".to_string(),
                     correlation_id: Some(ctx.correlation_id.to_string()),
@@ -205,11 +265,17 @@ impl AgentManager {
                 warn!(
                     agent_id = %agent.id(),
                     correlation_id = %ctx.correlation_id,
+                    failure_mode = ?agent.failure_mode(),
                     "Circuit breaker open, skipping agent"
                 );
 
                 // Handle based on failure mode
                 if agent.failure_mode() == FailureMode::Closed {
+                    debug!(
+                        correlation_id = %ctx.correlation_id,
+                        agent_id = %agent.id(),
+                        "Blocking request due to circuit breaker (fail-closed mode)"
+                    );
                     return Ok(AgentDecision::block(503, "Service unavailable"));
                 }
                 continue;
@@ -219,16 +285,37 @@ impl AgentManager {
             let start = Instant::now();
             let timeout = Duration::from_millis(agent.timeout_ms());
 
+            trace!(
+                correlation_id = %ctx.correlation_id,
+                agent_id = %agent.id(),
+                timeout_ms = agent.timeout_ms(),
+                "Calling agent"
+            );
+
             match tokio::time::timeout(timeout, agent.call_event(event_type, event)).await {
                 Ok(Ok(response)) => {
                     let duration = start.elapsed();
                     agent.record_success(duration).await;
+
+                    trace!(
+                        correlation_id = %ctx.correlation_id,
+                        agent_id = %agent.id(),
+                        duration_ms = duration.as_millis(),
+                        decision = ?response,
+                        "Agent call succeeded"
+                    );
 
                     // Merge response into combined decision
                     combined_decision.merge(response.into());
 
                     // If decision is to block/redirect/challenge, stop processing
                     if !combined_decision.is_allow() {
+                        debug!(
+                            correlation_id = %ctx.correlation_id,
+                            agent_id = %agent.id(),
+                            decision = ?combined_decision,
+                            "Agent returned blocking decision, stopping agent chain"
+                        );
                         break;
                     }
                 }
@@ -238,6 +325,8 @@ impl AgentManager {
                         agent_id = %agent.id(),
                         correlation_id = %ctx.correlation_id,
                         error = %e,
+                        duration_ms = start.elapsed().as_millis(),
+                        failure_mode = ?agent.failure_mode(),
                         "Agent call failed"
                     );
 
@@ -251,15 +340,28 @@ impl AgentManager {
                         agent_id = %agent.id(),
                         correlation_id = %ctx.correlation_id,
                         timeout_ms = agent.timeout_ms(),
+                        failure_mode = ?agent.failure_mode(),
                         "Agent call timed out"
                     );
 
                     if agent.failure_mode() == FailureMode::Closed {
+                        debug!(
+                            correlation_id = %ctx.correlation_id,
+                            agent_id = %agent.id(),
+                            "Blocking request due to timeout (fail-closed mode)"
+                        );
                         return Ok(AgentDecision::block(504, "Gateway timeout"));
                     }
                 }
             }
         }
+
+        trace!(
+            correlation_id = %ctx.correlation_id,
+            decision = ?combined_decision,
+            agents_processed = relevant_agents.len(),
+            "Agent event processing completed"
+        );
 
         Ok(combined_decision)
     }
@@ -268,26 +370,56 @@ impl AgentManager {
     pub async fn initialize(&self) -> SentinelResult<()> {
         let agents = self.agents.read().await;
 
+        info!(
+            agent_count = agents.len(),
+            "Initializing agent connections"
+        );
+
+        let mut initialized_count = 0;
+        let mut failed_count = 0;
+
         for (id, agent) in agents.iter() {
-            info!("Initializing agent: {}", id);
+            debug!(agent_id = %id, "Initializing agent connection");
             if let Err(e) = agent.initialize().await {
-                error!("Failed to initialize agent {}: {}", id, e);
+                error!(
+                    agent_id = %id,
+                    error = %e,
+                    "Failed to initialize agent"
+                );
+                failed_count += 1;
                 // Continue with other agents
+            } else {
+                trace!(agent_id = %id, "Agent initialized successfully");
+                initialized_count += 1;
             }
         }
+
+        info!(
+            initialized = initialized_count,
+            failed = failed_count,
+            total = agents.len(),
+            "Agent initialization complete"
+        );
 
         Ok(())
     }
 
     /// Shutdown all agents.
     pub async fn shutdown(&self) {
-        info!("Shutting down agent manager");
-
         let agents = self.agents.read().await;
+
+        info!(
+            agent_count = agents.len(),
+            "Shutting down agent manager"
+        );
+
         for (id, agent) in agents.iter() {
-            debug!("Shutting down agent: {}", id);
+            debug!(agent_id = %id, "Shutting down agent");
             agent.shutdown().await;
+            trace!(agent_id = %id, "Agent shutdown complete");
         }
+
+        info!("Agent manager shutdown complete");
     }
 
     /// Get agent metrics.

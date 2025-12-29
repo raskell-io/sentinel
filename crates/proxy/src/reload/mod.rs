@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use sentinel_common::errors::{SentinelError, SentinelResult};
 use sentinel_config::Config;
@@ -149,7 +149,18 @@ impl ConfigManager {
         let config_path = config_path.as_ref().to_path_buf();
         let (reload_tx, _) = broadcast::channel(100);
 
-        info!("Initializing configuration manager for: {:?}", config_path);
+        info!(
+            config_path = %config_path.display(),
+            route_count = initial_config.routes.len(),
+            upstream_count = initial_config.upstreams.len(),
+            listener_count = initial_config.listeners.len(),
+            "Initializing configuration manager"
+        );
+
+        trace!(
+            config_path = %config_path.display(),
+            "Creating ArcSwap for configuration"
+        );
 
         Ok(Self {
             current_config: Arc::new(ArcSwap::from_pointee(initial_config)),
@@ -234,11 +245,16 @@ impl ConfigManager {
     /// Reload configuration
     pub async fn reload(&self, trigger: ReloadTrigger) -> SentinelResult<()> {
         let start = Instant::now();
-        self.stats
+        let reload_num = self.stats
             .total_reloads
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
 
-        info!("Starting configuration reload (trigger: {:?})", trigger);
+        info!(
+            trigger = ?trigger,
+            reload_num = reload_num,
+            config_path = %self.config_path.display(),
+            "Starting configuration reload"
+        );
 
         // Notify reload started
         let _ = self.reload_tx.send(ReloadEvent::Started {
@@ -246,12 +262,29 @@ impl ConfigManager {
             trigger: trigger.clone(),
         });
 
+        trace!(
+            config_path = %self.config_path.display(),
+            "Reading configuration file"
+        );
+
         // Load new configuration
         let new_config = match Config::from_file(&self.config_path) {
-            Ok(config) => config,
+            Ok(config) => {
+                debug!(
+                    route_count = config.routes.len(),
+                    upstream_count = config.upstreams.len(),
+                    listener_count = config.listeners.len(),
+                    "Configuration file parsed successfully"
+                );
+                config
+            }
             Err(e) => {
                 let error_msg = format!("Failed to load configuration: {}", e);
-                error!("{}", error_msg);
+                error!(
+                    config_path = %self.config_path.display(),
+                    error = %e,
+                    "Failed to load configuration file"
+                );
                 self.stats
                     .failed_reloads
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -269,11 +302,15 @@ impl ConfigManager {
             }
         };
 
+        trace!("Starting configuration validation");
+
         // Validate new configuration BEFORE applying
         // This is critical - invalid configs must never be loaded
         if let Err(e) = self.validate_config(&new_config).await {
-            error!("Configuration validation failed: {}", e);
-            error!("REJECTED: New configuration will NOT be applied. Continuing with current configuration.");
+            error!(
+                error = %e,
+                "Configuration validation failed - new configuration REJECTED"
+            );
             self.stats
                 .failed_reloads
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -287,7 +324,11 @@ impl ConfigManager {
             return Err(e);
         }
 
-        info!("Configuration validation passed, applying new configuration");
+        info!(
+            route_count = new_config.routes.len(),
+            upstream_count = new_config.upstreams.len(),
+            "Configuration validation passed, applying new configuration"
+        );
 
         let _ = self.reload_tx.send(ReloadEvent::Validated {
             timestamp: Instant::now(),
@@ -296,39 +337,54 @@ impl ConfigManager {
         // Get current config for rollback
         let old_config = self.current_config.load_full();
 
+        trace!(
+            old_routes = old_config.routes.len(),
+            new_routes = new_config.routes.len(),
+            "Preparing configuration swap"
+        );
+
         // Run pre-reload hooks
-        for hook in self.reload_hooks.read().await.iter() {
+        let hooks = self.reload_hooks.read().await;
+        for hook in hooks.iter() {
+            trace!(hook_name = %hook.name(), "Running pre-reload hook");
             if let Err(e) = hook.pre_reload(&old_config, &new_config).await {
-                warn!("Pre-reload hook '{}' failed: {}", hook.name(), e);
+                warn!(
+                    hook_name = %hook.name(),
+                    error = %e,
+                    "Pre-reload hook failed"
+                );
                 // Continue with reload despite hook failure
             }
         }
+        drop(hooks);
 
         // Save previous config for rollback
+        trace!("Saving previous configuration for potential rollback");
         *self.previous_config.write().await = Some(old_config.clone());
 
         // Apply new configuration atomically
+        trace!("Applying new configuration atomically");
         self.current_config.store(Arc::new(new_config.clone()));
 
         // Run post-reload hooks
-        for hook in self.reload_hooks.read().await.iter() {
+        let hooks = self.reload_hooks.read().await;
+        for hook in hooks.iter() {
+            trace!(hook_name = %hook.name(), "Running post-reload hook");
             hook.post_reload(&old_config, &new_config).await;
         }
+        drop(hooks);
 
         // Update statistics
         let duration = start.elapsed();
-        self.stats
+        let successful_count = self.stats
             .successful_reloads
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         *self.stats.last_success.write().await = Some(Instant::now());
 
         // Update average duration
         {
             let mut avg = self.stats.avg_duration_ms.write().await;
-            let total = self
-                .stats
-                .successful_reloads
-                .load(std::sync::atomic::Ordering::Relaxed) as f64;
+            let total = successful_count as f64;
             *avg = (*avg * (total - 1.0) + duration.as_millis() as f64) / total;
         }
 
@@ -338,8 +394,11 @@ impl ConfigManager {
         });
 
         info!(
-            "Configuration reload completed successfully in {:?}",
-            duration
+            duration_ms = duration.as_millis(),
+            successful_reloads = successful_count,
+            route_count = new_config.routes.len(),
+            upstream_count = new_config.upstreams.len(),
+            "Configuration reload completed successfully"
         );
 
         Ok(())
@@ -347,29 +406,47 @@ impl ConfigManager {
 
     /// Rollback to previous configuration
     pub async fn rollback(&self, reason: String) -> SentinelResult<()> {
+        info!(
+            reason = %reason,
+            "Starting configuration rollback"
+        );
+
         let previous = self.previous_config.read().await.clone();
 
         if let Some(prev_config) = previous {
-            info!("Rolling back configuration: {}", reason);
+            trace!(
+                route_count = prev_config.routes.len(),
+                "Found previous configuration for rollback"
+            );
 
             // Validate previous config (should always pass)
+            trace!("Validating previous configuration");
             if let Err(e) = self.validate_config(&prev_config).await {
-                error!("Previous configuration validation failed: {}", e);
+                error!(
+                    error = %e,
+                    "Previous configuration validation failed during rollback"
+                );
                 return Err(e);
             }
 
             // Apply previous configuration
-            self.current_config.store(prev_config);
-            self.stats
+            trace!("Applying previous configuration");
+            self.current_config.store(prev_config.clone());
+            let rollback_count = self.stats
                 .rollbacks
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
 
             let _ = self.reload_tx.send(ReloadEvent::RolledBack {
                 timestamp: Instant::now(),
                 reason: reason.clone(),
             });
 
-            info!("Configuration rolled back successfully");
+            info!(
+                reason = %reason,
+                rollback_count = rollback_count,
+                route_count = prev_config.routes.len(),
+                "Configuration rolled back successfully"
+            );
             Ok(())
         } else {
             warn!("No previous configuration available for rollback");
@@ -382,17 +459,39 @@ impl ConfigManager {
 
     /// Validate configuration
     async fn validate_config(&self, config: &Config) -> SentinelResult<()> {
+        trace!(
+            route_count = config.routes.len(),
+            upstream_count = config.upstreams.len(),
+            "Starting configuration validation"
+        );
+
         // Built-in validation
+        trace!("Running built-in config validation");
         config.validate()?;
 
         // Run custom validators
-        for validator in self.validators.read().await.iter() {
-            debug!("Running validator: {}", validator.name());
+        let validators = self.validators.read().await;
+        trace!(
+            validator_count = validators.len(),
+            "Running custom validators"
+        );
+        for validator in validators.iter() {
+            trace!(validator_name = %validator.name(), "Running validator");
             validator.validate(config).await.map_err(|e| {
-                error!("Validator '{}' failed: {}", validator.name(), e);
+                error!(
+                    validator_name = %validator.name(),
+                    error = %e,
+                    "Validator failed"
+                );
                 e
             })?;
         }
+
+        debug!(
+            route_count = config.routes.len(),
+            upstream_count = config.upstreams.len(),
+            "Configuration validation passed"
+        );
 
         Ok(())
     }

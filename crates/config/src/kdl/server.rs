@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use std::path::PathBuf;
+use tracing::trace;
 
 use sentinel_common::types::TraceIdFormat;
 
@@ -11,11 +12,13 @@ use super::helpers::{get_bool_entry, get_first_arg_string, get_int_entry, get_st
 
 /// Parse server configuration block
 pub fn parse_server_config(node: &kdl::KdlNode) -> Result<ServerConfig> {
+    trace!("Parsing server configuration block");
+
     let trace_id_format = get_string_entry(node, "trace-id-format")
         .map(|s| TraceIdFormat::from_str_loose(&s))
         .unwrap_or_default();
 
-    Ok(ServerConfig {
+    let config = ServerConfig {
         worker_threads: get_int_entry(node, "worker-threads")
             .map(|v| v as usize)
             .unwrap_or_else(default_worker_threads),
@@ -32,11 +35,22 @@ pub fn parse_server_config(node: &kdl::KdlNode) -> Result<ServerConfig> {
         working_directory: get_string_entry(node, "working-directory").map(PathBuf::from),
         trace_id_format,
         auto_reload: get_bool_entry(node, "auto-reload").unwrap_or(false),
-    })
+    };
+
+    trace!(
+        worker_threads = config.worker_threads,
+        max_connections = config.max_connections,
+        daemon = config.daemon,
+        auto_reload = config.auto_reload,
+        "Parsed server configuration"
+    );
+
+    Ok(config)
 }
 
 /// Parse listeners configuration block
 pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
+    trace!("Parsing listeners configuration block");
     let mut listeners = Vec::new();
 
     if let Some(children) = node.children() {
@@ -47,6 +61,8 @@ pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
                         "Listener requires an ID argument, e.g., listener \"http\" {{ ... }}"
                     )
                 })?;
+
+                trace!(listener_id = %id, "Parsing listener");
 
                 let address = get_string_entry(child, "address").ok_or_else(|| {
                     anyhow::anyhow!(
@@ -71,6 +87,13 @@ pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
                     }
                 };
 
+                trace!(
+                    listener_id = %id,
+                    address = %address,
+                    protocol = ?protocol,
+                    "Parsed listener"
+                );
+
                 listeners.push(ListenerConfig {
                     id,
                     address,
@@ -91,5 +114,6 @@ pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
         }
     }
 
+    trace!(listener_count = listeners.len(), "Finished parsing listeners");
     Ok(listeners)
 }

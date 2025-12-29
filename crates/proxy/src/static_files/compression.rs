@@ -9,6 +9,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use http::{header, Request};
 use std::io::Write;
+use tracing::trace;
 
 // ============================================================================
 // Content Encoding
@@ -53,24 +54,47 @@ pub fn negotiate_encoding<B>(req: &Request<B>) -> ContentEncoding {
         if let Ok(accept_str) = accept_encoding.to_str() {
             // Check for brotli first (better compression)
             if accept_str.contains("br") {
+                trace!(
+                    accept_encoding = %accept_str,
+                    selected = "brotli",
+                    "Negotiated content encoding"
+                );
                 return ContentEncoding::Brotli;
             }
             // Fall back to gzip
             if accept_str.contains("gzip") {
+                trace!(
+                    accept_encoding = %accept_str,
+                    selected = "gzip",
+                    "Negotiated content encoding"
+                );
                 return ContentEncoding::Gzip;
             }
         }
     }
+    trace!(selected = "identity", "No compression encoding accepted");
     ContentEncoding::Identity
 }
 
 /// Compress content using the specified encoding
 pub fn compress_content(content: &Bytes, encoding: ContentEncoding) -> Result<Bytes> {
+    let original_size = content.len();
+
     match encoding {
         ContentEncoding::Gzip => {
             let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
             encoder.write_all(content)?;
             let compressed = encoder.finish()?;
+            let compressed_size = compressed.len();
+
+            trace!(
+                encoding = "gzip",
+                original_size = original_size,
+                compressed_size = compressed_size,
+                ratio = format!("{:.1}%", (compressed_size as f64 / original_size as f64) * 100.0),
+                "Compressed content"
+            );
+
             Ok(Bytes::from(compressed))
         }
         ContentEncoding::Brotli => {
@@ -79,9 +103,26 @@ pub fn compress_content(content: &Bytes, encoding: ContentEncoding) -> Result<By
                 let mut encoder = brotli::CompressorWriter::new(&mut compressed, 4096, 4, 22);
                 encoder.write_all(content)?;
             }
+            let compressed_size = compressed.len();
+
+            trace!(
+                encoding = "brotli",
+                original_size = original_size,
+                compressed_size = compressed_size,
+                ratio = format!("{:.1}%", (compressed_size as f64 / original_size as f64) * 100.0),
+                "Compressed content"
+            );
+
             Ok(Bytes::from(compressed))
         }
-        ContentEncoding::Identity => Ok(content.clone()),
+        ContentEncoding::Identity => {
+            trace!(
+                encoding = "identity",
+                size = original_size,
+                "No compression applied"
+            );
+            Ok(content.clone())
+        }
     }
 }
 

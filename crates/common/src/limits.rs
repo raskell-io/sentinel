@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::{debug, trace, warn};
 
 use crate::errors::{LimitType, SentinelError, SentinelResult};
 
@@ -218,6 +219,11 @@ pub struct RateLimiter {
 impl RateLimiter {
     /// Create a new rate limiter with specified capacity and refill rate
     pub fn new(capacity: u32, refill_per_second: u32) -> Self {
+        trace!(
+            capacity = capacity,
+            refill_per_second = refill_per_second,
+            "Creating rate limiter"
+        );
         Self {
             capacity,
             tokens: Arc::new(RwLock::new(capacity as f64)),
@@ -233,8 +239,18 @@ impl RateLimiter {
         let mut available_tokens = self.tokens.write();
         if *available_tokens >= tokens as f64 {
             *available_tokens -= tokens as f64;
+            trace!(
+                tokens_requested = tokens,
+                tokens_remaining = *available_tokens as u32,
+                "Rate limiter: tokens acquired"
+            );
             true
         } else {
+            trace!(
+                tokens_requested = tokens,
+                tokens_available = *available_tokens as u32,
+                "Rate limiter: insufficient tokens"
+            );
             false
         }
     }
@@ -311,9 +327,20 @@ impl MultiRateLimiter {
 
     /// Check if request is allowed for client and route
     pub fn check_request(&self, client_id: &str, route: &str) -> SentinelResult<()> {
+        trace!(
+            client_id = %client_id,
+            route = %route,
+            "Checking rate limits"
+        );
+
         // Check global rate limit
         if let Some(ref limiter) = self.global {
             if !limiter.try_acquire(1) {
+                warn!(
+                    client_id = %client_id,
+                    route = %route,
+                    "Global rate limit exceeded"
+                );
                 return Err(SentinelError::RateLimit {
                     message: "Global rate limit exceeded".to_string(),
                     limit: limiter.capacity,
@@ -331,6 +358,11 @@ impl MultiRateLimiter {
                 .or_insert_with(|| RateLimiter::new(capacity, refill));
 
             if !limiter.try_acquire(1) {
+                warn!(
+                    client_id = %client_id,
+                    route = %route,
+                    "Per-client rate limit exceeded"
+                );
                 return Err(SentinelError::RateLimit {
                     message: format!("Rate limit exceeded for client {}", client_id),
                     limit: capacity,
@@ -348,6 +380,11 @@ impl MultiRateLimiter {
                 .or_insert_with(|| RateLimiter::new(capacity, refill));
 
             if !limiter.try_acquire(1) {
+                warn!(
+                    client_id = %client_id,
+                    route = %route,
+                    "Per-route rate limit exceeded"
+                );
                 return Err(SentinelError::RateLimit {
                     message: format!("Rate limit exceeded for route {}", route),
                     limit: capacity,
@@ -357,6 +394,11 @@ impl MultiRateLimiter {
             }
         }
 
+        trace!(
+            client_id = %client_id,
+            route = %route,
+            "Rate limits check passed"
+        );
         Ok(())
     }
 
@@ -377,6 +419,12 @@ pub struct ConnectionLimiter {
 
 impl ConnectionLimiter {
     pub fn new(limits: Limits) -> Self {
+        debug!(
+            max_total = limits.max_total_connections,
+            max_per_client = limits.max_connections_per_client,
+            max_per_route = limits.max_connections_per_route,
+            "Creating connection limiter"
+        );
         Self {
             per_client: Arc::new(RwLock::new(HashMap::new())),
             per_route: Arc::new(RwLock::new(HashMap::new())),
@@ -387,10 +435,21 @@ impl ConnectionLimiter {
 
     /// Try to acquire a connection slot
     pub fn try_acquire(&self, client_id: &str, route: &str) -> SentinelResult<ConnectionGuard<'_>> {
+        trace!(
+            client_id = %client_id,
+            route = %route,
+            "Attempting to acquire connection slot"
+        );
+
         // Check total connections
         {
             let mut total = self.total.write();
             if *total >= self.limits.max_total_connections {
+                warn!(
+                    current = *total,
+                    max = self.limits.max_total_connections,
+                    "Total connection limit exceeded"
+                );
                 return Err(SentinelError::limit_exceeded(
                     LimitType::ConnectionCount,
                     *total,
@@ -407,6 +466,12 @@ impl ConnectionLimiter {
             if *client_count >= self.limits.max_connections_per_client {
                 // Rollback total count
                 *self.total.write() -= 1;
+                warn!(
+                    client_id = %client_id,
+                    current = *client_count,
+                    max = self.limits.max_connections_per_client,
+                    "Per-client connection limit exceeded"
+                );
                 return Err(SentinelError::limit_exceeded(
                     LimitType::ConnectionCount,
                     *client_count,
@@ -424,6 +489,12 @@ impl ConnectionLimiter {
                 // Rollback counts
                 *self.total.write() -= 1;
                 *self.per_client.write().get_mut(client_id).unwrap() -= 1;
+                warn!(
+                    route = %route,
+                    current = *route_count,
+                    max = self.limits.max_connections_per_route,
+                    "Per-route connection limit exceeded"
+                );
                 return Err(SentinelError::limit_exceeded(
                     LimitType::ConnectionCount,
                     *route_count,
@@ -432,6 +503,12 @@ impl ConnectionLimiter {
             }
             *route_count += 1;
         }
+
+        trace!(
+            client_id = %client_id,
+            route = %route,
+            "Connection slot acquired"
+        );
 
         Ok(ConnectionGuard {
             limiter: self,
@@ -442,6 +519,12 @@ impl ConnectionLimiter {
 
     /// Release a connection slot
     fn release(&self, client_id: &str, route: &str) {
+        trace!(
+            client_id = %client_id,
+            route = %route,
+            "Releasing connection slot"
+        );
+
         *self.total.write() -= 1;
 
         if let Some(count) = self.per_client.write().get_mut(client_id) {

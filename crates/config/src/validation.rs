@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use tracing::{debug, trace, warn};
 
 use crate::{Config, Filter, ServiceType};
 use sentinel_common::types::Priority;
@@ -33,6 +34,15 @@ pub fn validate_socket_addr(addr: &str) -> Result<(), validator::ValidationError
 
 /// Comprehensive semantic validation for the entire configuration
 pub fn validate_config_semantics(config: &Config) -> Result<(), validator::ValidationError> {
+    trace!(
+        routes = config.routes.len(),
+        upstreams = config.upstreams.len(),
+        agents = config.agents.len(),
+        filters = config.filters.len(),
+        listeners = config.listeners.len(),
+        "Starting semantic validation"
+    );
+
     let mut errors: Vec<String> = Vec::new();
 
     // Collect IDs for cross-reference validation
@@ -41,35 +51,56 @@ pub fn validate_config_semantics(config: &Config) -> Result<(), validator::Valid
     let agent_ids: HashSet<_> = config.agents.iter().map(|a| a.id.as_str()).collect();
     let filter_ids: HashSet<_> = config.filters.keys().map(|s| s.as_str()).collect();
 
+    trace!(
+        route_count = route_ids.len(),
+        upstream_count = upstream_ids.len(),
+        agent_count = agent_ids.len(),
+        filter_count = filter_ids.len(),
+        "Collected IDs for cross-reference validation"
+    );
+
     // Validate routes
+    trace!("Validating routes");
     validate_routes(config, &route_ids, &upstream_ids, &filter_ids, &mut errors);
 
     // Validate listeners
+    trace!("Validating listeners");
     validate_listeners(config, &route_ids, &mut errors);
 
     // Validate filters
+    trace!("Validating filters");
     validate_filters(config, &agent_ids, &mut errors);
 
     // Validate upstreams
+    trace!("Validating upstreams");
     validate_upstreams(config, &mut errors);
 
     // Validate duplicates
+    trace!("Checking for duplicates");
     validate_duplicates(config, &mut errors);
 
     // Warn about orphaned upstreams
     warn_orphaned_upstreams(config, &upstream_ids);
 
     // Build final error
+    if errors.is_empty() {
+        debug!("Semantic validation passed");
+    } else {
+        debug!(error_count = errors.len(), "Semantic validation found errors");
+    }
+
     build_validation_result(errors)
 }
 
 fn validate_routes(
     config: &Config,
-    route_ids: &HashSet<&str>,
+    _route_ids: &HashSet<&str>,
     upstream_ids: &HashSet<&str>,
     filter_ids: &HashSet<&str>,
     errors: &mut Vec<String>,
 ) {
+    trace!(route_count = config.routes.len(), "Validating route configurations");
+
     // Routes needing upstreams
     let routes_needing_upstreams: Vec<_> = config
         .routes
@@ -87,6 +118,12 @@ fn validate_routes(
                 && r.static_files.is_none()
         })
         .collect();
+
+    trace!(
+        routes_with_upstreams = routes_needing_upstreams.len(),
+        routes_missing_config = routes_missing_upstream_config.len(),
+        "Categorized routes for validation"
+    );
 
     // Validate routes have valid upstream references
     for route in &routes_needing_upstreams {
@@ -174,9 +211,17 @@ fn validate_listeners(
     route_ids: &HashSet<&str>,
     errors: &mut Vec<String>,
 ) {
+    trace!(listener_count = config.listeners.len(), "Validating listener configurations");
+
     for listener in &config.listeners {
+        trace!(listener_id = %listener.id, "Validating listener");
         if let Some(ref default_route) = listener.default_route {
             if !route_ids.contains(default_route.as_str()) {
+                warn!(
+                    listener_id = %listener.id,
+                    default_route = %default_route,
+                    "Listener references non-existent default route"
+                );
                 errors.push(format!(
                     "Listener '{}' references default-route '{}' which doesn't exist.\n\
                      Available routes: {}",
@@ -194,9 +239,17 @@ fn validate_filters(
     agent_ids: &HashSet<&str>,
     errors: &mut Vec<String>,
 ) {
+    trace!(filter_count = config.filters.len(), "Validating filter configurations");
+
     for (filter_id, filter_config) in &config.filters {
+        trace!(filter_id = %filter_id, "Validating filter");
         if let Filter::Agent(agent_filter) = &filter_config.filter {
             if !agent_ids.contains(agent_filter.agent.as_str()) {
+                warn!(
+                    filter_id = %filter_id,
+                    agent_id = %agent_filter.agent,
+                    "Filter references non-existent agent"
+                );
                 errors.push(format!(
                     "Filter '{}' references agent '{}' which doesn't exist.\n\
                      Available agents: {}",
@@ -210,8 +263,17 @@ fn validate_filters(
 }
 
 fn validate_upstreams(config: &Config, errors: &mut Vec<String>) {
+    trace!(upstream_count = config.upstreams.len(), "Validating upstream configurations");
+
     for (upstream_id, upstream) in &config.upstreams {
+        trace!(
+            upstream_id = %upstream_id,
+            target_count = upstream.targets.len(),
+            "Validating upstream"
+        );
+
         if upstream.targets.is_empty() {
+            warn!(upstream_id = %upstream_id, "Upstream has no targets");
             errors.push(format!(
                 "Upstream '{}' has no targets defined.\n\
                  Each upstream must have at least one target.",
@@ -223,6 +285,12 @@ fn validate_upstreams(config: &Config, errors: &mut Vec<String>) {
             if target.address.parse::<SocketAddr>().is_err() {
                 let parts: Vec<&str> = target.address.rsplitn(2, ':').collect();
                 if parts.len() != 2 || parts[0].parse::<u16>().is_err() {
+                    warn!(
+                        upstream_id = %upstream_id,
+                        target_index = i,
+                        address = %target.address,
+                        "Invalid target address format"
+                    );
                     errors.push(format!(
                         "Upstream '{}' target #{} has invalid address '{}'.\n\
                          Expected format: HOST:PORT",
@@ -237,10 +305,13 @@ fn validate_upstreams(config: &Config, errors: &mut Vec<String>) {
 }
 
 fn validate_duplicates(config: &Config, errors: &mut Vec<String>) {
+    trace!("Checking for duplicate identifiers");
+
     // Duplicate route IDs
     let mut seen_routes = HashSet::new();
     for route in &config.routes {
         if !seen_routes.insert(&route.id) {
+            warn!(route_id = %route.id, "Duplicate route ID found");
             errors.push(format!(
                 "Duplicate route ID '{}'. Each route must have a unique identifier.",
                 route.id
@@ -252,6 +323,7 @@ fn validate_duplicates(config: &Config, errors: &mut Vec<String>) {
     let mut seen_listeners = HashSet::new();
     for listener in &config.listeners {
         if !seen_listeners.insert(&listener.id) {
+            warn!(listener_id = %listener.id, "Duplicate listener ID found");
             errors.push(format!(
                 "Duplicate listener ID '{}'. Each listener must have a unique identifier.",
                 listener.id
@@ -263,12 +335,20 @@ fn validate_duplicates(config: &Config, errors: &mut Vec<String>) {
     let mut seen_addresses = HashSet::new();
     for listener in &config.listeners {
         if !seen_addresses.insert(&listener.address) {
+            warn!(address = %listener.address, "Duplicate listener address found");
             errors.push(format!(
                 "Duplicate listener address '{}'. Multiple listeners cannot bind to the same address.",
                 listener.address
             ));
         }
     }
+
+    trace!(
+        unique_routes = seen_routes.len(),
+        unique_listeners = seen_listeners.len(),
+        unique_addresses = seen_addresses.len(),
+        "Duplicate check complete"
+    );
 }
 
 fn warn_orphaned_upstreams(config: &Config, upstream_ids: &HashSet<&str>) {

@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
+use tracing::trace;
 
 use sentinel_common::types::LoadBalancingAlgorithm;
 
@@ -11,6 +12,7 @@ use super::helpers::get_first_arg_string;
 
 /// Parse upstreams configuration block
 pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamConfig>> {
+    trace!("Parsing upstreams configuration block");
     let mut upstreams = HashMap::new();
 
     if let Some(children) = node.children() {
@@ -21,6 +23,8 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                         "Upstream requires an ID argument, e.g., upstream \"backend\" {{ ... }}"
                     )
                 })?;
+
+                trace!(upstream_id = %id, "Parsing upstream");
 
                 // Parse targets
                 let mut targets = Vec::new();
@@ -35,6 +39,13 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                                     .and_then(|e| e.value().as_integer())
                                     .map(|v| v as u32)
                                     .unwrap_or(1);
+
+                                trace!(
+                                    upstream_id = %id,
+                                    address = %address,
+                                    weight = weight,
+                                    "Parsed target"
+                                );
 
                                 targets.push(UpstreamTarget {
                                     address,
@@ -54,6 +65,12 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                     ));
                 }
 
+                trace!(
+                    upstream_id = %id,
+                    target_count = targets.len(),
+                    "Parsed upstream"
+                );
+
                 upstreams.insert(
                     id.clone(),
                     UpstreamConfig {
@@ -70,5 +87,6 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
         }
     }
 
+    trace!(upstream_count = upstreams.len(), "Finished parsing upstreams");
     Ok(upstreams)
 }

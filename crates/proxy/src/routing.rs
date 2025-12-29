@@ -7,7 +7,7 @@
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use sentinel_common::types::Priority;
 use sentinel_common::RouteId;
@@ -81,9 +81,21 @@ impl RouteMatcher {
         routes: Vec<RouteConfig>,
         default_route: Option<String>,
     ) -> Result<Self, RouteError> {
+        info!(
+            route_count = routes.len(),
+            default_route = ?default_route,
+            "Initializing route matcher"
+        );
+
         let mut compiled_routes = Vec::new();
 
         for route in routes {
+            trace!(
+                route_id = %route.id,
+                priority = ?route.priority,
+                match_count = route.matches.len(),
+                "Compiling route"
+            );
             let compiled = CompiledRoute::compile(route)?;
             compiled_routes.push(compiled);
         }
@@ -95,6 +107,22 @@ impl RouteMatcher {
                 .then_with(|| b.specificity().cmp(&a.specificity()))
         });
 
+        // Log final route order
+        for (index, route) in compiled_routes.iter().enumerate() {
+            debug!(
+                route_id = %route.id,
+                order = index,
+                priority = ?route.priority,
+                specificity = route.specificity(),
+                "Route compiled and ordered"
+            );
+        }
+
+        info!(
+            compiled_routes = compiled_routes.len(),
+            "Route matcher initialized"
+        );
+
         Ok(Self {
             routes: compiled_routes,
             default_route: default_route.map(RouteId::new),
@@ -104,11 +132,29 @@ impl RouteMatcher {
 
     /// Match a request to a route
     pub fn match_request(&self, req: &RequestInfo) -> Option<RouteMatch> {
+        trace!(
+            method = %req.method,
+            path = %req.path,
+            host = %req.host,
+            "Starting route matching"
+        );
+
         // Check cache first
         let cache_key = req.cache_key();
         if let Some(route_id) = self.cache.write().get(&cache_key) {
-            debug!(route_id = %route_id, "Cache hit for route");
+            trace!(
+                route_id = %route_id,
+                cache_key = %cache_key,
+                "Route cache hit"
+            );
             if let Some(route) = self.find_route_by_id(&route_id) {
+                debug!(
+                    route_id = %route_id,
+                    method = %req.method,
+                    path = %req.path,
+                    source = "cache",
+                    "Route matched from cache"
+                );
                 return Some(RouteMatch {
                     route_id,
                     config: route.config.clone(),
@@ -117,12 +163,30 @@ impl RouteMatcher {
             }
         }
 
+        trace!(
+            cache_key = %cache_key,
+            route_count = self.routes.len(),
+            "Cache miss, evaluating routes"
+        );
+
         // Evaluate routes in priority order
-        for route in &self.routes {
+        for (index, route) in self.routes.iter().enumerate() {
+            trace!(
+                route_id = %route.id,
+                route_index = index,
+                priority = ?route.priority,
+                matcher_count = route.matchers.len(),
+                "Evaluating route"
+            );
+
             if route.matches(req) {
                 debug!(
                     route_id = %route.id,
+                    method = %req.method,
+                    path = %req.path,
+                    host = %req.host,
                     priority = ?route.priority,
+                    route_index = index,
                     "Route matched"
                 );
 
@@ -130,6 +194,12 @@ impl RouteMatcher {
                 self.cache
                     .write()
                     .insert(cache_key.clone(), route.id.clone());
+
+                trace!(
+                    route_id = %route.id,
+                    cache_key = %cache_key,
+                    "Route added to cache"
+                );
 
                 return Some(RouteMatch {
                     route_id: route.id.clone(),
@@ -141,7 +211,12 @@ impl RouteMatcher {
 
         // Use default route if configured
         if let Some(ref default_id) = self.default_route {
-            debug!(route_id = %default_id, "Using default route");
+            debug!(
+                route_id = %default_id,
+                method = %req.method,
+                path = %req.path,
+                "Using default route (no explicit match)"
+            );
             if let Some(route) = self.find_route_by_id(default_id) {
                 return Some(RouteMatch {
                     route_id: default_id.clone(),
@@ -151,7 +226,13 @@ impl RouteMatcher {
             }
         }
 
-        debug!("No route matched");
+        debug!(
+            method = %req.method,
+            path = %req.path,
+            host = %req.host,
+            routes_evaluated = self.routes.len(),
+            "No route matched"
+        );
         None
     }
 
@@ -219,15 +300,24 @@ impl CompiledRoute {
     /// Check if this route matches the request
     fn matches(&self, req: &RequestInfo) -> bool {
         // All matchers must pass (AND logic)
-        for matcher in &self.matchers {
-            if !matcher.matches(req) {
+        for (index, matcher) in self.matchers.iter().enumerate() {
+            let result = matcher.matches(req);
+            if !result {
                 trace!(
                     route_id = %self.id,
-                    matcher = ?matcher,
-                    "Matcher failed"
+                    matcher_index = index,
+                    matcher_type = ?matcher,
+                    path = %req.path,
+                    "Matcher did not match"
                 );
                 return false;
             }
+            trace!(
+                route_id = %self.id,
+                matcher_index = index,
+                matcher_type = ?matcher,
+                "Matcher passed"
+            );
         }
         true
     }

@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
+use tracing::trace;
 
 use crate::filters::*;
 use crate::routes::FailureMode;
@@ -11,6 +12,7 @@ use super::helpers::{get_bool_entry, get_first_arg_string, get_int_entry, get_st
 
 /// Parse top-level filter definitions block
 pub fn parse_filter_definitions(node: &kdl::KdlNode) -> Result<HashMap<String, FilterConfig>> {
+    trace!("Parsing filter definitions block");
     let mut filters = HashMap::new();
 
     if let Some(children) = node.children() {
@@ -22,12 +24,15 @@ pub fn parse_filter_definitions(node: &kdl::KdlNode) -> Result<HashMap<String, F
                     )
                 })?;
 
+                trace!(filter_id = %id, "Parsing filter definition");
+
                 let filter = parse_single_filter_definition(child)?;
                 filters.insert(id.clone(), FilterConfig::new(id, filter));
             }
         }
     }
 
+    trace!(filter_count = filters.len(), "Finished parsing filter definitions");
     Ok(filters)
 }
 
@@ -38,6 +43,8 @@ pub fn parse_single_filter_definition(node: &kdl::KdlNode) -> Result<Filter> {
             "Filter definition requires a 'type' field. Valid types: rate-limit, agent, headers, compress, cors, timeout, log"
         )
     })?;
+
+    trace!(filter_type = %filter_type, "Parsing filter of type");
 
     match filter_type.as_str() {
         "rate-limit" => parse_rate_limit_filter(node),

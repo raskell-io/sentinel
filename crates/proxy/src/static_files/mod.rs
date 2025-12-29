@@ -29,7 +29,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs;
-use tracing::warn;
+use tracing::{debug, trace, warn};
 
 use sentinel_config::StaticFileConfig;
 
@@ -64,7 +64,21 @@ pub struct StaticFileServer {
 impl StaticFileServer {
     /// Create a new static file server
     pub fn new(config: StaticFileConfig) -> Self {
+        trace!(
+            root = %config.root.display(),
+            index = %config.index,
+            directory_listing = config.directory_listing,
+            compress = config.compress,
+            has_fallback = config.fallback.is_some(),
+            "Creating static file server"
+        );
+
         let cache = Arc::new(FileCache::with_defaults());
+
+        debug!(
+            root = %config.root.display(),
+            "Static file server initialized"
+        );
 
         Self {
             config: Arc::new(config),
@@ -74,20 +88,42 @@ impl StaticFileServer {
 
     /// Get cache statistics
     pub fn cache_stats(&self) -> CacheStats {
-        self.cache.stats()
+        let stats = self.cache.stats();
+        trace!(
+            entries = stats.entry_count,
+            total_size = stats.total_size,
+            "Retrieved cache stats"
+        );
+        stats
     }
 
     /// Clear the file cache
     pub fn clear_cache(&self) {
+        let before = self.cache.stats().entry_count;
         self.cache.clear();
+        debug!(
+            cleared_entries = before,
+            "File cache cleared"
+        );
     }
 
     /// Serve a static file request
     pub async fn serve<B>(&self, req: &Request<B>, path: &str) -> Result<Response<Full<Bytes>>> {
+        trace!(
+            method = %req.method(),
+            path = %path,
+            "Serving static file request"
+        );
+
         // Validate request method
         match req.method() {
             &Method::GET | &Method::HEAD => {}
             _ => {
+                debug!(
+                    method = %req.method(),
+                    path = %path,
+                    "Method not allowed for static file"
+                );
                 return Ok(Response::builder()
                     .status(StatusCode::METHOD_NOT_ALLOWED)
                     .header(header::ALLOW, "GET, HEAD")
@@ -99,17 +135,37 @@ impl StaticFileServer {
         let file_path = match self.resolve_path(path) {
             Some(p) => p,
             None => {
+                debug!(
+                    path = %path,
+                    "Path resolution failed or blocked"
+                );
                 return self.not_found_response();
             }
         };
 
+        trace!(
+            request_path = %path,
+            resolved_path = %file_path.display(),
+            "Path resolved"
+        );
+
         // Check if path is a directory
         let metadata = match fs::metadata(&file_path).await {
             Ok(m) => m,
-            Err(_) => {
+            Err(e) => {
+                trace!(
+                    path = %file_path.display(),
+                    error = %e,
+                    "File metadata lookup failed"
+                );
                 // File not found - check for SPA fallback
                 if self.config.fallback.is_some() {
                     if let Some(index_path) = self.find_spa_fallback() {
+                        trace!(
+                            original_path = %path,
+                            fallback_path = %index_path.display(),
+                            "Using SPA fallback"
+                        );
                         let meta = fs::metadata(&index_path).await?;
                         return self.serve_file(req, &index_path, meta).await;
                     }
@@ -119,11 +175,19 @@ impl StaticFileServer {
         };
 
         if metadata.is_dir() {
+            trace!(
+                path = %file_path.display(),
+                "Path is directory, looking for index"
+            );
             // Try to serve index file
             for index_file in &["index.html", "index.htm"] {
                 let index_path = file_path.join(index_file);
                 if let Ok(index_meta) = fs::metadata(&index_path).await {
                     if index_meta.is_file() {
+                        trace!(
+                            index_file = %index_file,
+                            "Found index file"
+                        );
                         return self.serve_file(req, &index_path, index_meta).await;
                     }
                 }
@@ -131,9 +195,17 @@ impl StaticFileServer {
 
             // Directory listing if enabled
             if self.config.directory_listing {
+                trace!(
+                    path = %file_path.display(),
+                    "Generating directory listing"
+                );
                 return self.generate_directory_listing(&file_path).await;
             }
 
+            debug!(
+                path = %file_path.display(),
+                "Directory listing not allowed"
+            );
             return Ok(Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Full::new(Bytes::from_static(b"Directory listing not allowed")))?);
@@ -197,11 +269,22 @@ impl StaticFileServer {
         let modified = metadata.modified()?;
         let file_size = metadata.len();
 
+        trace!(
+            path = %file_path.display(),
+            size = file_size,
+            "Serving file"
+        );
+
         // Generate ETag based on size and modification time
         let etag = self.generate_etag_from_metadata(file_size, modified);
 
         // Check conditional headers (If-None-Match, If-Modified-Since)
         if let Some(response) = self.check_conditional_headers(req, &etag, modified)? {
+            trace!(
+                path = %file_path.display(),
+                status = 304,
+                "Returning 304 Not Modified"
+            );
             return Ok(response);
         }
 
@@ -218,8 +301,19 @@ impl StaticFileServer {
             ContentEncoding::Identity
         };
 
+        trace!(
+            path = %file_path.display(),
+            content_type = %content_type,
+            encoding = ?encoding,
+            "Content negotiation complete"
+        );
+
         // Check for Range header
         if let Some(range_header) = req.headers().get(header::RANGE) {
+            trace!(
+                path = %file_path.display(),
+                "Processing range request"
+            );
             return serve_range_request(
                 req,
                 file_path,
@@ -237,6 +331,10 @@ impl StaticFileServer {
         if file_size < MAX_CACHE_FILE_SIZE {
             if let Some(cached) = self.cache.get(file_path) {
                 if cached.is_fresh() && cached.size == file_size {
+                    trace!(
+                        path = %file_path.display(),
+                        "Serving from cache"
+                    );
                     return self.serve_cached(req, cached, encoding);
                 }
             }
@@ -244,16 +342,30 @@ impl StaticFileServer {
 
         // For HEAD requests, return headers only
         if req.method() == Method::HEAD {
+            trace!(
+                path = %file_path.display(),
+                "Serving HEAD request"
+            );
             return self.build_head_response(&content_type, file_size, &etag, modified);
         }
 
         // Serve the file based on size
         if file_size >= MMAP_THRESHOLD {
             // Large file: stream it
+            debug!(
+                path = %file_path.display(),
+                size = file_size,
+                "Serving large file"
+            );
             self.serve_large_file(file_path, &content_type, file_size, &etag, modified, encoding)
                 .await
         } else {
             // Small/medium file: read into memory
+            trace!(
+                path = %file_path.display(),
+                size = file_size,
+                "Serving small/medium file"
+            );
             self.serve_small_file(req, file_path, &content_type, file_size, &etag, modified, encoding)
                 .await
         }

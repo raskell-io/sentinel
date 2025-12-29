@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::types::{CircuitBreakerConfig, CircuitBreakerState};
 
@@ -55,6 +55,14 @@ pub struct CircuitBreaker {
 impl CircuitBreaker {
     /// Create a new circuit breaker with the given configuration
     pub fn new(config: CircuitBreakerConfig) -> Self {
+        trace!(
+            failure_threshold = config.failure_threshold,
+            success_threshold = config.success_threshold,
+            timeout_seconds = config.timeout_seconds,
+            half_open_max_requests = config.half_open_max_requests,
+            "Creating circuit breaker"
+        );
+
         Self {
             config,
             state: Arc::new(RwLock::new(CircuitBreakerState::Closed)),
@@ -68,6 +76,16 @@ impl CircuitBreaker {
 
     /// Create a new circuit breaker with a name for logging
     pub fn with_name(config: CircuitBreakerConfig, name: impl Into<String>) -> Self {
+        let name = name.into();
+
+        debug!(
+            name = %name,
+            failure_threshold = config.failure_threshold,
+            success_threshold = config.success_threshold,
+            timeout_seconds = config.timeout_seconds,
+            "Creating named circuit breaker"
+        );
+
         Self {
             config,
             state: Arc::new(RwLock::new(CircuitBreakerState::Closed)),
@@ -75,7 +93,7 @@ impl CircuitBreaker {
             consecutive_successes: AtomicU64::new(0),
             last_state_change: Arc::new(RwLock::new(Instant::now())),
             half_open_requests: AtomicU64::new(0),
-            name: Some(name.into()),
+            name: Some(name),
         }
     }
 
@@ -86,21 +104,47 @@ impl CircuitBreaker {
     pub async fn is_closed(&self) -> bool {
         let state = *self.state.read().await;
         match state {
-            CircuitBreakerState::Closed => true,
+            CircuitBreakerState::Closed => {
+                trace!(name = ?self.name, state = "closed", "Circuit breaker check: allowed");
+                true
+            }
             CircuitBreakerState::Open => {
                 // Check if should transition to half-open
                 let last_change = *self.last_state_change.read().await;
-                if last_change.elapsed() >= Duration::from_secs(self.config.timeout_seconds) {
+                let elapsed = last_change.elapsed();
+                let timeout = Duration::from_secs(self.config.timeout_seconds);
+
+                if elapsed >= timeout {
+                    trace!(
+                        name = ?self.name,
+                        elapsed_secs = elapsed.as_secs(),
+                        "Open timeout reached, transitioning to half-open"
+                    );
                     self.transition_to_half_open().await;
                     true // Allow one request through
                 } else {
+                    trace!(
+                        name = ?self.name,
+                        state = "open",
+                        remaining_secs = (timeout - elapsed).as_secs(),
+                        "Circuit breaker check: blocked"
+                    );
                     false
                 }
             }
             CircuitBreakerState::HalfOpen => {
                 // Allow limited requests
-                self.half_open_requests.fetch_add(1, Ordering::Relaxed)
-                    < self.config.half_open_max_requests.into()
+                let current = self.half_open_requests.fetch_add(1, Ordering::Relaxed);
+                let allowed = current < self.config.half_open_max_requests.into();
+                trace!(
+                    name = ?self.name,
+                    state = "half-open",
+                    request_num = current + 1,
+                    max_requests = self.config.half_open_max_requests,
+                    allowed = allowed,
+                    "Circuit breaker half-open check"
+                );
+                allowed
             }
         }
     }
@@ -112,6 +156,13 @@ impl CircuitBreaker {
     pub async fn record_success(&self) {
         self.consecutive_failures.store(0, Ordering::Relaxed);
         let successes = self.consecutive_successes.fetch_add(1, Ordering::Relaxed) + 1;
+
+        trace!(
+            name = ?self.name,
+            consecutive_successes = successes,
+            success_threshold = self.config.success_threshold,
+            "Recorded success"
+        );
 
         let state = *self.state.read().await;
         if state == CircuitBreakerState::HalfOpen
@@ -129,12 +180,23 @@ impl CircuitBreaker {
         self.consecutive_successes.store(0, Ordering::Relaxed);
         let failures = self.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
 
+        trace!(
+            name = ?self.name,
+            consecutive_failures = failures,
+            failure_threshold = self.config.failure_threshold,
+            "Recorded failure"
+        );
+
         let state = *self.state.read().await;
         match state {
             CircuitBreakerState::Closed if failures >= self.config.failure_threshold.into() => {
                 self.transition_to_open().await;
             }
             CircuitBreakerState::HalfOpen => {
+                debug!(
+                    name = ?self.name,
+                    "Failure in half-open state, re-opening circuit"
+                );
                 self.transition_to_open().await;
             }
             _ => {}

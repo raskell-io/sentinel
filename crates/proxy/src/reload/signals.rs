@@ -4,6 +4,7 @@
 //! SIGHUP (reload) and SIGTERM/SIGINT (shutdown).
 
 use std::sync::{mpsc, Arc, Mutex};
+use tracing::{debug, trace};
 
 /// Signal type for cross-thread communication
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +28,7 @@ pub struct SignalManager {
 impl SignalManager {
     /// Create a new signal manager
     pub fn new() -> Self {
+        debug!("Creating signal manager");
         let (tx, rx) = mpsc::channel();
         Self {
             tx,
@@ -36,6 +38,7 @@ impl SignalManager {
 
     /// Get a sender for use in signal handlers
     pub fn sender(&self) -> mpsc::Sender<SignalType> {
+        trace!("Cloning signal sender for handler");
         self.tx.clone()
     }
 
@@ -43,12 +46,21 @@ impl SignalManager {
     ///
     /// This should be called from an async context using spawn_blocking
     pub fn recv_blocking(&self) -> Option<SignalType> {
-        self.rx.lock().ok()?.recv().ok()
+        trace!("Waiting for signal (blocking)");
+        let signal = self.rx.lock().ok()?.recv().ok();
+        if let Some(ref s) = signal {
+            debug!(signal = ?s, "Received signal");
+        }
+        signal
     }
 
     /// Try to receive a signal without blocking
     pub fn try_recv(&self) -> Option<SignalType> {
-        self.rx.lock().ok()?.try_recv().ok()
+        let signal = self.rx.lock().ok()?.try_recv().ok();
+        if let Some(ref s) = signal {
+            debug!(signal = ?s, "Received signal (non-blocking)");
+        }
+        signal
     }
 }
 

@@ -15,6 +15,8 @@ mod routes;
 mod server;
 mod upstreams;
 
+use tracing::{debug, trace};
+
 // Re-export commonly used items
 pub use helpers::{
     get_bool_entry, get_first_arg_string, get_int_entry, get_string_entry, offset_to_line_col,
@@ -40,6 +42,11 @@ use crate::{AgentConfig, Config};
 
 /// Convert a parsed KDL document to Config
 pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
+    trace!(
+        node_count = doc.nodes().len(),
+        "Parsing KDL document"
+    );
+
     let mut server = None;
     let mut listeners = Vec::new();
     let mut routes = Vec::new();
@@ -51,33 +58,45 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
     let mut observability = None;
 
     for node in doc.nodes() {
-        match node.name().value() {
+        let node_name = node.name().value();
+        trace!(node = node_name, "Processing top-level node");
+
+        match node_name {
             "server" => {
                 server = Some(parse_server_config(node)?);
+                trace!("Parsed server configuration");
             }
             "listeners" => {
                 listeners = parse_listeners(node)?;
+                trace!(count = listeners.len(), "Parsed listeners");
             }
             "routes" => {
                 routes = parse_routes(node)?;
+                trace!(count = routes.len(), "Parsed routes");
             }
             "upstreams" => {
                 upstreams = parse_upstreams(node)?;
+                trace!(count = upstreams.len(), "Parsed upstreams");
             }
             "filters" => {
                 filters = parse_filter_definitions(node)?;
+                trace!(count = filters.len(), "Parsed filters");
             }
             "agents" => {
                 agents = parse_agents(node)?;
+                trace!(count = agents.len(), "Parsed agents");
             }
             "waf" => {
                 waf = Some(parse_waf_config(node)?);
+                trace!("Parsed WAF configuration");
             }
             "limits" => {
                 limits = Some(parse_limits_config(node)?);
+                trace!("Parsed limits configuration");
             }
             "observability" => {
                 observability = Some(parse_observability_config(node)?);
+                trace!("Parsed observability configuration");
             }
             other => {
                 return Err(anyhow::anyhow!(
@@ -113,6 +132,16 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
              }}"
         ));
     }
+
+    debug!(
+        listeners = listeners.len(),
+        routes = routes.len(),
+        upstreams = upstreams.len(),
+        filters = filters.len(),
+        agents = agents.len(),
+        has_waf = waf.is_some(),
+        "KDL document parsed successfully"
+    );
 
     Ok(Config {
         server,

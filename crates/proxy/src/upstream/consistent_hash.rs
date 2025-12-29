@@ -10,7 +10,7 @@ use xxhash_rust::xxh3::Xxh3;
 use super::{LoadBalancer, RequestContext, TargetSelection, UpstreamTarget};
 use sentinel_common::errors::{SentinelError, SentinelResult};
 use async_trait::async_trait;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Hash function types supported by the consistent hash balancer
 #[derive(Debug, Clone, Copy)]
@@ -100,6 +100,16 @@ pub struct ConsistentHashBalancer {
 
 impl ConsistentHashBalancer {
     pub fn new(targets: Vec<UpstreamTarget>, config: ConsistentHashConfig) -> Self {
+        trace!(
+            target_count = targets.len(),
+            virtual_nodes = config.virtual_nodes,
+            hash_function = ?config.hash_function,
+            bounded_loads = config.bounded_loads,
+            max_load_factor = config.max_load_factor,
+            hash_key_extractor = ?config.hash_key_extractor,
+            "Creating consistent hash balancer"
+        );
+
         let connection_counts = targets
             .iter()
             .map(|_| Arc::new(AtomicU64::new(0)))
@@ -121,11 +131,22 @@ impl ConsistentHashBalancer {
             tokio::runtime::Handle::current().block_on(balancer.rebuild_ring());
         });
 
+        debug!(
+            target_count = targets.len(),
+            "Consistent hash balancer initialized"
+        );
+
         balancer
     }
 
     /// Rebuild the hash ring based on current targets and health
     async fn rebuild_ring(&self) {
+        trace!(
+            total_targets = self.targets.len(),
+            virtual_nodes_per_target = self.config.virtual_nodes,
+            "Starting hash ring rebuild"
+        );
+
         let mut new_ring = BTreeMap::new();
         let health = self.health_status.read().await;
 
@@ -134,6 +155,11 @@ impl ConsistentHashBalancer {
             let is_healthy = health.get(&target_id).copied().unwrap_or(true);
 
             if !is_healthy {
+                trace!(
+                    target_id = %target_id,
+                    target_index = index,
+                    "Skipping unhealthy target in ring rebuild"
+                );
                 continue;
             }
 
@@ -151,27 +177,43 @@ impl ConsistentHashBalancer {
                     },
                 );
             }
+
+            trace!(
+                target_id = %target_id,
+                target_index = index,
+                vnodes_added = self.config.virtual_nodes,
+                "Added virtual nodes for target"
+            );
         }
+
+        let healthy_count = new_ring
+            .values()
+            .map(|n| n.target_index)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
 
         if new_ring.is_empty() {
             warn!("No healthy targets available for consistent hash ring");
         } else {
             info!(
-                "Rebuilt consistent hash ring with {} virtual nodes from {} healthy targets",
-                new_ring.len(),
-                new_ring
-                    .values()
-                    .map(|n| n.target_index)
-                    .collect::<std::collections::HashSet<_>>()
-                    .len()
+                virtual_nodes = new_ring.len(),
+                healthy_targets = healthy_count,
+                "Rebuilt consistent hash ring"
             );
         }
 
         *self.ring.write().await = new_ring;
 
         // Clear cache on ring change
+        let cache_size = self.lookup_cache.read().await.len();
         self.lookup_cache.write().await.clear();
-        self.generation.fetch_add(1, Ordering::SeqCst);
+        let new_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+        trace!(
+            cache_entries_cleared = cache_size,
+            new_generation = new_generation,
+            "Ring rebuild complete, cache cleared"
+        );
     }
 
     /// Hash a key using the configured hash function
@@ -199,6 +241,13 @@ impl ConsistentHashBalancer {
     async fn find_target(&self, hash_key: &str) -> Option<usize> {
         let key_hash = self.hash_key(hash_key);
 
+        trace!(
+            hash_key = %hash_key,
+            key_hash = key_hash,
+            bounded_loads = self.config.bounded_loads,
+            "Finding target for hash key"
+        );
+
         // Check cache first
         {
             let cache = self.lookup_cache.read().await;
@@ -208,14 +257,25 @@ impl ConsistentHashBalancer {
                 let target = &self.targets[target_index];
                 let target_id = format!("{}:{}", target.address, target.port);
                 if health.get(&target_id).copied().unwrap_or(true) {
+                    trace!(
+                        hash_key = %hash_key,
+                        target_index = target_index,
+                        "Cache hit for hash key"
+                    );
                     return Some(target_index);
                 }
+                trace!(
+                    hash_key = %hash_key,
+                    target_index = target_index,
+                    "Cache hit but target unhealthy"
+                );
             }
         }
 
         let ring = self.ring.read().await;
 
         if ring.is_empty() {
+            warn!("Hash ring is empty, no targets available");
             return None;
         }
 
@@ -230,6 +290,12 @@ impl ConsistentHashBalancer {
                 .unwrap_or_default()
         };
 
+        trace!(
+            hash_key = %hash_key,
+            candidate_count = candidates.len(),
+            "Found candidates on hash ring"
+        );
+
         // If bounded loads is disabled, return the first candidate
         if !self.config.bounded_loads {
             let target_index = candidates.first().map(|n| n.target_index);
@@ -237,6 +303,11 @@ impl ConsistentHashBalancer {
             // Update cache
             if let Some(idx) = target_index {
                 self.lookup_cache.write().await.insert(key_hash, idx);
+                trace!(
+                    hash_key = %hash_key,
+                    target_index = idx,
+                    "Selected target (no bounded loads)"
+                );
             }
 
             return target_index;
@@ -246,9 +317,23 @@ impl ConsistentHashBalancer {
         let avg_load = self.calculate_average_load().await;
         let max_load = (avg_load * self.config.max_load_factor) as u64;
 
+        trace!(
+            avg_load = avg_load,
+            max_load = max_load,
+            max_load_factor = self.config.max_load_factor,
+            "Checking bounded loads"
+        );
+
         // Try candidates in order until we find one that's not overloaded
         for vnode in candidates {
             let current_load = self.connection_counts[vnode.target_index].load(Ordering::Relaxed);
+
+            trace!(
+                target_index = vnode.target_index,
+                current_load = current_load,
+                max_load = max_load,
+                "Evaluating candidate load"
+            );
 
             if current_load <= max_load {
                 // Update cache
@@ -256,9 +341,20 @@ impl ConsistentHashBalancer {
                     .write()
                     .await
                     .insert(key_hash, vnode.target_index);
+                debug!(
+                    hash_key = %hash_key,
+                    target_index = vnode.target_index,
+                    current_load = current_load,
+                    "Selected target within load bounds"
+                );
                 return Some(vnode.target_index);
             }
         }
+
+        trace!(
+            hash_key = %hash_key,
+            "All candidates overloaded, falling back to least loaded"
+        );
 
         // If all candidates are overloaded, find least loaded target
         self.find_least_loaded_target().await
@@ -286,6 +382,8 @@ impl ConsistentHashBalancer {
 
     /// Find the least loaded target when all consistent hash candidates are overloaded
     async fn find_least_loaded_target(&self) -> Option<usize> {
+        trace!("Finding least loaded target as fallback");
+
         let health = self.health_status.read().await;
 
         let mut min_load = u64::MAX;
@@ -294,14 +392,36 @@ impl ConsistentHashBalancer {
         for (index, target) in self.targets.iter().enumerate() {
             let target_id = format!("{}:{}", target.address, target.port);
             if !health.get(&target_id).copied().unwrap_or(true) {
+                trace!(
+                    target_index = index,
+                    target_id = %target_id,
+                    "Skipping unhealthy target"
+                );
                 continue;
             }
 
             let load = self.connection_counts[index].load(Ordering::Relaxed);
+            trace!(
+                target_index = index,
+                target_id = %target_id,
+                load = load,
+                "Evaluating target load"
+            );
+
             if load < min_load {
                 min_load = load;
                 best_target = Some(index);
             }
+        }
+
+        if let Some(idx) = best_target {
+            debug!(
+                target_index = idx,
+                load = min_load,
+                "Selected least loaded target"
+            );
+        } else {
+            warn!("No healthy targets found for least loaded selection");
         }
 
         best_target
@@ -309,7 +429,7 @@ impl ConsistentHashBalancer {
 
     /// Extract hash key from request context
     pub fn extract_hash_key(&self, context: &RequestContext) -> Option<String> {
-        match &self.config.hash_key_extractor {
+        let key = match &self.config.hash_key_extractor {
             HashKeyExtractor::ClientIp => context.client_ip.map(|ip| ip.to_string()),
             HashKeyExtractor::Header(name) => context.headers.get(name).cloned(),
             HashKeyExtractor::Cookie(name) => {
@@ -326,39 +446,70 @@ impl ConsistentHashBalancer {
                 })
             }
             HashKeyExtractor::Custom(extractor) => extractor(context),
-        }
+        };
+
+        trace!(
+            extractor = ?self.config.hash_key_extractor,
+            key_found = key.is_some(),
+            "Extracted hash key from request"
+        );
+
+        key
     }
 
     /// Track connection acquisition
     pub fn acquire_connection(&self, target_index: usize) {
-        self.connection_counts[target_index].fetch_add(1, Ordering::Relaxed);
-        self.total_connections.fetch_add(1, Ordering::Relaxed);
+        let count = self.connection_counts[target_index].fetch_add(1, Ordering::Relaxed) + 1;
+        let total = self.total_connections.fetch_add(1, Ordering::Relaxed) + 1;
+        trace!(
+            target_index = target_index,
+            target_connections = count,
+            total_connections = total,
+            "Acquired connection"
+        );
     }
 
     /// Track connection release
     pub fn release_connection(&self, target_index: usize) {
-        self.connection_counts[target_index].fetch_sub(1, Ordering::Relaxed);
-        self.total_connections.fetch_sub(1, Ordering::Relaxed);
+        let count = self.connection_counts[target_index].fetch_sub(1, Ordering::Relaxed) - 1;
+        let total = self.total_connections.fetch_sub(1, Ordering::Relaxed) - 1;
+        trace!(
+            target_index = target_index,
+            target_connections = count,
+            total_connections = total,
+            "Released connection"
+        );
     }
 }
 
 #[async_trait]
 impl LoadBalancer for ConsistentHashBalancer {
     async fn select(&self, context: Option<&RequestContext>) -> SentinelResult<TargetSelection> {
+        trace!(
+            has_context = context.is_some(),
+            "Consistent hash select called"
+        );
+
         // Extract hash key from context or use random fallback
-        let hash_key = context
+        let (hash_key, used_random) = context
             .and_then(|ctx| self.extract_hash_key(ctx))
+            .map(|k| (k, false))
             .unwrap_or_else(|| {
                 // Generate random key for requests without proper hash key
                 use rand::Rng;
                 let mut rng = rand::thread_rng();
-                format!("random-{}", rng.gen::<u64>())
+                let key = format!("random-{}", rng.gen::<u64>());
+                trace!(random_key = %key, "Generated random hash key (no context key)");
+                (key, true)
             });
 
         let target_index = self
             .find_target(&hash_key)
             .await
-            .ok_or_else(|| SentinelError::NoHealthyUpstream)?;
+            .ok_or_else(|| {
+                warn!("No healthy upstream targets available");
+                SentinelError::NoHealthyUpstream
+            })?;
 
         let target = &self.targets[target_index];
 
@@ -367,11 +518,15 @@ impl LoadBalancer for ConsistentHashBalancer {
             self.acquire_connection(target_index);
         }
 
+        let current_load = self.connection_counts[target_index].load(Ordering::Relaxed);
+
         debug!(
-            "Selected target {} for hash key {} (index: {})",
-            format!("{}:{}", target.address, target.port),
-            hash_key,
-            target_index
+            target = %format!("{}:{}", target.address, target.port),
+            hash_key = %hash_key,
+            target_index = target_index,
+            current_load = current_load,
+            used_random_key = used_random,
+            "Consistent hash selected target"
         );
 
         Ok(TargetSelection {
@@ -381,34 +536,39 @@ impl LoadBalancer for ConsistentHashBalancer {
                 let mut meta = HashMap::new();
                 meta.insert("hash_key".to_string(), hash_key);
                 meta.insert("target_index".to_string(), target_index.to_string());
-                meta.insert(
-                    "load".to_string(),
-                    self.connection_counts[target_index]
-                        .load(Ordering::Relaxed)
-                        .to_string(),
-                );
+                meta.insert("load".to_string(), current_load.to_string());
+                meta.insert("algorithm".to_string(), "consistent_hash".to_string());
                 meta
             },
         })
     }
 
     async fn report_health(&self, address: &str, healthy: bool) {
+        trace!(
+            address = %address,
+            healthy = healthy,
+            "Reporting target health"
+        );
+
         let mut health = self.health_status.write().await;
         let previous = health.insert(address.to_string(), healthy);
 
         // Rebuild ring if health status changed
         if previous != Some(healthy) {
             info!(
-                "Target {} health changed from {:?} to {}",
-                address, previous, healthy
+                address = %address,
+                previous_status = ?previous,
+                new_status = healthy,
+                "Target health changed, rebuilding ring"
             );
+            drop(health); // Release lock before rebuild
             self.rebuild_ring().await;
         }
     }
 
     async fn healthy_targets(&self) -> Vec<String> {
         let health = self.health_status.read().await;
-        self.targets
+        let targets: Vec<String> = self.targets
             .iter()
             .filter_map(|t| {
                 let target_id = format!("{}:{}", t.address, t.port);
@@ -418,7 +578,15 @@ impl LoadBalancer for ConsistentHashBalancer {
                     None
                 }
             })
-            .collect()
+            .collect();
+
+        trace!(
+            total_targets = self.targets.len(),
+            healthy_count = targets.len(),
+            "Retrieved healthy targets"
+        );
+
+        targets
     }
 
     /// Release connection when request completes
@@ -426,6 +594,11 @@ impl LoadBalancer for ConsistentHashBalancer {
         if self.config.bounded_loads {
             if let Some(index_str) = selection.metadata.get("target_index") {
                 if let Ok(index) = index_str.parse::<usize>() {
+                    trace!(
+                        target_index = index,
+                        address = %selection.address,
+                        "Releasing connection for bounded loads"
+                    );
                     self.release_connection(index);
                 }
             }
