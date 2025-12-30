@@ -941,6 +941,7 @@ impl UpstreamPool {
             idle: Duration::from_secs(60),
             interval: Duration::from_secs(10),
             count: 3,
+            user_timeout: Duration::from_secs(60),
         });
 
         trace!(
