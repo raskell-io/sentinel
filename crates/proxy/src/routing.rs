@@ -699,11 +699,11 @@ mod tests {
         let matcher = RouteMatcher::new(routes, None).unwrap();
 
         let req = RequestInfo {
-            method: "GET".to_string(),
-            path: "/api/v1/users".to_string(),
-            host: "example.com".to_string(),
-            headers: HashMap::new(),
-            query_params: HashMap::new(),
+            method: "GET",
+            path: "/api/v1/users",
+            host: "example.com",
+            headers: None,
+            query_params: None,
         };
 
         let result = matcher.match_request(&req).unwrap();
@@ -720,11 +720,11 @@ mod tests {
         let matcher = RouteMatcher::new(routes, None).unwrap();
 
         let req = RequestInfo {
-            method: "GET".to_string(),
-            path: "/".to_string(),
-            host: "api.example.com".to_string(),
-            headers: HashMap::new(),
-            query_params: HashMap::new(),
+            method: "GET",
+            path: "/",
+            host: "api.example.com",
+            headers: None,
+            query_params: None,
         };
 
         let result = matcher.match_request(&req).unwrap();
@@ -745,11 +745,11 @@ mod tests {
         let matcher = RouteMatcher::new(routes, None).unwrap();
 
         let req = RequestInfo {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            host: "example.com".to_string(),
-            headers: HashMap::new(),
-            query_params: HashMap::new(),
+            method: "GET",
+            path: "/test",
+            host: "example.com",
+            headers: None,
+            query_params: None,
         };
 
         let result = matcher.match_request(&req).unwrap();

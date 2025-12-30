@@ -620,7 +620,7 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_consistent_distribution() {
         let targets = create_test_targets(5);
         let config = ConsistentHashConfig {
@@ -663,7 +663,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bounded_loads() {
         let targets = create_test_targets(3);
         let config = ConsistentHashConfig {
@@ -698,7 +698,7 @@ mod tests {
         assert_ne!(index, 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_ring_rebuild_on_health_change() {
         let targets = create_test_targets(3);
         let config = ConsistentHashConfig::default();

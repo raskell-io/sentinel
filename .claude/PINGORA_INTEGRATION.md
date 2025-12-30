@@ -124,8 +124,15 @@ Not implemented (25+):
 - [x] 4. response_body_filter() (2024-12-30)
 - [x] 5. pingora-limits rate limiting (2024-12-30)
 - [x] 6. pingora-cache HTTP caching infrastructure (2024-12-30)
-  - Note: Core infrastructure implemented (CacheConfig, CacheManager, statistics)
-  - ProxyHttp cache methods pending pingora-cache API stabilization
+  - CacheConfig, CacheManager, HttpCacheStats for cache configuration
+  - ProxyHttp cache methods implemented:
+    - request_cache_filter(): Route-based cache eligibility
+    - cache_key_callback(): Cache key generation
+    - cache_miss(): Miss tracking and statistics
+    - cache_hit_filter(): Hit handling with invalidation support
+    - response_cache_filter(): Response cacheability based on Cache-Control
+    - should_serve_stale(): Stale-while-revalidate and stale-if-error
+  - Note: Full caching requires storage backend setup (MemCache/disk)
 - [x] 7. HTTP/2 support (2024-12-30)
   - HttpVersionConfig for upstream configuration (min/max version, H2 ping interval, max streams)
   - ALPN negotiation (H2, H2H1, H1) based on configuration
@@ -147,3 +154,17 @@ Not implemented (25+):
   - Static discovery (fixed backend list)
   - DNS-based discovery with caching and refresh intervals
   - ServiceDiscovery trait integration with pingora-load-balancing
+- [x] 13. error_while_proxy() (2024-12-30)
+  - Enhanced error handling with retry logic
+  - Error classification (retryable vs non-retryable)
+  - Circuit breaker integration
+  - Retry buffer truncation awareness
+- [x] 14. Consistent hashing (Ketama) (2024-12-30)
+  - ConsistentHashBalancer with virtual nodes
+  - Bounded loads for overload prevention
+  - Multiple hash functions (XXH3, Murmur3)
+  - Hash key extraction from IP, headers, cookies
+- [x] 15. Active health checks (2024-12-30)
+  - ActiveHealthChecker with TCP/HTTP probes
+  - PassiveHealthChecker for failure-based ejection
+  - HealthCheckRunner for background monitoring

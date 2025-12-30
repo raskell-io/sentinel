@@ -337,7 +337,7 @@ impl Default for HealthCheckRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentinel_config::{ConnectionPoolConfig, UpstreamTarget, UpstreamTimeouts};
+    use sentinel_config::{ConnectionPoolConfig, HttpVersionConfig, UpstreamTarget, UpstreamTimeouts};
     use sentinel_common::types::LoadBalancingAlgorithm;
     use std::collections::HashMap;
 
@@ -367,6 +367,7 @@ mod tests {
             connection_pool: ConnectionPoolConfig::default(),
             timeouts: UpstreamTimeouts::default(),
             tls: None,
+            http_version: HttpVersionConfig::default(),
         }
     }
 

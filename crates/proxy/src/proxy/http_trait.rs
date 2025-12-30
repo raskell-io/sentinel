@@ -10,6 +10,7 @@ use pingora::prelude::*;
 use pingora::protocols::Digest;
 use pingora::proxy::{ProxyHttp, Session};
 use pingora::upstreams::peer::Peer;
+use pingora_cache::{CacheKey, CacheMeta, ForcedInvalidationKind, HitHandler, NoCacheReason, RespCacheable};
 use pingora_timeout::sleep;
 use std::os::unix::io::RawFd;
 use std::time::Duration;
@@ -937,23 +938,287 @@ impl ProxyHttp for SentinelProxy {
     }
 
     // =========================================================================
-    // Caching (Infrastructure Only - pingora-cache integration pending)
+    // HTTP Caching - Pingora Cache Integration
     // =========================================================================
-    // Note: The cache infrastructure is available via self.cache_manager
-    // but the pingora-cache ProxyHttp methods are not yet implemented
-    // due to API instability. The CacheManager provides:
-    // - Per-route cache configuration
-    // - Cache key generation
-    // - TTL calculation from Cache-Control headers
-    // - Cache statistics tracking
-    //
-    // When pingora-cache stabilizes, implement:
-    // - request_cache_filter()
-    // - cache_key_callback()
-    // - cache_hit_filter()
-    // - cache_miss()
-    // - should_serve_stale()
-    // - response_cache_filter()
+
+    /// Decide if the request should use caching.
+    ///
+    /// This method is called early in the request lifecycle to determine if
+    /// the response should be served from cache or if the response should
+    /// be cached.
+    fn request_cache_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<()> {
+        // Check if route has caching enabled
+        let route_id = match ctx.route_id.as_deref() {
+            Some(id) => id,
+            None => {
+                trace!(
+                    correlation_id = %ctx.trace_id,
+                    "Cache filter: no route ID, skipping cache"
+                );
+                return Ok(());
+            }
+        };
+
+        // Check if caching is enabled for this route
+        if !self.cache_manager.is_enabled(route_id) {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                route_id = %route_id,
+                "Cache disabled for route"
+            );
+            return Ok(());
+        }
+
+        // Check if method is cacheable (typically GET/HEAD)
+        if !self.cache_manager.is_method_cacheable(route_id, &ctx.method) {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                route_id = %route_id,
+                method = %ctx.method,
+                "Method not cacheable"
+            );
+            return Ok(());
+        }
+
+        // Enable caching for this request
+        // Note: Pingora's cache.enable() would be called here when using
+        // pingora-cache storage backend. For now, we track cache eligibility
+        // in our own infrastructure.
+        trace!(
+            correlation_id = %ctx.trace_id,
+            route_id = %route_id,
+            method = %ctx.method,
+            path = %ctx.path,
+            "Request is cache-eligible"
+        );
+
+        // Mark request as cache-eligible in context
+        ctx.cache_eligible = true;
+
+        Ok(())
+    }
+
+    /// Generate the cache key for this request.
+    ///
+    /// The cache key uniquely identifies the cached response. It typically
+    /// includes the method, host, path, and potentially query parameters.
+    fn cache_key_callback(&self, session: &Session, ctx: &mut Self::CTX) -> Result<CacheKey> {
+        let req_header = session.req_header();
+        let method = req_header.method.as_str();
+        let path = req_header.uri.path();
+        let host = ctx.host.as_deref().unwrap_or("unknown");
+        let query = req_header.uri.query();
+
+        // Generate cache key using our cache manager
+        let key_string = crate::cache::CacheManager::generate_cache_key(method, host, path, query);
+
+        trace!(
+            correlation_id = %ctx.trace_id,
+            cache_key = %key_string,
+            "Generated cache key"
+        );
+
+        // Use Pingora's default cache key generator which handles
+        // proper hashing and internal format
+        Ok(CacheKey::default(req_header))
+    }
+
+    /// Called when a cache miss occurs.
+    ///
+    /// This is called when the cache lookup found no matching entry.
+    /// We can use this to log and track cache misses.
+    fn cache_miss(&self, session: &mut Session, ctx: &mut Self::CTX) {
+        // Let Pingora handle the cache miss
+        session.cache.cache_miss();
+
+        // Track statistics
+        if let Some(route_id) = ctx.route_id.as_deref() {
+            self.cache_manager.stats().record_miss();
+
+            trace!(
+                correlation_id = %ctx.trace_id,
+                route_id = %route_id,
+                path = %ctx.path,
+                "Cache miss"
+            );
+        }
+    }
+
+    /// Called after a successful cache lookup.
+    ///
+    /// This filter allows inspecting the cached response before serving it.
+    /// Returns `None` to serve the cached response, or a `ForcedInvalidationKind`
+    /// to invalidate and refetch.
+    async fn cache_hit_filter(
+        &self,
+        _session: &mut Session,
+        meta: &CacheMeta,
+        _hit_handler: &mut HitHandler,
+        is_fresh: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<ForcedInvalidationKind>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        // Track cache hit statistics
+        if is_fresh {
+            self.cache_manager.stats().record_hit();
+
+            debug!(
+                correlation_id = %ctx.trace_id,
+                route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
+                is_fresh = is_fresh,
+                "Cache hit (fresh)"
+            );
+        } else {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
+                is_fresh = is_fresh,
+                "Cache hit (stale)"
+            );
+        }
+
+        // By default, serve the cached response without invalidation
+        Ok(None)
+    }
+
+    /// Decide if the response should be cached.
+    ///
+    /// Called after receiving the response from upstream to determine
+    /// if it should be stored in the cache.
+    fn response_cache_filter(
+        &self,
+        _session: &Session,
+        resp: &ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> Result<RespCacheable> {
+        let route_id = match ctx.route_id.as_deref() {
+            Some(id) => id,
+            None => {
+                return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom("no_route")));
+            }
+        };
+
+        // Check if caching is enabled for this route
+        if !self.cache_manager.is_enabled(route_id) {
+            return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom("disabled")));
+        }
+
+        let status = resp.status.as_u16();
+
+        // Check if status code is cacheable
+        if !self.cache_manager.is_status_cacheable(route_id, status) {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                route_id = %route_id,
+                status = status,
+                "Status code not cacheable"
+            );
+            return Ok(RespCacheable::Uncacheable(NoCacheReason::OriginNotCache));
+        }
+
+        // Check Cache-Control header for no-store, no-cache, private
+        if let Some(cache_control) = resp.headers.get("cache-control") {
+            if let Ok(cc_str) = cache_control.to_str() {
+                if crate::cache::CacheManager::is_no_cache(cc_str) {
+                    trace!(
+                        correlation_id = %ctx.trace_id,
+                        route_id = %route_id,
+                        cache_control = %cc_str,
+                        "Response has no-cache directive"
+                    );
+                    return Ok(RespCacheable::Uncacheable(NoCacheReason::OriginNotCache));
+                }
+            }
+        }
+
+        // Calculate TTL from Cache-Control or use default
+        let cache_control = resp
+            .headers
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok());
+        let ttl = self.cache_manager.calculate_ttl(route_id, cache_control);
+
+        if ttl.is_zero() {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                route_id = %route_id,
+                "TTL is zero, not caching"
+            );
+            return Ok(RespCacheable::Uncacheable(NoCacheReason::OriginNotCache));
+        }
+
+        // Track that this response WOULD be cacheable
+        // Note: Full caching requires storage backend setup (MemCache or disk).
+        // When enabled, this filter would:
+        // 1. Clone the response header
+        // 2. Create CacheMeta with proper timestamps and TTLs
+        // 3. Return RespCacheable::Cacheable(meta)
+        debug!(
+            correlation_id = %ctx.trace_id,
+            route_id = %route_id,
+            status = status,
+            ttl_secs = ttl.as_secs(),
+            "Response is cache-eligible (storage backend required for full caching)"
+        );
+
+        // For now, return that we would cache if storage was configured
+        // To enable full caching:
+        // 1. Set up pingora-cache storage backend in SentinelProxy
+        // 2. Call session.cache.enable() in request_cache_filter
+        // 3. Create and return CacheMeta here
+        Ok(RespCacheable::Uncacheable(NoCacheReason::Custom("storage_not_configured")))
+    }
+
+    /// Decide whether to serve stale content on error or during revalidation.
+    ///
+    /// This implements stale-while-revalidate and stale-if-error semantics.
+    fn should_serve_stale(
+        &self,
+        _session: &mut Session,
+        ctx: &mut Self::CTX,
+        error: Option<&Error>,
+    ) -> bool {
+        let route_id = match ctx.route_id.as_deref() {
+            Some(id) => id,
+            None => return false,
+        };
+
+        // Get route cache config for stale settings
+        let config = match self.cache_manager.get_route_config(route_id) {
+            Some(c) => c,
+            None => return false,
+        };
+
+        // If there's an upstream error, use stale-if-error
+        if let Some(e) = error {
+            // Only serve stale for upstream errors
+            if e.esource() == &pingora::ErrorSource::Upstream {
+                debug!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = %route_id,
+                    error = %e,
+                    stale_if_error_secs = config.stale_if_error_secs,
+                    "Considering stale-if-error"
+                );
+                return config.stale_if_error_secs > 0;
+            }
+        }
+
+        // During stale-while-revalidate (error is None)
+        if error.is_none() && config.stale_while_revalidate_secs > 0 {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                route_id = %route_id,
+                stale_while_revalidate_secs = config.stale_while_revalidate_secs,
+                "Allowing stale-while-revalidate"
+            );
+            return true;
+        }
+
+        false
+    }
 
     /// Handle Range header for byte-range requests (streaming support).
     ///
@@ -1093,6 +1358,98 @@ impl ProxyHttp for SentinelProxy {
             error_code,
             can_reuse_downstream: error_code < 500,
         }
+    }
+
+    /// Handle errors that occur during proxying after upstream connection is established.
+    ///
+    /// This method enables retry logic and circuit breaker integration.
+    /// It's called when an error occurs during the request/response exchange
+    /// with the upstream server.
+    fn error_while_proxy(
+        &self,
+        peer: &HttpPeer,
+        session: &mut Session,
+        e: Box<Error>,
+        ctx: &mut Self::CTX,
+        client_reused: bool,
+    ) -> Box<Error> {
+        let error_type = e.etype().clone();
+        let upstream_id = ctx.upstream.as_deref().unwrap_or("unknown");
+
+        // Classify error for retry decisions
+        let is_retryable = matches!(
+            error_type,
+            ErrorType::ConnectTimedout
+            | ErrorType::ReadTimedout
+            | ErrorType::WriteTimedout
+            | ErrorType::ConnectionClosed
+            | ErrorType::ConnectRefused
+        );
+
+        // Log the error with context
+        warn!(
+            correlation_id = %ctx.trace_id,
+            route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
+            upstream = %upstream_id,
+            peer_address = %peer.address(),
+            error_type = ?error_type,
+            error = %e,
+            client_reused = client_reused,
+            is_retryable = is_retryable,
+            "Error during proxy operation"
+        );
+
+        // Record failure with circuit breaker via upstream pool
+        // This is done asynchronously since we can't await in a sync fn
+        let peer_address = peer.address().to_string();
+        let upstream_pools = self.upstream_pools.clone();
+        let upstream_id_owned = upstream_id.to_string();
+        tokio::spawn(async move {
+            if let Some(pool) = upstream_pools.get(&upstream_id_owned).await {
+                pool.report_result(&peer_address, false).await;
+            }
+        });
+
+        // Metrics tracking
+        self.metrics.record_blocked_request(&format!("proxy_error_{:?}", error_type));
+
+        // Create enhanced error with retry information
+        let mut enhanced_error = e.more_context(format!(
+            "Upstream: {}, Peer: {}, Attempts: {}",
+            upstream_id,
+            peer.address(),
+            ctx.upstream_attempts
+        ));
+
+        // Determine if retry should be attempted:
+        // - Only retry if error is retryable type
+        // - Only retry reused connections if buffer isn't truncated
+        // - Track retry metrics
+        if is_retryable {
+            let can_retry = if client_reused {
+                // For reused connections, check if retry buffer is intact
+                !session.as_ref().retry_buffer_truncated()
+            } else {
+                // Fresh connections can always retry
+                true
+            };
+
+            enhanced_error.retry.decide_reuse(can_retry);
+
+            if can_retry {
+                debug!(
+                    correlation_id = %ctx.trace_id,
+                    upstream = %upstream_id,
+                    error_type = ?error_type,
+                    "Error is retryable, will attempt retry"
+                );
+            }
+        } else {
+            // Non-retryable error - don't retry
+            enhanced_error.retry.decide_reuse(false);
+        }
+
+        enhanced_error
     }
 
     async fn logging(&self, session: &mut Session, _error: Option<&Error>, ctx: &mut Self::CTX) {

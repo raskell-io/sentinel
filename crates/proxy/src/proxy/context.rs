@@ -58,6 +58,10 @@ pub struct RequestContext {
     // === Connection tracking ===
     /// Whether the upstream connection was reused
     pub(crate) connection_reused: bool,
+
+    // === Caching ===
+    /// Whether this request is eligible for caching
+    pub(crate) cache_eligible: bool,
 }
 
 impl RequestContext {
@@ -80,6 +84,7 @@ impl RequestContext {
             request_body_bytes: 0,
             response_bytes: 0,
             connection_reused: false,
+            cache_eligible: false,
         }
     }
 
