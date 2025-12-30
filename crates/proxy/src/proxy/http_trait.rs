@@ -643,7 +643,7 @@ impl ProxyHttp for SentinelProxy {
     }
 
     /// Process incoming request body chunks.
-    /// Used for body size enforcement and WAF inspection.
+    /// Used for body size enforcement and WAF/agent inspection.
     async fn request_body_filter(
         &self,
         _session: &mut Session,
@@ -679,14 +679,143 @@ impl ProxyHttp for SentinelProxy {
                 ));
             }
 
-            // TODO: Send body chunk to WAF agent for inspection if WAF is enabled
-            // This is where we'd call the agent with RequestBodyChunkEvent
+            // Body inspection for agents (WAF, etc.)
+            if ctx.body_inspection_enabled && !ctx.body_inspection_agents.is_empty() {
+                // Check if we're within the inspection limit (default 1MB)
+                let max_inspection_bytes = config.waf.as_ref()
+                    .map(|w| w.body_inspection.max_inspection_bytes as u64)
+                    .unwrap_or(1024 * 1024);
+
+                if ctx.body_bytes_inspected < max_inspection_bytes {
+                    let bytes_to_inspect = std::cmp::min(
+                        chunk.len() as u64,
+                        max_inspection_bytes - ctx.body_bytes_inspected,
+                    ) as usize;
+
+                    // Add to buffer
+                    ctx.body_buffer.extend_from_slice(&chunk[..bytes_to_inspect]);
+                    ctx.body_bytes_inspected += bytes_to_inspect as u64;
+
+                    trace!(
+                        correlation_id = %ctx.trace_id,
+                        bytes_inspected = ctx.body_bytes_inspected,
+                        max_inspection_bytes = max_inspection_bytes,
+                        buffer_size = ctx.body_buffer.len(),
+                        "Buffering body for agent inspection"
+                    );
+                }
+            }
+        }
+
+        // Send to agents when we have the complete body or hit the limit
+        if ctx.body_inspection_enabled && !ctx.body_inspection_agents.is_empty() {
+            let config = self.config_manager.current();
+            let max_inspection_bytes = config.waf.as_ref()
+                .map(|w| w.body_inspection.max_inspection_bytes as u64)
+                .unwrap_or(1024 * 1024);
+
+            let should_send = end_of_stream || ctx.body_bytes_inspected >= max_inspection_bytes;
+
+            if should_send && !ctx.body_buffer.is_empty() {
+                debug!(
+                    correlation_id = %ctx.trace_id,
+                    buffer_size = ctx.body_buffer.len(),
+                    end_of_stream = end_of_stream,
+                    agent_count = ctx.body_inspection_agents.len(),
+                    "Sending body to agents for inspection"
+                );
+
+                // Create agent call context
+                let agent_ctx = crate::agents::AgentCallContext {
+                    correlation_id: sentinel_common::CorrelationId::from_string(&ctx.trace_id),
+                    metadata: sentinel_agent_protocol::RequestMetadata {
+                        correlation_id: ctx.trace_id.clone(),
+                        request_id: ctx.trace_id.clone(),
+                        client_ip: ctx.client_ip.clone(),
+                        client_port: 0,
+                        server_name: ctx.host.clone(),
+                        protocol: "HTTP/1.1".to_string(),
+                        tls_version: None,
+                        tls_cipher: None,
+                        route_id: ctx.route_id.clone(),
+                        upstream_id: ctx.upstream.clone(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    },
+                    route_id: ctx.route_id.clone(),
+                    upstream_id: ctx.upstream.clone(),
+                    request_body: Some(ctx.body_buffer.clone()),
+                    response_body: None,
+                };
+
+                // Process through agents
+                let agent_ids = ctx.body_inspection_agents.clone();
+                match self.agent_manager
+                    .process_request_body(&agent_ctx, &ctx.body_buffer, end_of_stream, &agent_ids)
+                    .await
+                {
+                    Ok(decision) => {
+                        if !decision.is_allow() {
+                            warn!(
+                                correlation_id = %ctx.trace_id,
+                                action = ?decision.action,
+                                "Agent blocked request body"
+                            );
+                            self.metrics.record_blocked_request("agent_body_inspection");
+
+                            let (status, message) = match &decision.action {
+                                crate::agents::AgentAction::Block { status, body, .. } => {
+                                    (*status, body.clone().unwrap_or_else(|| "Blocked".to_string()))
+                                }
+                                _ => (403, "Forbidden".to_string()),
+                            };
+
+                            return Err(Error::explain(
+                                ErrorType::HTTPStatus(status),
+                                message,
+                            ));
+                        }
+
+                        trace!(
+                            correlation_id = %ctx.trace_id,
+                            "Agent allowed request body"
+                        );
+                    }
+                    Err(e) => {
+                        // Check failure mode
+                        let fail_closed = ctx.route_config.as_ref()
+                            .map(|r| r.policies.failure_mode == sentinel_config::FailureMode::Closed)
+                            .unwrap_or(false);
+
+                        if fail_closed {
+                            error!(
+                                correlation_id = %ctx.trace_id,
+                                error = %e,
+                                "Agent body inspection failed, blocking (fail-closed)"
+                            );
+                            return Err(Error::explain(
+                                ErrorType::HTTPStatus(503),
+                                "Service unavailable",
+                            ));
+                        } else {
+                            warn!(
+                                correlation_id = %ctx.trace_id,
+                                error = %e,
+                                "Agent body inspection failed, allowing (fail-open)"
+                            );
+                        }
+                    }
+                }
+
+                // Clear buffer after processing
+                ctx.body_buffer.clear();
+            }
         }
 
         if end_of_stream {
             trace!(
                 correlation_id = %ctx.trace_id,
                 total_body_bytes = ctx.request_body_bytes,
+                bytes_inspected = ctx.body_bytes_inspected,
                 "Request body complete"
             );
         }

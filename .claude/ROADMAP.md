@@ -2,7 +2,7 @@
 
 **Last Updated:** 2024-12-30
 **Current Version:** 0.1.8
-**Production Readiness:** 50-60%
+**Production Readiness:** 60-70%
 
 ---
 
@@ -139,20 +139,25 @@ This roadmap outlines the path from current state to production-ready, prioritiz
 - `examples/waf-config.kdl` - Example configuration
 
 ### 2.2 Request Body Inspection
-**Status:** Infrastructure exists, not enforced
+**Status:** DONE - Core infrastructure implemented
 **Impact:** MEDIUM - Required for WAF effectiveness
 **Effort:** 1 week
 
 **Tasks:**
-- [ ] Implement body streaming to agents in `request_body_filter()`
-- [ ] Enforce `max_body_bytes_inspected` limit
-- [ ] Add content-type allowlist for inspection
+- [x] Implement body streaming to agents in `request_body_filter()`
+- [x] Enforce `max_body_bytes_inspected` limit (1MB default)
+- [x] Add content-type allowlist for inspection
+- [x] Buffer body chunks before sending to agents
+- [x] Handle agent block decisions with proper error responses
+- [x] Support fail-open/fail-closed modes per route
 - [ ] Implement decompression with ratio limits
 - [ ] Add body buffering metrics
 
 **Files:**
-- `crates/proxy/src/proxy/http_trait.rs` - Body filter
-- `crates/config/src/routes.rs` - Body inspection config
+- `crates/proxy/src/proxy/http_trait.rs` - Body filter implementation
+- `crates/proxy/src/proxy/handlers.rs` - Body inspection setup
+- `crates/proxy/src/proxy/context.rs` - Body inspection state
+- `crates/config/src/waf.rs` - Body inspection config
 
 ---
 

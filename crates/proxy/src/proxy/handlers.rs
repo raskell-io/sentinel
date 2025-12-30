@@ -336,6 +336,48 @@ impl SentinelProxy {
             "Processing request through agents"
         );
 
+        // Set up body inspection if enabled
+        let body_inspection_enabled = config.waf.as_ref()
+            .map(|w| w.body_inspection.inspect_request_body)
+            .unwrap_or(false);
+
+        if body_inspection_enabled {
+            // Check content-type allowlist
+            let content_type = session.req_header()
+                .headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            let allowed_types = config.waf.as_ref()
+                .map(|w| &w.body_inspection.content_types)
+                .cloned()
+                .unwrap_or_default();
+
+            let is_allowed_type = allowed_types.iter().any(|allowed| {
+                content_type.starts_with(allowed)
+            });
+
+            if is_allowed_type || allowed_types.is_empty() {
+                ctx.body_inspection_enabled = true;
+                ctx.body_inspection_agents = agent_ids.clone();
+
+                debug!(
+                    correlation_id = %ctx.trace_id,
+                    content_type = %content_type,
+                    agent_count = agent_ids.len(),
+                    "Body inspection enabled for request"
+                );
+            } else {
+                tracing::trace!(
+                    correlation_id = %ctx.trace_id,
+                    content_type = %content_type,
+                    allowed_types = ?allowed_types,
+                    "Body inspection skipped: content-type not in allowlist"
+                );
+            }
+        }
+
         let req_header = session.req_header_mut();
 
         // Build headers map for agent processing

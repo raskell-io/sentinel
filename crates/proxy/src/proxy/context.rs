@@ -62,6 +62,16 @@ pub struct RequestContext {
     // === Caching ===
     /// Whether this request is eligible for caching
     pub(crate) cache_eligible: bool,
+
+    // === Body Inspection ===
+    /// Whether body inspection is enabled for this request
+    pub(crate) body_inspection_enabled: bool,
+    /// Bytes already sent to agent for inspection
+    pub(crate) body_bytes_inspected: u64,
+    /// Accumulated body buffer for agent inspection
+    pub(crate) body_buffer: Vec<u8>,
+    /// Agent IDs to use for body inspection
+    pub(crate) body_inspection_agents: Vec<String>,
 }
 
 impl RequestContext {
@@ -85,6 +95,10 @@ impl RequestContext {
             response_bytes: 0,
             connection_reused: false,
             cache_eligible: false,
+            body_inspection_enabled: false,
+            body_bytes_inspected: 0,
+            body_buffer: Vec::new(),
+            body_inspection_agents: Vec::new(),
         }
     }
 
