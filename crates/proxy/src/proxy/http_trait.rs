@@ -4,10 +4,14 @@
 //! the core request/response lifecycle handling.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use pingora::http::ResponseHeader;
 use pingora::prelude::*;
+use pingora::protocols::Digest;
 use pingora::proxy::{ProxyHttp, Session};
 use pingora::upstreams::peer::Peer;
+use pingora_timeout::sleep;
+use std::os::unix::io::RawFd;
 use std::time::Duration;
 use tracing::{debug, error, info, trace, warn};
 
@@ -393,14 +397,14 @@ impl ProxyHttp for SentinelProxy {
                     last_error = Some(e);
 
                     if attempt < max_retries {
-                        // Exponential backoff
+                        // Exponential backoff (using pingora-timeout for efficiency)
                         let backoff = Duration::from_millis(100 * 2_u64.pow(attempt - 1));
                         trace!(
                             correlation_id = %ctx.trace_id,
                             backoff_ms = backoff.as_millis(),
                             "Backing off before retry"
                         );
-                        tokio::time::sleep(backoff).await;
+                        sleep(backoff).await;
                     }
                 }
             }
@@ -571,6 +575,58 @@ impl ProxyHttp for SentinelProxy {
         Ok(false) // Continue processing
     }
 
+    /// Process incoming request body chunks.
+    /// Used for body size enforcement and WAF inspection.
+    async fn request_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<(), Box<Error>> {
+        // Track request body size
+        if let Some(ref chunk) = body {
+            ctx.request_body_bytes += chunk.len() as u64;
+
+            trace!(
+                correlation_id = %ctx.trace_id,
+                chunk_size = chunk.len(),
+                total_body_bytes = ctx.request_body_bytes,
+                end_of_stream = end_of_stream,
+                "Processing request body chunk"
+            );
+
+            // Check body size limit
+            let config = self.config_manager.current();
+            if ctx.request_body_bytes > config.limits.max_body_size_bytes as u64 {
+                warn!(
+                    correlation_id = %ctx.trace_id,
+                    body_bytes = ctx.request_body_bytes,
+                    limit = config.limits.max_body_size_bytes,
+                    "Request body size limit exceeded"
+                );
+                self.metrics.record_blocked_request("body_size_exceeded");
+                return Err(Error::explain(
+                    ErrorType::InternalError,
+                    "Request body too large",
+                ));
+            }
+
+            // TODO: Send body chunk to WAF agent for inspection if WAF is enabled
+            // This is where we'd call the agent with RequestBodyChunkEvent
+        }
+
+        if end_of_stream {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                total_body_bytes = ctx.request_body_bytes,
+                "Request body complete"
+            );
+        }
+
+        Ok(())
+    }
+
     async fn response_filter(
         &self,
         _session: &mut Session,
@@ -678,6 +734,79 @@ impl ProxyHttp for SentinelProxy {
                 duration_ms = duration.as_millis(),
                 attempts = ctx.upstream_attempts,
                 "Request completed"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Process response body chunks from upstream.
+    /// Used for response size tracking and WAF inspection.
+    fn response_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<Duration>, Box<Error>> {
+        // Track response body size
+        if let Some(ref chunk) = body {
+            ctx.response_bytes += chunk.len() as u64;
+
+            trace!(
+                correlation_id = %ctx.trace_id,
+                chunk_size = chunk.len(),
+                total_response_bytes = ctx.response_bytes,
+                end_of_stream = end_of_stream,
+                "Processing response body chunk"
+            );
+
+            // TODO: Send body chunk to WAF agent for response inspection if enabled
+            // This is where we'd call the agent with ResponseBodyChunkEvent
+        }
+
+        if end_of_stream {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                total_response_bytes = ctx.response_bytes,
+                "Response body complete"
+            );
+        }
+
+        // Return None to indicate no delay needed
+        Ok(None)
+    }
+
+    /// Called when a connection to upstream is established or reused.
+    /// Logs connection reuse statistics for observability.
+    async fn connected_to_upstream(
+        &self,
+        _session: &mut Session,
+        reused: bool,
+        peer: &HttpPeer,
+        #[cfg(unix)] _fd: RawFd,
+        #[cfg(windows)] _sock: std::os::windows::io::RawSocket,
+        digest: Option<&Digest>,
+        ctx: &mut Self::CTX,
+    ) -> Result<(), Box<Error>> {
+        // Track connection reuse for metrics
+        ctx.connection_reused = reused;
+
+        // Log connection establishment/reuse
+        if reused {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                upstream = ctx.upstream.as_deref().unwrap_or("unknown"),
+                peer_address = %peer.address(),
+                "Reusing existing upstream connection"
+            );
+        } else {
+            debug!(
+                correlation_id = %ctx.trace_id,
+                upstream = ctx.upstream.as_deref().unwrap_or("unknown"),
+                peer_address = %peer.address(),
+                ssl = digest.as_ref().map(|d| d.ssl_digest.is_some()).unwrap_or(false),
+                "Established new upstream connection"
             );
         }
 

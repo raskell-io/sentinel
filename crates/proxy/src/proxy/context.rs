@@ -49,9 +49,15 @@ pub struct RequestContext {
     /// Host header
     pub(crate) host: Option<String>,
 
-    // === Response tracking ===
+    // === Body tracking ===
+    /// Request body bytes received
+    pub(crate) request_body_bytes: u64,
     /// Response body bytes (set during response)
     pub(crate) response_bytes: u64,
+
+    // === Connection tracking ===
+    /// Whether the upstream connection was reused
+    pub(crate) connection_reused: bool,
 }
 
 impl RequestContext {
@@ -71,7 +77,9 @@ impl RequestContext {
             user_agent: None,
             referer: None,
             host: None,
+            request_body_bytes: 0,
             response_bytes: 0,
+            connection_reused: false,
         }
     }
 

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use pingora_timeout::timeout;
 use sentinel_agent_protocol::{
     EventType, RequestBodyChunkEvent, RequestHeadersEvent, ResponseHeadersEvent,
 };
@@ -281,9 +282,9 @@ impl AgentManager {
                 continue;
             }
 
-            // Call agent with timeout
+            // Call agent with timeout (using pingora-timeout for efficiency)
             let start = Instant::now();
-            let timeout = Duration::from_millis(agent.timeout_ms());
+            let timeout_duration = Duration::from_millis(agent.timeout_ms());
 
             trace!(
                 correlation_id = %ctx.correlation_id,
@@ -292,7 +293,7 @@ impl AgentManager {
                 "Calling agent"
             );
 
-            match tokio::time::timeout(timeout, agent.call_event(event_type, event)).await {
+            match timeout(timeout_duration, agent.call_event(event_type, event)).await {
                 Ok(Ok(response)) => {
                     let duration = start.elapsed();
                     agent.record_success(duration).await;
