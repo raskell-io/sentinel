@@ -37,7 +37,7 @@ use crate::reload::{
 };
 use crate::routing::RouteMatcher;
 use crate::static_files::StaticFileServer;
-use crate::upstream::UpstreamPool;
+use crate::upstream::{ActiveHealthChecker, HealthCheckRunner, UpstreamPool};
 use crate::validation::SchemaValidator;
 
 use sentinel_common::TraceIdFormat;
@@ -73,6 +73,8 @@ pub struct SentinelProxy {
     pub(super) log_manager: SharedLogManager,
     /// Trace ID format for request tracing
     pub(super) trace_id_format: TraceIdFormat,
+    /// Active health check runner
+    pub(super) health_check_runner: Arc<HealthCheckRunner>,
 }
 
 impl SentinelProxy {
@@ -114,15 +116,23 @@ impl SentinelProxy {
         // Create route matcher
         let route_matcher = Arc::new(RwLock::new(RouteMatcher::new(config.routes.clone(), None)?));
 
-        // Create upstream pools (skip for static routes as they don't need upstreams)
+        // Create upstream pools and active health checkers
         let mut pools = HashMap::new();
+        let mut health_check_runner = HealthCheckRunner::new();
+
         for (upstream_id, upstream_config) in &config.upstreams {
             let mut config_with_id = upstream_config.clone();
             config_with_id.id = upstream_id.clone();
-            let pool = Arc::new(UpstreamPool::new(config_with_id).await?);
+            let pool = Arc::new(UpstreamPool::new(config_with_id.clone()).await?);
             pools.insert(upstream_id.clone(), pool);
+
+            // Create active health checker if health check is configured
+            if let Some(checker) = ActiveHealthChecker::new(&config_with_id) {
+                health_check_runner.add_checker(checker);
+            }
         }
         let upstream_pools = Registry::from_map(pools);
+        let health_check_runner = Arc::new(health_check_runner);
 
         // Create passive health checker
         let passive_health = Arc::new(PassiveHealthChecker::new(
@@ -187,6 +197,18 @@ impl SentinelProxy {
             }
         };
 
+        // Start active health check runner in background
+        if health_check_runner.checker_count() > 0 {
+            let runner = health_check_runner.clone();
+            tokio::spawn(async move {
+                runner.run().await;
+            });
+            info!(
+                "Started active health checking for {} upstreams",
+                health_check_runner.checker_count()
+            );
+        }
+
         // Mark as ready
         app_state.set_ready(true);
 
@@ -208,6 +230,7 @@ impl SentinelProxy {
             builtin_state,
             log_manager,
             trace_id_format,
+            health_check_runner,
         })
     }
 

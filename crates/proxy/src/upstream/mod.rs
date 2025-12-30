@@ -84,6 +84,7 @@ impl UpstreamTarget {
 // Load balancing algorithm implementations
 pub mod adaptive;
 pub mod consistent_hash;
+pub mod health;
 pub mod p2c;
 
 // Re-export commonly used types from sub-modules
@@ -91,6 +92,7 @@ pub use adaptive::{AdaptiveBalancer, AdaptiveConfig};
 pub use consistent_hash::{
     ConsistentHashBalancer, ConsistentHashConfig,
 };
+pub use health::{ActiveHealthChecker, HealthCheckRunner};
 pub use p2c::{P2cBalancer, P2cConfig};
 
 /// Request context for load balancer decisions

@@ -3509,7 +3509,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-agent-protocol"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3537,7 +3537,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-common"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3559,7 +3559,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-config"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3606,7 +3606,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-proxy"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3668,7 +3668,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-stack"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",

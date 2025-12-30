@@ -4,11 +4,11 @@ use anyhow::Result;
 use std::collections::HashMap;
 use tracing::trace;
 
-use sentinel_common::types::LoadBalancingAlgorithm;
+use sentinel_common::types::{HealthCheckType, LoadBalancingAlgorithm};
 
 use crate::upstreams::*;
 
-use super::helpers::get_first_arg_string;
+use super::helpers::{get_first_arg_string, get_int_entry, get_string_entry};
 
 /// Parse upstreams configuration block
 pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamConfig>> {
@@ -65,9 +65,32 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                     ));
                 }
 
+                // Parse load balancing algorithm
+                let load_balancing = child
+                    .children()
+                    .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "load-balancing"))
+                    .and_then(|n| get_first_arg_string(n))
+                    .map(|s| parse_load_balancing(&s))
+                    .unwrap_or(LoadBalancingAlgorithm::RoundRobin);
+
+                // Parse health check configuration
+                let health_check = child
+                    .children()
+                    .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "health-check"))
+                    .and_then(|n| parse_health_check(n).ok());
+
+                if health_check.is_some() {
+                    trace!(
+                        upstream_id = %id,
+                        "Parsed health check configuration"
+                    );
+                }
+
                 trace!(
                     upstream_id = %id,
                     target_count = targets.len(),
+                    load_balancing = ?load_balancing,
+                    has_health_check = health_check.is_some(),
                     "Parsed upstream"
                 );
 
@@ -76,8 +99,8 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                     UpstreamConfig {
                         id,
                         targets,
-                        load_balancing: LoadBalancingAlgorithm::RoundRobin,
-                        health_check: None,
+                        load_balancing,
+                        health_check,
                         connection_pool: ConnectionPoolConfig::default(),
                         timeouts: UpstreamTimeouts::default(),
                         tls: None,
@@ -89,4 +112,82 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
 
     trace!(upstream_count = upstreams.len(), "Finished parsing upstreams");
     Ok(upstreams)
+}
+
+/// Parse load balancing algorithm from string
+fn parse_load_balancing(s: &str) -> LoadBalancingAlgorithm {
+    match s.to_lowercase().as_str() {
+        "round_robin" | "roundrobin" => LoadBalancingAlgorithm::RoundRobin,
+        "least_connections" | "leastconnections" => LoadBalancingAlgorithm::LeastConnections,
+        "weighted" => LoadBalancingAlgorithm::Weighted,
+        "ip_hash" | "iphash" => LoadBalancingAlgorithm::IpHash,
+        "random" => LoadBalancingAlgorithm::Random,
+        "consistent_hash" | "consistenthash" => LoadBalancingAlgorithm::ConsistentHash,
+        "power_of_two_choices" | "p2c" => LoadBalancingAlgorithm::PowerOfTwoChoices,
+        "adaptive" => LoadBalancingAlgorithm::Adaptive,
+        _ => LoadBalancingAlgorithm::RoundRobin,
+    }
+}
+
+/// Parse health check configuration
+fn parse_health_check(node: &kdl::KdlNode) -> Result<HealthCheck> {
+    // Parse health check type
+    let check_type = node
+        .children()
+        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "type"))
+        .map(|type_node| {
+            let type_name = get_first_arg_string(type_node).unwrap_or_else(|| "tcp".to_string());
+            match type_name.to_lowercase().as_str() {
+                "http" => {
+                    // Parse HTTP health check options
+                    let path = type_node
+                        .children()
+                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "path"))
+                        .and_then(|n| get_first_arg_string(n))
+                        .unwrap_or_else(|| "/health".to_string());
+
+                    let expected_status = type_node
+                        .children()
+                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "expected-status"))
+                        .and_then(|n| get_first_arg_string(n))
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(200);
+
+                    let host = type_node
+                        .children()
+                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "host"))
+                        .and_then(|n| get_first_arg_string(n));
+
+                    HealthCheckType::Http {
+                        path,
+                        expected_status,
+                        host,
+                    }
+                }
+                "grpc" => {
+                    let service = type_node
+                        .children()
+                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "service"))
+                        .and_then(|n| get_first_arg_string(n))
+                        .unwrap_or_else(|| "grpc.health.v1.Health".to_string());
+                    HealthCheckType::Grpc { service }
+                }
+                _ => HealthCheckType::Tcp,
+            }
+        })
+        .unwrap_or(HealthCheckType::Tcp);
+
+    // Parse other health check settings
+    let interval_secs = get_int_entry(node, "interval-secs").unwrap_or(10) as u64;
+    let timeout_secs = get_int_entry(node, "timeout-secs").unwrap_or(5) as u64;
+    let healthy_threshold = get_int_entry(node, "healthy-threshold").unwrap_or(2) as u32;
+    let unhealthy_threshold = get_int_entry(node, "unhealthy-threshold").unwrap_or(3) as u32;
+
+    Ok(HealthCheck {
+        check_type,
+        interval_secs,
+        timeout_secs,
+        healthy_threshold,
+        unhealthy_threshold,
+    })
 }
