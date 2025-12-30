@@ -398,6 +398,7 @@ impl SentinelProxy {
                     action: RateLimitAction::Reject,
                     status_code: 429,
                     message: None,
+                    backend: sentinel_config::RateLimitBackend::Local,
                 };
                 manager.register_route(&route.id, rl_config);
                 info!(
@@ -421,12 +422,14 @@ impl SentinelProxy {
                             action: rl_filter.on_limit.clone(),
                             status_code: rl_filter.status_code,
                             message: rl_filter.limit_message.clone(),
+                            backend: rl_filter.backend.clone(),
                         };
                         manager.register_route(&route.id, rl_config);
                         info!(
                             route_id = %route.id,
                             filter_id = %filter_id,
                             max_rps = rl_filter.max_rps,
+                            backend = ?rl_filter.backend,
                             "Registered rate limiter from filter for route"
                         );
                     }

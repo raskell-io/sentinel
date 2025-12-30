@@ -102,6 +102,9 @@ tikv-jemallocator = { workspace = true }
 # Random number generation
 rand = "0.8"
 
+# Distributed rate limiting
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+
 # Hashing
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 murmur3 = "0.5"
@@ -112,6 +115,10 @@ notify = "6.1"
 # Networking
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
+
+[features]
+default = []
+distributed-rate-limit = ["redis"]
 
 [dev-dependencies]
 criterion = { workspace = true }

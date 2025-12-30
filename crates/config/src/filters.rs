@@ -222,6 +222,68 @@ pub struct RateLimitFilter {
     /// Custom response message when limited
     #[serde(rename = "limit-message")]
     pub limit_message: Option<String>,
+
+    /// Backend for rate limiting storage
+    #[serde(default)]
+    pub backend: RateLimitBackend,
+}
+
+/// Backend storage for rate limit state
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RateLimitBackend {
+    /// Local in-memory storage (single-instance only)
+    #[default]
+    Local,
+    /// Redis backend for distributed rate limiting
+    Redis(RedisBackendConfig),
+}
+
+/// Redis backend configuration for distributed rate limiting
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RedisBackendConfig {
+    /// Redis connection URL (e.g., "redis://127.0.0.1:6379")
+    pub url: String,
+
+    /// Key prefix for rate limit keys (default: "sentinel:ratelimit:")
+    #[serde(default = "default_redis_prefix", rename = "key-prefix")]
+    pub key_prefix: String,
+
+    /// Connection pool size
+    #[serde(default = "default_redis_pool_size", rename = "pool-size")]
+    pub pool_size: u32,
+
+    /// Connection timeout in milliseconds
+    #[serde(default = "default_redis_timeout_ms", rename = "timeout-ms")]
+    pub timeout_ms: u64,
+
+    /// Fallback to local rate limiting if Redis is unavailable
+    #[serde(default = "default_true", rename = "fallback-local")]
+    pub fallback_local: bool,
+}
+
+impl Default for RedisBackendConfig {
+    fn default() -> Self {
+        Self {
+            url: "redis://127.0.0.1:6379".to_string(),
+            key_prefix: default_redis_prefix(),
+            pool_size: default_redis_pool_size(),
+            timeout_ms: default_redis_timeout_ms(),
+            fallback_local: true,
+        }
+    }
+}
+
+fn default_redis_prefix() -> String {
+    "sentinel:ratelimit:".to_string()
+}
+
+fn default_redis_pool_size() -> u32 {
+    10
+}
+
+fn default_redis_timeout_ms() -> u64 {
+    50
 }
 
 fn default_burst() -> u32 {
@@ -558,6 +620,7 @@ mod tests {
                 on_limit: RateLimitAction::Reject,
                 status_code: 429,
                 limit_message: None,
+                backend: RateLimitBackend::Local,
             })
             .phase(),
             FilterPhase::Request
@@ -592,11 +655,22 @@ mod tests {
                 on_limit: RateLimitAction::Reject,
                 status_code: 429,
                 limit_message: None,
+                backend: RateLimitBackend::Local,
             }),
         );
 
         assert_eq!(config.id, "my-rate-limit");
         assert_eq!(config.filter_type(), "rate-limit");
         assert_eq!(config.phase(), FilterPhase::Request);
+    }
+
+    #[test]
+    fn test_redis_backend_config() {
+        let config = RedisBackendConfig::default();
+        assert_eq!(config.url, "redis://127.0.0.1:6379");
+        assert_eq!(config.key_prefix, "sentinel:ratelimit:");
+        assert_eq!(config.pool_size, 10);
+        assert_eq!(config.timeout_ms, 50);
+        assert!(config.fallback_local);
     }
 }

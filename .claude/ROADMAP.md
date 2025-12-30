@@ -2,7 +2,7 @@
 
 **Last Updated:** 2024-12-30
 **Current Version:** 0.1.8
-**Production Readiness:** 60-70%
+**Production Readiness:** 70-75%
 
 ---
 
@@ -20,18 +20,19 @@ This roadmap outlines the path from current state to production-ready, prioritiz
 - Core routing and upstream selection
 - Load balancing (P2C, Consistent Hash, Round Robin)
 - Active/passive health checking
-- Rate limiting (single-instance)
+- Rate limiting (local + Redis distributed)
 - Hot configuration reload with validation
 - Agent-based extension protocol (SPOE-inspired)
 - Circuit breakers per upstream/agent
 - Static file serving with compression
+- Request body inspection for agents
 
 ### Critical Gaps
 - ~~HTTPS/TLS is stubbed~~ → **DONE**: Basic TLS termination working
 - ~~HTTP caching disabled by default~~ → **DONE**: Enabled for static routes
 - ~~Metrics collected but not exposed~~ → **DONE**: /metrics endpoint available
+- ~~No distributed rate limiting~~ → **DONE**: Redis backend with feature flag
 - No WAF reference implementation
-- No distributed rate limiting
 - No production load/soak testing
 
 ---
@@ -164,21 +165,28 @@ This roadmap outlines the path from current state to production-ready, prioritiz
 ## Priority 3: Scalability
 
 ### 3.1 Distributed Rate Limiting
-**Status:** Single-instance only
-**Impact:** HIGH - Multi-instance deployments broken
-**Effort:** 2-3 weeks
+**Status:** DONE - Redis backend implemented (requires feature flag)
+**Impact:** HIGH - Multi-instance deployments enabled
+**Effort:** 2-3 weeks (remaining: Memcached backend, documentation)
 
 **Tasks:**
-- [ ] Add Redis backend for rate limit state
-- [ ] Implement sliding window algorithm with Redis
+- [x] Add Redis backend for rate limit state
+- [x] Implement sliding window algorithm with Redis (sorted sets)
 - [ ] Add Memcached as alternative backend
-- [ ] Support rate limit synchronization across instances
-- [ ] Add fallback to local rate limiting if backend unavailable
+- [x] Support rate limit synchronization across instances
+- [x] Add fallback to local rate limiting if backend unavailable
 - [ ] Document distributed deployment patterns
 
+**Features:**
+- Sliding window log algorithm using Redis sorted sets
+- Automatic fallback to local rate limiting on Redis failure
+- Configurable via KDL: `backend "redis"`, `redis-url`, `redis-prefix`, etc.
+- Feature flag: `distributed-rate-limit`
+
 **Files:**
-- `crates/proxy/src/rate_limit.rs` - Add distributed backend
-- `crates/config/src/rate_limit.rs` - Backend configuration
+- `crates/proxy/src/rate_limit.rs` - Distributed backend integration
+- `crates/proxy/src/distributed_rate_limit.rs` - Redis rate limiter
+- `crates/config/src/filters.rs` - Backend configuration
 
 ### 3.2 Service Discovery Integration
 **Status:** Planned (DiscoveryConfig exists)

@@ -1,7 +1,18 @@
 //! Rate limiting using pingora-limits
 //!
 //! This module provides efficient per-route, per-client rate limiting using
-//! Pingora's optimized rate limiting primitives.
+//! Pingora's optimized rate limiting primitives. Supports both local (single-instance)
+//! and distributed (Redis-backed) rate limiting.
+//!
+//! # Local Rate Limiting
+//!
+//! Uses `pingora-limits::Rate` for efficient in-memory rate limiting.
+//! Suitable for single-instance deployments.
+//!
+//! # Distributed Rate Limiting
+//!
+//! Uses Redis sorted sets for sliding window rate limiting across multiple instances.
+//! Requires the `distributed-rate-limit` feature.
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -10,7 +21,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, trace, warn};
 
-use sentinel_config::{RateLimitAction, RateLimitKey};
+use sentinel_config::{RateLimitAction, RateLimitBackend, RateLimitKey, RedisBackendConfig};
+
+#[cfg(feature = "distributed-rate-limit")]
+use crate::distributed_rate_limit::{create_redis_rate_limiter, RedisRateLimiter};
 
 /// Rate limiter outcome
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +50,8 @@ pub struct RateLimitConfig {
     pub status_code: u16,
     /// Custom message
     pub message: Option<String>,
+    /// Backend for rate limiting (local or distributed)
+    pub backend: RateLimitBackend,
 }
 
 impl Default for RateLimitConfig {
@@ -47,6 +63,7 @@ impl Default for RateLimitConfig {
             action: RateLimitAction::Reject,
             status_code: 429,
             message: None,
+            backend: RateLimitBackend::Local,
         }
     }
 }
@@ -82,33 +99,71 @@ impl KeyRateLimiter {
     }
 }
 
+/// Backend type for rate limiting
+pub enum RateLimitBackendType {
+    /// Local in-memory backend
+    Local {
+        /// Rate limiters by key (e.g., client IP -> limiter)
+        limiters: DashMap<String, Arc<KeyRateLimiter>>,
+    },
+    /// Distributed Redis backend
+    #[cfg(feature = "distributed-rate-limit")]
+    Distributed {
+        /// Redis rate limiter
+        redis: Arc<RedisRateLimiter>,
+        /// Local fallback
+        local_fallback: DashMap<String, Arc<KeyRateLimiter>>,
+    },
+}
+
 /// Thread-safe rate limiter pool managing multiple rate limiters by key
 pub struct RateLimiterPool {
-    /// Rate limiters by key (e.g., client IP -> limiter)
-    limiters: DashMap<String, Arc<KeyRateLimiter>>,
+    /// Backend for rate limiting
+    backend: RateLimitBackendType,
     /// Configuration
     config: RwLock<RateLimitConfig>,
 }
 
 impl RateLimiterPool {
-    /// Create a new rate limiter pool with the given configuration
+    /// Create a new rate limiter pool with the given configuration (local backend)
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
-            limiters: DashMap::new(),
+            backend: RateLimitBackendType::Local {
+                limiters: DashMap::new(),
+            },
             config: RwLock::new(config),
         }
     }
 
-    /// Check if a request should be rate limited
+    /// Create a new rate limiter pool with a distributed Redis backend
+    #[cfg(feature = "distributed-rate-limit")]
+    pub fn with_redis(config: RateLimitConfig, redis: Arc<RedisRateLimiter>) -> Self {
+        Self {
+            backend: RateLimitBackendType::Distributed {
+                redis,
+                local_fallback: DashMap::new(),
+            },
+            config: RwLock::new(config),
+        }
+    }
+
+    /// Check if a request should be rate limited (synchronous, local only)
     ///
-    /// Returns the outcome and the current request count
+    /// Returns the outcome and the current request count.
+    /// For distributed backends, this falls back to local limiting.
     pub fn check(&self, key: &str) -> (RateLimitOutcome, isize) {
         let config = self.config.read();
         let max_rps = config.max_rps;
         drop(config);
 
+        let limiters = match &self.backend {
+            RateLimitBackendType::Local { limiters } => limiters,
+            #[cfg(feature = "distributed-rate-limit")]
+            RateLimitBackendType::Distributed { local_fallback, .. } => local_fallback,
+        };
+
         // Get or create limiter for this key
-        let limiter = self.limiters
+        let limiter = limiters
             .entry(key.to_string())
             .or_insert_with(|| Arc::new(KeyRateLimiter::new(max_rps)))
             .clone();
@@ -117,6 +172,61 @@ impl RateLimiterPool {
         let count = limiter.rate.observe(&(), 0); // Get current count without incrementing
 
         (outcome, count)
+    }
+
+    /// Check if a request should be rate limited (async, supports distributed backends)
+    ///
+    /// Returns the outcome and the current request count.
+    #[cfg(feature = "distributed-rate-limit")]
+    pub async fn check_async(&self, key: &str) -> (RateLimitOutcome, i64) {
+        match &self.backend {
+            RateLimitBackendType::Local { .. } => {
+                let (outcome, count) = self.check(key);
+                (outcome, count as i64)
+            }
+            RateLimitBackendType::Distributed { redis, local_fallback } => {
+                // Try Redis first
+                match redis.check(key).await {
+                    Ok((outcome, count)) => (outcome, count),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            key = key,
+                            "Redis rate limit check failed, falling back to local"
+                        );
+                        redis.mark_unhealthy();
+
+                        // Fallback to local
+                        if redis.fallback_enabled() {
+                            let config = self.config.read();
+                            let max_rps = config.max_rps;
+                            drop(config);
+
+                            let limiter = local_fallback
+                                .entry(key.to_string())
+                                .or_insert_with(|| Arc::new(KeyRateLimiter::new(max_rps)))
+                                .clone();
+
+                            let outcome = limiter.check();
+                            let count = limiter.rate.observe(&(), 0);
+                            (outcome, count as i64)
+                        } else {
+                            // Fail open if no fallback
+                            (RateLimitOutcome::Allowed, 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if this pool uses a distributed backend
+    pub fn is_distributed(&self) -> bool {
+        match &self.backend {
+            RateLimitBackendType::Local { .. } => false,
+            #[cfg(feature = "distributed-rate-limit")]
+            RateLimitBackendType::Distributed { .. } => true,
+        }
     }
 
     /// Get the rate limit key from request context
@@ -160,7 +270,25 @@ impl RateLimiterPool {
     pub fn update_config(&self, config: RateLimitConfig) {
         *self.config.write() = config;
         // Clear existing limiters so they get recreated with new config
-        self.limiters.clear();
+        self.clear_local_limiters();
+    }
+
+    /// Clear local limiters (for config updates)
+    fn clear_local_limiters(&self) {
+        match &self.backend {
+            RateLimitBackendType::Local { limiters } => limiters.clear(),
+            #[cfg(feature = "distributed-rate-limit")]
+            RateLimitBackendType::Distributed { local_fallback, .. } => local_fallback.clear(),
+        }
+    }
+
+    /// Get the number of local limiter entries
+    fn local_limiter_count(&self) -> usize {
+        match &self.backend {
+            RateLimitBackendType::Local { limiters } => limiters.len(),
+            #[cfg(feature = "distributed-rate-limit")]
+            RateLimitBackendType::Distributed { local_fallback, .. } => local_fallback.len(),
+        }
     }
 
     /// Clean up expired entries (call periodically)
@@ -169,21 +297,28 @@ impl RateLimiterPool {
         // In practice, Rate handles its own window cleanup, so this is mainly
         // for memory management when many unique keys are seen
         let max_entries = 100_000; // Prevent unbounded growth
-        if self.limiters.len() > max_entries {
+
+        let limiters = match &self.backend {
+            RateLimitBackendType::Local { limiters } => limiters,
+            #[cfg(feature = "distributed-rate-limit")]
+            RateLimitBackendType::Distributed { local_fallback, .. } => local_fallback,
+        };
+
+        if limiters.len() > max_entries {
             // Simple eviction: clear half
-            let to_remove: Vec<_> = self.limiters
+            let to_remove: Vec<_> = limiters
                 .iter()
                 .take(max_entries / 2)
                 .map(|e| e.key().clone())
                 .collect();
 
             for key in to_remove {
-                self.limiters.remove(&key);
+                limiters.remove(&key);
             }
 
             debug!(
                 entries_before = max_entries,
-                entries_after = self.limiters.len(),
+                entries_after = limiters.len(),
                 "Rate limiter pool cleanup completed"
             );
         }
@@ -221,6 +356,7 @@ impl RateLimitManager {
             action: RateLimitAction::Reject,
             status_code: 429,
             message: None,
+            backend: RateLimitBackend::Local,
         };
         Self {
             route_limiters: DashMap::new(),

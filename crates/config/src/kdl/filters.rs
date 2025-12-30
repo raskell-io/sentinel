@@ -92,6 +92,9 @@ fn parse_rate_limit_filter(node: &kdl::KdlNode) -> Result<Filter> {
         })
         .unwrap_or(RateLimitAction::Reject);
 
+    // Parse backend configuration
+    let backend = parse_rate_limit_backend(node)?;
+
     Ok(Filter::RateLimit(RateLimitFilter {
         max_rps,
         burst,
@@ -99,7 +102,43 @@ fn parse_rate_limit_filter(node: &kdl::KdlNode) -> Result<Filter> {
         on_limit,
         status_code,
         limit_message: get_string_entry(node, "message"),
+        backend,
     }))
+}
+
+/// Parse rate limit backend configuration
+fn parse_rate_limit_backend(node: &kdl::KdlNode) -> Result<RateLimitBackend> {
+    let backend_type = get_string_entry(node, "backend").unwrap_or_else(|| "local".to_string());
+
+    match backend_type.as_str() {
+        "local" => Ok(RateLimitBackend::Local),
+        "redis" => {
+            // Look for redis configuration node
+            let redis_url = get_string_entry(node, "redis-url")
+                .unwrap_or_else(|| "redis://127.0.0.1:6379".to_string());
+            let key_prefix = get_string_entry(node, "redis-prefix")
+                .unwrap_or_else(|| "sentinel:ratelimit:".to_string());
+            let pool_size = get_int_entry(node, "redis-pool-size")
+                .map(|v| v as u32)
+                .unwrap_or(10);
+            let timeout_ms = get_int_entry(node, "redis-timeout-ms")
+                .map(|v| v as u64)
+                .unwrap_or(50);
+            let fallback_local = get_bool_entry(node, "redis-fallback").unwrap_or(true);
+
+            Ok(RateLimitBackend::Redis(RedisBackendConfig {
+                url: redis_url,
+                key_prefix,
+                pool_size,
+                timeout_ms,
+                fallback_local,
+            }))
+        }
+        other => Err(anyhow::anyhow!(
+            "Unknown rate limit backend: '{}'. Valid backends: local, redis",
+            other
+        )),
+    }
 }
 
 fn parse_agent_filter(node: &kdl::KdlNode) -> Result<Filter> {

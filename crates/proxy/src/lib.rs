@@ -36,6 +36,7 @@ pub mod app;
 pub mod builtin_handlers;
 pub mod cache;
 pub mod discovery;
+pub mod distributed_rate_limit;
 pub mod errors;
 pub mod health;
 pub mod http_helpers;
@@ -107,7 +108,11 @@ pub use logging::{
 };
 
 // Rate limiting
-pub use rate_limit::{RateLimitConfig, RateLimitManager, RateLimitResult};
+pub use rate_limit::{RateLimitConfig, RateLimitManager, RateLimitOutcome, RateLimitResult, RateLimiterPool};
+
+// Distributed rate limiting
+#[cfg(feature = "distributed-rate-limit")]
+pub use distributed_rate_limit::{create_redis_rate_limiter, DistributedRateLimitStats, RedisRateLimiter};
 
 // HTTP caching
 pub use cache::{
