@@ -23,32 +23,42 @@ use crate::trace_id::{generate_for_format, TraceIdFormat};
 // Request Helpers
 // ============================================================================
 
+/// Owned request information for external use (non-hot-path)
+///
+/// This struct owns its data and is used when lifetime management of
+/// `RequestInfo<'a>` is impractical (e.g., storing beyond request scope).
+#[derive(Debug, Clone)]
+pub struct OwnedRequestInfo {
+    pub method: String,
+    pub path: String,
+    pub host: String,
+    pub headers: HashMap<String, String>,
+    pub query_params: HashMap<String, String>,
+}
+
 /// Extract request info from a Pingora session
 ///
-/// Builds a `RequestInfo` struct from the session's request headers,
-/// suitable for route matching and processing.
+/// Builds an `OwnedRequestInfo` struct from the session's request headers.
+/// This function allocates all fields.
+///
+/// For the hot path, use `RequestInfo::new()` with
+/// `with_headers()`/`with_query_params()` only when needed.
 ///
 /// # Example
 ///
 /// ```ignore
 /// let request_info = extract_request_info(session);
-/// let route = router.match_request(&request_info);
 /// ```
-pub fn extract_request_info(session: &Session) -> RequestInfo {
+pub fn extract_request_info(session: &Session) -> OwnedRequestInfo {
     let req_header = session.req_header();
 
-    let mut headers = HashMap::new();
-    for (name, value) in req_header.headers.iter() {
-        if let Ok(value_str) = value.to_str() {
-            headers.insert(name.as_str().to_lowercase(), value_str.to_string());
-        }
-    }
-
+    let headers = RequestInfo::build_headers(req_header.headers.iter());
     let host = headers.get("host").cloned().unwrap_or_default();
     let path = req_header.uri.path().to_string();
+    let method = req_header.method.as_str().to_string();
 
-    RequestInfo {
-        method: req_header.method.as_str().to_string(),
+    OwnedRequestInfo {
+        method,
         path: path.clone(),
         host,
         headers,

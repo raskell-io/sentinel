@@ -293,20 +293,25 @@ impl SentinelProxy {
     ) -> Result<(), Box<Error>> {
         use crate::agents::AgentAction;
 
-        let config = self.config_manager.current();
+        // Use cached route config from context (already matched in upstream_peer)
+        let Some(ref route_config) = ctx.route_config else {
+            return Ok(());
+        };
+
+        // Fast path: if route has no filters, skip agent processing entirely
+        if route_config.filters.is_empty() {
+            return Ok(());
+        }
 
         let Some(ref route_id) = ctx.route_id else {
             return Ok(());
         };
 
-        // Get route configuration to find which agents to apply
-        let routes = config.routes.clone();
-        let Some(route) = routes.iter().find(|r| r.id == *route_id) else {
-            return Ok(());
-        };
+        // Only fetch config if we actually have filters to process
+        let config = self.config_manager.current();
 
         // Extract agent IDs from filter chain by looking up filter definitions
-        let agent_ids: Vec<String> = route
+        let agent_ids: Vec<String> = route_config
             .filters
             .iter()
             .filter_map(|filter_id| {
@@ -428,8 +433,8 @@ impl SentinelProxy {
                     error = %e,
                     "Agent processing failed"
                 );
-                // Check failure mode from route config
-                if route.policies.failure_mode == sentinel_config::FailureMode::Closed {
+                // Check failure mode from cached route config
+                if route_config.policies.failure_mode == sentinel_config::FailureMode::Closed {
                     return Err(Error::explain(
                         ErrorType::InternalError,
                         "Agent processing failed",

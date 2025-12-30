@@ -8,9 +8,8 @@ use pingora::http::ResponseHeader;
 use pingora::prelude::*;
 use pingora::proxy::{ProxyHttp, Session};
 use pingora::upstreams::peer::Peer;
-use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{debug, error, info, trace, warn, Span};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::logging::AccessLogEntry;
 use crate::routing::RequestInfo;
@@ -90,48 +89,53 @@ impl ProxyHttp for SentinelProxy {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        // Build request info for routing
-        let mut headers = HashMap::new();
-        for (name, value) in req_header.headers.iter() {
-            if let Ok(value_str) = value.to_str() {
-                headers.insert(name.as_str().to_lowercase(), value_str.to_string());
-            }
-        }
+        // Match route using sync RwLock (scoped to ensure lock is released before async ops)
+        let (route_match, route_duration) = {
+            let route_matcher = self.route_matcher.read();
+            let host = ctx.host.as_deref().unwrap_or("");
 
-        let request_info = RequestInfo {
-            method: ctx.method.clone(),
-            path: ctx.path.clone(),
-            host: ctx.host.clone().unwrap_or_default(),
-            headers,
-            query_params: RequestInfo::parse_query_params(&ctx.path),
-        };
+            // Build request info (zero-copy for common case)
+            let mut request_info = RequestInfo::new(&ctx.method, &ctx.path, host);
 
-        trace!(
-            correlation_id = %ctx.trace_id,
-            method = %request_info.method,
-            path = %request_info.path,
-            host = %request_info.host,
-            header_count = request_info.headers.len(),
-            "Built request info for route matching"
-        );
-
-        // Match route (using sync parking_lot::RwLock for better performance)
-        let route_start = std::time::Instant::now();
-        let route_match = self
-            .route_matcher
-            .read()
-            .match_request(&request_info)
-            .ok_or_else(|| {
-                warn!(
-                    correlation_id = %ctx.trace_id,
-                    method = %request_info.method,
-                    path = %request_info.path,
-                    host = %request_info.host,
-                    "No matching route found for request"
+            // Only build headers HashMap if any route needs header matching
+            if route_matcher.needs_headers() {
+                request_info = request_info.with_headers(
+                    RequestInfo::build_headers(req_header.headers.iter())
                 );
-                Error::explain(ErrorType::InternalError, "No matching route found")
-            })?;
-        let route_duration = route_start.elapsed();
+            }
+
+            // Only parse query params if any route needs query param matching
+            if route_matcher.needs_query_params() {
+                request_info = request_info.with_query_params(
+                    RequestInfo::parse_query_params(&ctx.path)
+                );
+            }
+
+            trace!(
+                correlation_id = %ctx.trace_id,
+                method = %request_info.method,
+                path = %request_info.path,
+                host = %request_info.host,
+                "Built request info for route matching"
+            );
+
+            let route_start = std::time::Instant::now();
+            let route_match = route_matcher
+                .match_request(&request_info)
+                .ok_or_else(|| {
+                    warn!(
+                        correlation_id = %ctx.trace_id,
+                        method = %request_info.method,
+                        path = %request_info.path,
+                        host = %request_info.host,
+                        "No matching route found for request"
+                    );
+                    Error::explain(ErrorType::InternalError, "No matching route found")
+                })?;
+            let route_duration = route_start.elapsed();
+            // Lock is dropped here when block ends
+            (route_match, route_duration)
+        };
 
         ctx.route_id = Some(route_match.route_id.to_string());
         ctx.route_config = Some(route_match.config.clone());
@@ -626,21 +630,20 @@ impl ProxyHttp for SentinelProxy {
             self.log_manager.log_access(&access_entry);
         }
 
-        // Also log to stdout for tracing
-        let log_entry = serde_json::json!({
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-            "trace_id": ctx.trace_id,
-            "instance_id": self.app_state.instance_id,
-            "method": ctx.method,
-            "path": ctx.path,
-            "route_id": ctx.route_id,
-            "upstream": ctx.upstream,
-            "status": status,
-            "duration_ms": duration.as_millis(),
-            "upstream_attempts": ctx.upstream_attempts,
-            "error": _error.map(|e| e.to_string()),
-        });
-
-        debug!("{}", log_entry);
+        // Log to tracing at debug level (avoid allocations if debug disabled)
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            debug!(
+                trace_id = %ctx.trace_id,
+                method = %ctx.method,
+                path = %ctx.path,
+                route_id = ?ctx.route_id,
+                upstream = ?ctx.upstream,
+                status = status,
+                duration_ms = duration.as_millis() as u64,
+                upstream_attempts = ctx.upstream_attempts,
+                error = ?_error.map(|e| e.to_string()),
+                "Request completed"
+            );
+        }
     }
 }

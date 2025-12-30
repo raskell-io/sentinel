@@ -91,7 +91,7 @@ pub use builtin_handlers::{
 // HTTP helpers
 pub use http_helpers::{
     extract_request_info, get_or_create_trace_id, write_error, write_json_error, write_response,
-    write_text_error,
+    write_text_error, OwnedRequestInfo,
 };
 
 // Trace ID generation (TinyFlake)

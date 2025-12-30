@@ -23,6 +23,10 @@ pub struct RouteMatcher {
     default_route: Option<RouteId>,
     /// Cache for frequently matched routes (lock-free concurrent access)
     cache: Arc<RouteCache>,
+    /// Whether any route requires header matching (optimization flag)
+    needs_headers: bool,
+    /// Whether any route requires query param matching (optimization flag)
+    needs_query_params: bool,
 }
 
 /// Compiled route with pre-processed match conditions
@@ -118,8 +122,22 @@ impl RouteMatcher {
             );
         }
 
+        // Determine if any routes need headers or query params (optimization)
+        let needs_headers = compiled_routes.iter().any(|r| {
+            r.matchers
+                .iter()
+                .any(|m| matches!(m, CompiledMatcher::Header { .. }))
+        });
+        let needs_query_params = compiled_routes.iter().any(|r| {
+            r.matchers
+                .iter()
+                .any(|m| matches!(m, CompiledMatcher::QueryParam { .. }))
+        });
+
         info!(
             compiled_routes = compiled_routes.len(),
+            needs_headers,
+            needs_query_params,
             "Route matcher initialized"
         );
 
@@ -127,11 +145,25 @@ impl RouteMatcher {
             routes: compiled_routes,
             default_route: default_route.map(RouteId::new),
             cache: Arc::new(RouteCache::new(1000)),
+            needs_headers,
+            needs_query_params,
         })
     }
 
+    /// Check if any route requires header matching
+    #[inline]
+    pub fn needs_headers(&self) -> bool {
+        self.needs_headers
+    }
+
+    /// Check if any route requires query param matching
+    #[inline]
+    pub fn needs_query_params(&self) -> bool {
+        self.needs_query_params
+    }
+
     /// Match a request to a route
-    pub fn match_request(&self, req: &RequestInfo) -> Option<RouteMatch> {
+    pub fn match_request(&self, req: &RequestInfo<'_>) -> Option<RouteMatch> {
         trace!(
             method = %req.method,
             path = %req.path,
@@ -297,7 +329,7 @@ impl CompiledRoute {
     }
 
     /// Check if this route matches the request
-    fn matches(&self, req: &RequestInfo) -> bool {
+    fn matches(&self, req: &RequestInfo<'_>) -> bool {
         // All matchers must pass (AND logic)
         for (index, matcher) in self.matchers.iter().enumerate() {
             let result = matcher.matches(req);
@@ -353,22 +385,22 @@ impl CompiledRoute {
 
 impl CompiledMatcher {
     /// Check if this matcher matches the request
-    fn matches(&self, req: &RequestInfo) -> bool {
+    fn matches(&self, req: &RequestInfo<'_>) -> bool {
         match self {
             Self::Path(path) => req.path == *path,
             Self::PathPrefix(prefix) => req.path.starts_with(prefix),
-            Self::PathRegex(regex) => regex.is_match(&req.path),
-            Self::Host(host_matcher) => host_matcher.matches(&req.host),
+            Self::PathRegex(regex) => regex.is_match(req.path),
+            Self::Host(host_matcher) => host_matcher.matches(req.host),
             Self::Header { name, value } => {
-                if let Some(header_value) = req.headers.get(name) {
+                if let Some(header_value) = req.headers().get(name) {
                     value.as_ref().map_or(true, |v| header_value == v)
                 } else {
                     false
                 }
             }
-            Self::Method(methods) => methods.contains(&req.method),
+            Self::Method(methods) => methods.iter().any(|m| m == req.method),
             Self::QueryParam { name, value } => {
-                if let Some(param_value) = req.query_params.get(name) {
+                if let Some(param_value) = req.query_params().get(name) {
                     value.as_ref().map_or(true, |v| param_value == v)
                 } else {
                     false
@@ -477,23 +509,68 @@ impl RouteCache {
     }
 }
 
-/// Request information for route matching
-#[derive(Debug, Clone)]
-pub struct RequestInfo {
-    pub method: String,
-    pub path: String,
-    pub host: String,
-    pub headers: HashMap<String, String>,
-    pub query_params: HashMap<String, String>,
+/// Request information for route matching (zero-copy where possible)
+#[derive(Debug)]
+pub struct RequestInfo<'a> {
+    /// HTTP method (borrowed from request header)
+    pub method: &'a str,
+    /// Request path (borrowed from request header)
+    pub path: &'a str,
+    /// Host header value (borrowed from request header)
+    pub host: &'a str,
+    /// Headers for matching (lazy-initialized, only if needed)
+    headers: Option<HashMap<String, String>>,
+    /// Query parameters (lazy-initialized, only if needed)
+    query_params: Option<HashMap<String, String>>,
 }
 
-impl RequestInfo {
+impl<'a> RequestInfo<'a> {
+    /// Create a new RequestInfo with borrowed references (zero-copy for common case)
+    #[inline]
+    pub fn new(method: &'a str, path: &'a str, host: &'a str) -> Self {
+        Self {
+            method,
+            path,
+            host,
+            headers: None,
+            query_params: None,
+        }
+    }
+
+    /// Set headers for header-based matching (only call if RouteMatcher.needs_headers())
+    #[inline]
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = Some(headers);
+        self
+    }
+
+    /// Set query params for query-based matching (only call if RouteMatcher.needs_query_params())
+    #[inline]
+    pub fn with_query_params(mut self, params: HashMap<String, String>) -> Self {
+        self.query_params = Some(params);
+        self
+    }
+
+    /// Get headers (returns empty map if not set)
+    #[inline]
+    pub fn headers(&self) -> &HashMap<String, String> {
+        static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        self.headers.as_ref().unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))
+    }
+
+    /// Get query params (returns empty map if not set)
+    #[inline]
+    pub fn query_params(&self) -> &HashMap<String, String> {
+        static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        self.query_params.as_ref().unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))
+    }
+
     /// Generate a cache key for this request
     fn cache_key(&self) -> String {
         format!("{}:{}:{}", self.method, self.host, self.path)
     }
 
-    /// Parse query parameters from path
+    /// Parse query parameters from path (only call when needed)
     pub fn parse_query_params(path: &str) -> HashMap<String, String> {
         let mut params = HashMap::new();
         if let Some(query_start) = path.find('?') {
@@ -521,6 +598,20 @@ impl RequestInfo {
             }
         }
         params
+    }
+
+    /// Build headers map from request header iterator (only call when needed)
+    pub fn build_headers<'b, I>(iter: I) -> HashMap<String, String>
+    where
+        I: Iterator<Item = (&'b http::header::HeaderName, &'b http::header::HeaderValue)>,
+    {
+        let mut headers = HashMap::new();
+        for (name, value) in iter {
+            if let Ok(value_str) = value.to_str() {
+                headers.insert(name.as_str().to_lowercase(), value_str.to_string());
+            }
+        }
+        headers
     }
 }
 
