@@ -95,12 +95,16 @@ This roadmap outlines the path from current state to production-ready, prioritiz
 - `crates/proxy/src/app.rs` - Wire metrics registry
 
 ### 1.4 Production Testing Suite
-**Status:** 91 unit tests only
+**Status:** External repo exists (raskell-io/sentinel-bench)
 **Impact:** HIGH - Cannot validate production behavior
-**Effort:** 2-3 weeks
+**Effort:** 2-3 weeks (remaining: CI integration, performance investigation)
 
 **Tasks:**
-- [ ] Load tests with wrk/k6 (target: 10K RPS, p99 < 10ms)
+- [x] Load testing framework with oha/wrk/k6 (sentinel-bench repo)
+- [x] Passthrough scenario benchmarks
+- [x] Comparison against Envoy, HAProxy, Nginx
+- [ ] **INVESTIGATE:** Sentinel ~5x slower than competition (10s p50 vs 1ms)
+  - Possible causes: x86 emulation on ARM, logging overhead, connection pooling
 - [ ] Soak tests for memory leaks (24-72h runs)
 - [ ] Chaos tests (agent crashes, upstream failures, network partitions)
 - [ ] Concurrent reload tests (requests in-flight during config change)
@@ -108,9 +112,8 @@ This roadmap outlines the path from current state to production-ready, prioritiz
 - [ ] Add CI/CD gates for performance regressions
 
 **Files:**
-- `tests/load/` - New directory for load test configs
-- `tests/chaos/` - Chaos test scenarios
-- `.github/workflows/` - CI integration
+- `raskell-io/sentinel-bench` - External benchmarking repo
+- `.github/workflows/` - CI integration (TODO)
 
 ---
 
