@@ -110,7 +110,9 @@ pub use logging::{
 pub use rate_limit::{RateLimitConfig, RateLimitManager, RateLimitResult};
 
 // HTTP caching
-pub use cache::{CacheConfig, CacheManager, HttpCacheStats};
+pub use cache::{
+    get_cache_eviction, get_cache_lock, get_cache_storage, CacheConfig, CacheManager, HttpCacheStats,
+};
 
 // Memory caching
 pub use memory_cache::{MemoryCacheConfig, MemoryCacheManager, MemoryCacheStats, RouteMatchEntry, TypedCache};

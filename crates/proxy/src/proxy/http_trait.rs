@@ -16,6 +16,7 @@ use std::os::unix::io::RawFd;
 use std::time::Duration;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::cache::{get_cache_eviction, get_cache_lock, get_cache_storage};
 use crate::logging::AccessLogEntry;
 use crate::rate_limit::HeaderAccessor;
 use crate::routing::RequestInfo;
@@ -980,20 +981,38 @@ impl ProxyHttp for SentinelProxy {
             return Ok(());
         }
 
-        // Enable caching for this request
-        // Note: Pingora's cache.enable() would be called here when using
-        // pingora-cache storage backend. For now, we track cache eligibility
-        // in our own infrastructure.
-        trace!(
+        // Enable caching for this request using Pingora's cache infrastructure
+        debug!(
             correlation_id = %ctx.trace_id,
             route_id = %route_id,
             method = %ctx.method,
             path = %ctx.path,
-            "Request is cache-eligible"
+            "Enabling HTTP caching for request"
+        );
+
+        // Get static references to cache infrastructure
+        let storage = get_cache_storage();
+        let eviction = get_cache_eviction();
+        let cache_lock = get_cache_lock();
+
+        // Enable the cache with storage, eviction, and lock
+        session.cache.enable(
+            storage,
+            Some(eviction),
+            None, // predictor - optional
+            Some(cache_lock),
+            None, // option overrides
         );
 
         // Mark request as cache-eligible in context
         ctx.cache_eligible = true;
+
+        trace!(
+            correlation_id = %ctx.trace_id,
+            route_id = %route_id,
+            cache_enabled = session.cache.enabled(),
+            "Cache enabled for request"
+        );
 
         Ok(())
     }
@@ -1149,26 +1168,39 @@ impl ProxyHttp for SentinelProxy {
             return Ok(RespCacheable::Uncacheable(NoCacheReason::OriginNotCache));
         }
 
-        // Track that this response WOULD be cacheable
-        // Note: Full caching requires storage backend setup (MemCache or disk).
-        // When enabled, this filter would:
-        // 1. Clone the response header
-        // 2. Create CacheMeta with proper timestamps and TTLs
-        // 3. Return RespCacheable::Cacheable(meta)
+        // Get route cache config for stale settings
+        let config = self.cache_manager.get_route_config(route_id).unwrap_or_default();
+
+        // Create timestamps for cache metadata
+        let now = std::time::SystemTime::now();
+        let fresh_until = now + ttl;
+
+        // Clone the response header for storage
+        let header = resp.clone();
+
+        // Create CacheMeta with proper timestamps and TTLs
+        let cache_meta = CacheMeta::new(
+            fresh_until,
+            now,
+            config.stale_while_revalidate_secs as u32,
+            config.stale_if_error_secs as u32,
+            header,
+        );
+
+        // Track the cache store
+        self.cache_manager.stats().record_store();
+
         debug!(
             correlation_id = %ctx.trace_id,
             route_id = %route_id,
             status = status,
             ttl_secs = ttl.as_secs(),
-            "Response is cache-eligible (storage backend required for full caching)"
+            stale_while_revalidate_secs = config.stale_while_revalidate_secs,
+            stale_if_error_secs = config.stale_if_error_secs,
+            "Caching response"
         );
 
-        // For now, return that we would cache if storage was configured
-        // To enable full caching:
-        // 1. Set up pingora-cache storage backend in SentinelProxy
-        // 2. Call session.cache.enable() in request_cache_filter
-        // 3. Create and return CacheMeta here
-        Ok(RespCacheable::Uncacheable(NoCacheReason::Custom("storage_not_configured")))
+        Ok(RespCacheable::Cacheable(cache_meta))
     }
 
     /// Decide whether to serve stale content on error or during revalidation.

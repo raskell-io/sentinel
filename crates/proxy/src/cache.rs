@@ -1,20 +1,87 @@
 //! HTTP caching infrastructure for Sentinel
 //!
-//! This module provides the foundation for HTTP response caching.
-//! Note: Pingora's cache integration is still experimental, so this module
-//! provides a stable API wrapper that can be extended as pingora-cache matures.
+//! This module provides the foundation for HTTP response caching using
+//! Pingora's cache infrastructure.
 //!
 //! Current features:
 //! - Cache configuration per route
 //! - Cache statistics tracking
 //! - Cache key generation
 //! - TTL calculation from Cache-Control headers
+//! - In-memory cache storage backend (for development/testing)
+//!
+//! # Storage Backends
+//!
+//! The default storage is an in-memory cache suitable for development and
+//! single-instance deployments. For production with large cache sizes or
+//! persistence needs, consider implementing a disk-based storage backend.
 
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+use pingora_cache::eviction::simple_lru::Manager as LruEvictionManager;
+use pingora_cache::lock::CacheLock;
+use pingora_cache::storage::Storage;
+use pingora_cache::MemCache;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, trace};
+use tracing::{info, trace};
+
+// ============================================================================
+// Static Cache Storage
+// ============================================================================
+
+/// Default cache size: 100MB
+const DEFAULT_CACHE_SIZE_BYTES: usize = 100 * 1024 * 1024;
+
+/// Default eviction limit: 100MB
+const DEFAULT_EVICTION_LIMIT_BYTES: usize = 100 * 1024 * 1024;
+
+/// Static in-memory cache storage instance
+///
+/// This provides a `&'static` reference required by Pingora's cache API.
+/// Note: MemCache is marked "for testing only" in pingora-cache. For production
+/// deployments with large cache requirements, consider implementing a disk-based
+/// storage backend.
+static HTTP_CACHE_STORAGE: Lazy<MemCache> = Lazy::new(|| {
+    info!(
+        cache_size_mb = DEFAULT_CACHE_SIZE_BYTES / 1024 / 1024,
+        "Initializing HTTP cache storage (in-memory)"
+    );
+    MemCache::new()
+});
+
+/// Static LRU eviction manager for cache entries
+static HTTP_CACHE_EVICTION: Lazy<LruEvictionManager> = Lazy::new(|| {
+    info!(
+        eviction_limit_mb = DEFAULT_EVICTION_LIMIT_BYTES / 1024 / 1024,
+        "Initializing HTTP cache eviction manager"
+    );
+    LruEvictionManager::new(DEFAULT_EVICTION_LIMIT_BYTES)
+});
+
+/// Static cache lock for preventing thundering herd
+static HTTP_CACHE_LOCK: Lazy<CacheLock> = Lazy::new(|| {
+    info!("Initializing HTTP cache lock");
+    CacheLock::new(Duration::from_secs(10))
+});
+
+/// Get a static reference to the HTTP cache storage
+///
+/// This is used by the ProxyHttp implementation to enable caching.
+pub fn get_cache_storage() -> &'static (dyn Storage + Sync) {
+    &*HTTP_CACHE_STORAGE
+}
+
+/// Get a static reference to the cache eviction manager
+pub fn get_cache_eviction() -> &'static LruEvictionManager {
+    &*HTTP_CACHE_EVICTION
+}
+
+/// Get a static reference to the cache lock
+pub fn get_cache_lock() -> &'static CacheLock {
+    &*HTTP_CACHE_LOCK
+}
 
 /// Cache configuration for a route
 #[derive(Debug, Clone)]

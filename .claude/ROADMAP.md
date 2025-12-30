@@ -2,7 +2,7 @@
 
 **Last Updated:** 2024-12-30
 **Current Version:** 0.1.8
-**Production Readiness:** 30-40%
+**Production Readiness:** 50-60%
 
 ---
 
@@ -27,11 +27,11 @@ This roadmap outlines the path from current state to production-ready, prioritiz
 - Static file serving with compression
 
 ### Critical Gaps
-- HTTPS/TLS is stubbed (warns and proceeds without encryption)
-- HTTP caching disabled by default
+- ~~HTTPS/TLS is stubbed~~ → **DONE**: Basic TLS termination working
+- ~~HTTP caching disabled by default~~ → **DONE**: Enabled for static routes
+- ~~Metrics collected but not exposed~~ → **DONE**: /metrics endpoint available
 - No WAF reference implementation
 - No distributed rate limiting
-- Metrics collected but not exposed
 - No production load/soak testing
 
 ---
@@ -39,13 +39,14 @@ This roadmap outlines the path from current state to production-ready, prioritiz
 ## Priority 1: Production Blockers
 
 ### 1.1 Complete HTTPS/TLS Implementation
-**Status:** Stubbed
+**Status:** DONE - Basic TLS termination working
 **Impact:** CRITICAL - Cannot deploy to production without TLS
-**Effort:** 1-2 weeks
+**Effort:** 1-2 weeks (remaining: SNI, mTLS, OCSP)
 
 **Tasks:**
-- [ ] Implement TLS listener in `main.rs` (currently warns and skips)
-- [ ] Load certificates from PEM files via rustls
+- [x] Implement TLS listener in `main.rs` (uses Pingora's add_tls)
+- [x] Load certificates from PEM files
+- [x] Validate certificate files exist at startup
 - [ ] Support SNI for multiple certificates
 - [ ] Add certificate hot-reload on SIGHUP
 - [ ] Implement mTLS for upstream connections
@@ -58,33 +59,34 @@ This roadmap outlines the path from current state to production-ready, prioritiz
 - `crates/proxy/src/proxy/mod.rs` - TLS context
 
 ### 1.2 Enable HTTP Caching
-**Status:** Infrastructure exists, disabled by default
+**Status:** Core infrastructure implemented, enabled for static routes
 **Impact:** HIGH - 30-50% origin load reduction
-**Effort:** 1-2 weeks
+**Effort:** 1-2 weeks (remaining: cache config in KDL + PURGE API)
 
 **Tasks:**
-- [ ] Enable pingora-cache storage backend (MemCache)
-- [ ] Wire `request_cache_filter()` to call `session.cache.enable()`
-- [ ] Implement proper `CacheMeta` creation in `response_cache_filter()`
+- [x] Enable pingora-cache storage backend (MemCache)
+- [x] Wire `request_cache_filter()` to call `session.cache.enable()`
+- [x] Implement proper `CacheMeta` creation in `response_cache_filter()`
+- [x] Enable caching by default for static routes (1 hour TTL)
 - [ ] Add cache storage configuration to KDL schema
 - [ ] Implement cache invalidation API (PURGE method)
 - [ ] Add cache statistics to metrics endpoint
 - [ ] Test stale-while-revalidate and stale-if-error
 
 **Files:**
-- `crates/proxy/src/cache.rs` - Cache manager
+- `crates/proxy/src/cache.rs` - Cache manager + static storage
 - `crates/proxy/src/proxy/http_trait.rs` - Cache lifecycle methods
 - `crates/config/src/routes.rs` - Per-route cache config
 
 ### 1.3 Expose Metrics Endpoint
-**Status:** Metrics collected, not exposed
+**Status:** DONE - /metrics endpoint exposes Prometheus format
 **Impact:** HIGH - Required for production monitoring
 **Effort:** 2-3 days
 
 **Tasks:**
-- [ ] Add `/metrics` builtin handler route
-- [ ] Expose Prometheus text format
-- [ ] Add `/_/health` and `/_/ready` endpoints
+- [x] Add `/metrics` builtin handler route
+- [x] Expose Prometheus text format
+- [x] Add `/_/health` and `/_/ready` endpoints
 - [ ] Document available metrics
 - [ ] Add Grafana dashboard template
 
