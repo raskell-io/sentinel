@@ -465,6 +465,15 @@ impl ProxyHttp for SentinelProxy {
                     Option::<&NoHeaderAccessor>::None,
                 );
 
+                // Store rate limit info for response headers (even if allowed)
+                if rate_result.limit > 0 {
+                    ctx.rate_limit_info = Some(super::context::RateLimitHeaderInfo {
+                        limit: rate_result.limit,
+                        remaining: rate_result.remaining,
+                        reset_at: rate_result.reset_at,
+                    });
+                }
+
                 if !rate_result.allowed {
                     use sentinel_config::RateLimitAction;
 
@@ -475,6 +484,8 @@ impl ProxyHttp for SentinelProxy {
                                 route_id = route_id,
                                 client_ip = %ctx.client_ip,
                                 limiter = %rate_result.limiter,
+                                limit = rate_result.limit,
+                                remaining = rate_result.remaining,
                                 "Request rate limited"
                             );
                             self.metrics.record_blocked_request("rate_limited");
@@ -491,15 +502,26 @@ impl ProxyHttp for SentinelProxy {
                             .with_status_code(rate_result.status_code);
                             self.log_manager.log_audit(&audit_entry);
 
-                            // Send rate limit response
+                            // Send rate limit response with headers
                             let body = rate_result
                                 .message
                                 .unwrap_or_else(|| "Rate limit exceeded".to_string());
-                            crate::http_helpers::write_error(
+
+                            // Build response with rate limit headers
+                            let retry_after = rate_result.reset_at.saturating_sub(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            );
+                            crate::http_helpers::write_rate_limit_error(
                                 session,
                                 rate_result.status_code,
                                 &body,
-                                "text/plain",
+                                rate_result.limit,
+                                rate_result.remaining,
+                                rate_result.reset_at,
+                                retry_after,
                             )
                             .await?;
                             return Ok(true); // Request complete, don't continue
@@ -513,12 +535,29 @@ impl ProxyHttp for SentinelProxy {
                             // Continue processing
                         }
                         RateLimitAction::Delay => {
-                            // Delay handling could be implemented here with pingora_timeout::sleep
-                            debug!(
-                                correlation_id = %ctx.trace_id,
-                                route_id = route_id,
-                                "Rate limit delay mode not yet implemented, allowing request"
-                            );
+                            // Apply delay if suggested by rate limiter
+                            if let Some(delay_ms) = rate_result.suggested_delay_ms {
+                                // Cap delay at a reasonable maximum (5 seconds by default)
+                                // TODO: Make this configurable per-route via max_delay_ms
+                                const MAX_DELAY_MS: u64 = 5000;
+                                let actual_delay = delay_ms.min(MAX_DELAY_MS);
+
+                                if actual_delay > 0 {
+                                    debug!(
+                                        correlation_id = %ctx.trace_id,
+                                        route_id = route_id,
+                                        suggested_delay_ms = delay_ms,
+                                        actual_delay_ms = actual_delay,
+                                        "Applying rate limit delay"
+                                    );
+
+                                    tokio::time::sleep(std::time::Duration::from_millis(
+                                        actual_delay,
+                                    ))
+                                    .await;
+                                }
+                            }
+                            // Continue processing after delay
                         }
                     }
                 }
@@ -1002,6 +1041,14 @@ impl ProxyHttp for SentinelProxy {
 
         // Add correlation ID to response
         upstream_response.insert_header("X-Correlation-Id", &ctx.trace_id)?;
+
+        // Add rate limit headers if rate limiting was applied
+        if let Some(ref rate_info) = ctx.rate_limit_info {
+            upstream_response.insert_header("X-RateLimit-Limit", rate_info.limit.to_string())?;
+            upstream_response
+                .insert_header("X-RateLimit-Remaining", rate_info.remaining.to_string())?;
+            upstream_response.insert_header("X-RateLimit-Reset", rate_info.reset_at.to_string())?;
+        }
 
         // Generate custom error pages for error responses
         if status >= 400 {

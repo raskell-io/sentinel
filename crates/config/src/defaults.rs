@@ -110,8 +110,8 @@ limits {
 "#;
 
 use crate::{
-    BuiltinHandler, Config, ListenerConfig, ListenerProtocol, MatchCondition, ObservabilityConfig,
-    RouteConfig, RoutePolicies, ServerConfig, ServiceType,
+    BuiltinHandler, Config, GlobalRateLimitConfig, ListenerConfig, ListenerProtocol,
+    MatchCondition, ObservabilityConfig, RouteConfig, RoutePolicies, ServerConfig, ServiceType,
 };
 use sentinel_common::{limits::Limits, types::Priority};
 use std::collections::HashMap;
@@ -262,6 +262,7 @@ pub fn create_default_config() -> Config {
         waf: None,
         limits: Limits::default(),
         observability: ObservabilityConfig::default(),
+        rate_limits: GlobalRateLimitConfig::default(),
         default_upstream: None,
     }
 }

@@ -53,6 +53,7 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
     let mut waf = None;
     let mut limits = None;
     let mut observability = None;
+    let mut rate_limits = None;
 
     for node in doc.nodes() {
         let node_name = node.name().value();
@@ -95,10 +96,14 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
                 observability = Some(parse_observability_config(node)?);
                 trace!("Parsed observability configuration");
             }
+            "rate-limits" => {
+                rate_limits = Some(parse_rate_limits_config(node)?);
+                trace!("Parsed rate-limits configuration");
+            }
             other => {
                 return Err(anyhow::anyhow!(
                     "Unknown top-level configuration block: '{}'\n\
-                     Valid blocks are: server, listeners, routes, upstreams, filters, agents, waf, limits, observability",
+                     Valid blocks are: server, listeners, routes, upstreams, filters, agents, waf, limits, observability, rate-limits",
                     other
                 ));
             }
@@ -150,6 +155,7 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
         waf,
         limits: limits.unwrap_or_default(),
         observability: observability.unwrap_or_default(),
+        rate_limits: rate_limits.unwrap_or_default(),
         default_upstream: None,
     })
 }
@@ -516,6 +522,90 @@ pub fn parse_limits_config(node: &kdl::KdlNode) -> Result<Limits> {
     }
 
     Ok(limits)
+}
+
+// ============================================================================
+// Rate Limits Parsing
+// ============================================================================
+
+use crate::filters::{GlobalLimitConfig, GlobalRateLimitConfig, RateLimitKey};
+
+/// Parse rate-limits configuration block
+///
+/// KDL format:
+/// ```kdl
+/// rate-limits {
+///     default-rps 100
+///     default-burst 20
+///     key "client-ip"
+///
+///     global {
+///         max-rps 10000
+///         burst 1000
+///         key "client-ip"
+///     }
+/// }
+/// ```
+pub fn parse_rate_limits_config(node: &kdl::KdlNode) -> Result<GlobalRateLimitConfig> {
+    let mut config = GlobalRateLimitConfig::default();
+
+    // Parse direct properties
+    if let Some(v) = get_int_entry(node, "default-rps") {
+        config.default_rps = Some(v as u32);
+    }
+    if let Some(v) = get_int_entry(node, "default-burst") {
+        config.default_burst = Some(v as u32);
+    }
+    if let Some(key) = get_string_entry(node, "key") {
+        config.key = parse_rate_limit_key(&key)?;
+    }
+
+    // Parse global block
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let name = child.name().value();
+            if name == "global" {
+                config.global = Some(parse_global_limit_config(child)?);
+            }
+        }
+    }
+
+    Ok(config)
+}
+
+/// Parse a global limit configuration block
+fn parse_global_limit_config(node: &kdl::KdlNode) -> Result<GlobalLimitConfig> {
+    let max_rps = get_int_entry(node, "max-rps")
+        .ok_or_else(|| anyhow::anyhow!("global rate limit requires 'max-rps'"))?
+        as u32;
+
+    let burst = get_int_entry(node, "burst").unwrap_or(10) as u32;
+
+    let key = if let Some(key_str) = get_string_entry(node, "key") {
+        parse_rate_limit_key(&key_str)?
+    } else {
+        RateLimitKey::ClientIp
+    };
+
+    Ok(GlobalLimitConfig { max_rps, burst, key })
+}
+
+/// Parse a rate limit key string into the enum
+fn parse_rate_limit_key(key: &str) -> Result<RateLimitKey> {
+    match key.to_lowercase().as_str() {
+        "client-ip" | "client_ip" | "ip" => Ok(RateLimitKey::ClientIp),
+        "path" => Ok(RateLimitKey::Path),
+        "route" => Ok(RateLimitKey::Route),
+        "client-ip-and-path" | "client_ip_and_path" => Ok(RateLimitKey::ClientIpAndPath),
+        s if s.starts_with("header:") => {
+            let header_name = s.strip_prefix("header:").unwrap_or("");
+            Ok(RateLimitKey::Header(header_name.to_string()))
+        }
+        other => Err(anyhow::anyhow!(
+            "Unknown rate limit key: '{}'. Valid values: client-ip, path, route, client-ip-and-path, header:<name>",
+            other
+        )),
+    }
 }
 
 // ============================================================================

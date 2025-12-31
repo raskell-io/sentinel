@@ -10,6 +10,17 @@ use sentinel_config::{BodyStreamingMode, Config, RouteConfig, ServiceType};
 
 use crate::websocket::WebSocketHandler;
 
+/// Rate limit header information for response headers
+#[derive(Debug, Clone)]
+pub struct RateLimitHeaderInfo {
+    /// Maximum requests allowed per window
+    pub limit: u32,
+    /// Remaining requests in current window
+    pub remaining: u32,
+    /// Unix timestamp (seconds) when the window resets
+    pub reset_at: u64,
+}
+
 /// Request context maintained throughout the request lifecycle.
 ///
 /// This struct uses a hybrid approach:
@@ -91,6 +102,10 @@ pub struct RequestContext {
     /// Agent IDs to use for body inspection
     pub(crate) body_inspection_agents: Vec<String>,
 
+    // === Rate Limiting ===
+    /// Rate limit info for response headers (set during request_filter)
+    pub(crate) rate_limit_info: Option<RateLimitHeaderInfo>,
+
     // === Body Streaming ===
     /// Body streaming mode for request body inspection
     pub(crate) request_body_streaming_mode: BodyStreamingMode,
@@ -141,6 +156,7 @@ impl RequestContext {
             body_bytes_inspected: 0,
             body_buffer: Vec::new(),
             body_inspection_agents: Vec::new(),
+            rate_limit_info: None,
             request_body_streaming_mode: BodyStreamingMode::Buffer,
             request_body_chunk_index: 0,
             agent_needs_more: false,

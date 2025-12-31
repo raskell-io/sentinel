@@ -18,7 +18,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use pingora_limits::rate::Rate;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace, warn};
 
 use sentinel_config::{RateLimitAction, RateLimitBackend, RateLimitKey};
@@ -33,6 +33,21 @@ pub enum RateLimitOutcome {
     Allowed,
     /// Request is rate limited
     Limited,
+}
+
+/// Detailed rate limit check result from a pool
+#[derive(Debug, Clone)]
+pub struct RateLimitCheckInfo {
+    /// Whether the request is allowed or limited
+    pub outcome: RateLimitOutcome,
+    /// Current request count in the window
+    pub current_count: i64,
+    /// Maximum requests allowed per window
+    pub limit: u32,
+    /// Remaining requests in current window (0 if over limit)
+    pub remaining: u32,
+    /// Unix timestamp (seconds) when the window resets
+    pub reset_at: u64,
 }
 
 /// Rate limiter configuration
@@ -124,6 +139,19 @@ pub struct RateLimiterPool {
     config: RwLock<RateLimitConfig>,
 }
 
+/// Get current unix timestamp in seconds
+fn current_unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs()
+}
+
+/// Calculate window reset timestamp (next second boundary for 1-second windows)
+fn calculate_reset_timestamp() -> u64 {
+    current_unix_timestamp() + 1
+}
+
 impl RateLimiterPool {
     /// Create a new rate limiter pool with the given configuration (local backend)
     pub fn new(config: RateLimitConfig) -> Self {
@@ -149,9 +177,9 @@ impl RateLimiterPool {
 
     /// Check if a request should be rate limited (synchronous, local only)
     ///
-    /// Returns the outcome and the current request count.
+    /// Returns detailed rate limit information including remaining quota.
     /// For distributed backends, this falls back to local limiting.
-    pub fn check(&self, key: &str) -> (RateLimitOutcome, isize) {
+    pub fn check(&self, key: &str) -> RateLimitCheckInfo {
         let config = self.config.read();
         let max_rps = config.max_rps;
         drop(config);
@@ -170,27 +198,52 @@ impl RateLimiterPool {
 
         let outcome = limiter.check();
         let count = limiter.rate.observe(&(), 0); // Get current count without incrementing
+        let remaining = if count >= max_rps as isize {
+            0
+        } else {
+            (max_rps as isize - count) as u32
+        };
 
-        (outcome, count)
+        RateLimitCheckInfo {
+            outcome,
+            current_count: count as i64,
+            limit: max_rps,
+            remaining,
+            reset_at: calculate_reset_timestamp(),
+        }
     }
 
     /// Check if a request should be rate limited (async, supports distributed backends)
     ///
-    /// Returns the outcome and the current request count.
+    /// Returns detailed rate limit information including remaining quota.
     #[cfg(feature = "distributed-rate-limit")]
-    pub async fn check_async(&self, key: &str) -> (RateLimitOutcome, i64) {
+    pub async fn check_async(&self, key: &str) -> RateLimitCheckInfo {
+        let config = self.config.read();
+        let max_rps = config.max_rps;
+        drop(config);
+
         match &self.backend {
-            RateLimitBackendType::Local { .. } => {
-                let (outcome, count) = self.check(key);
-                (outcome, count as i64)
-            }
+            RateLimitBackendType::Local { .. } => self.check(key),
             RateLimitBackendType::Distributed {
                 redis,
                 local_fallback,
             } => {
                 // Try Redis first
                 match redis.check(key).await {
-                    Ok((outcome, count)) => (outcome, count),
+                    Ok((outcome, count)) => {
+                        let remaining = if count >= max_rps as i64 {
+                            0
+                        } else {
+                            (max_rps as i64 - count) as u32
+                        };
+                        RateLimitCheckInfo {
+                            outcome,
+                            current_count: count,
+                            limit: max_rps,
+                            remaining,
+                            reset_at: calculate_reset_timestamp(),
+                        }
+                    }
                     Err(e) => {
                         warn!(
                             error = %e,
@@ -201,10 +254,6 @@ impl RateLimiterPool {
 
                         // Fallback to local
                         if redis.fallback_enabled() {
-                            let config = self.config.read();
-                            let max_rps = config.max_rps;
-                            drop(config);
-
                             let limiter = local_fallback
                                 .entry(key.to_string())
                                 .or_insert_with(|| Arc::new(KeyRateLimiter::new(max_rps)))
@@ -212,10 +261,27 @@ impl RateLimiterPool {
 
                             let outcome = limiter.check();
                             let count = limiter.rate.observe(&(), 0);
-                            (outcome, count as i64)
+                            let remaining = if count >= max_rps as isize {
+                                0
+                            } else {
+                                (max_rps as isize - count) as u32
+                            };
+                            RateLimitCheckInfo {
+                                outcome,
+                                current_count: count as i64,
+                                limit: max_rps,
+                                remaining,
+                                reset_at: calculate_reset_timestamp(),
+                            }
                         } else {
                             // Fail open if no fallback
-                            (RateLimitOutcome::Allowed, 0)
+                            RateLimitCheckInfo {
+                                outcome: RateLimitOutcome::Allowed,
+                                current_count: 0,
+                                limit: max_rps,
+                                remaining: max_rps,
+                                reset_at: calculate_reset_timestamp(),
+                            }
                         }
                     }
                 }
@@ -382,6 +448,7 @@ impl RateLimitManager {
     /// Check if a request should be rate limited
     ///
     /// Checks both global and route-specific limits.
+    /// Returns detailed rate limit information for response headers.
     pub fn check(
         &self,
         route_id: &str,
@@ -389,58 +456,100 @@ impl RateLimitManager {
         path: &str,
         headers: Option<&impl HeaderAccessor>,
     ) -> RateLimitResult {
+        // Track the most restrictive limit info for headers
+        let mut best_limit_info: Option<RateLimitCheckInfo> = None;
+
         // Check global limit first
         if let Some(ref global) = self.global_limiter {
             let key = global.extract_key(client_ip, path, route_id, headers);
-            let (outcome, count) = global.check(&key);
+            let check_info = global.check(&key);
 
-            if outcome == RateLimitOutcome::Limited {
+            if check_info.outcome == RateLimitOutcome::Limited {
                 warn!(
                     route_id = route_id,
                     client_ip = client_ip,
                     key = key,
-                    count = count,
+                    count = check_info.current_count,
                     "Request rate limited by global limiter"
                 );
+                // Calculate suggested delay based on how far over limit
+                let suggested_delay_ms = if check_info.current_count > check_info.limit as i64 {
+                    let excess = check_info.current_count - check_info.limit as i64;
+                    Some((excess as u64 * 1000) / check_info.limit as u64)
+                } else {
+                    None
+                };
                 return RateLimitResult {
                     allowed: false,
                     action: global.action(),
                     status_code: global.status_code(),
                     message: global.message(),
                     limiter: "global".to_string(),
+                    limit: check_info.limit,
+                    remaining: check_info.remaining,
+                    reset_at: check_info.reset_at,
+                    suggested_delay_ms,
                 };
             }
+
+            best_limit_info = Some(check_info);
         }
 
         // Check route-specific limit
         if let Some(pool) = self.route_limiters.get(route_id) {
             let key = pool.extract_key(client_ip, path, route_id, headers);
-            let (outcome, count) = pool.check(&key);
+            let check_info = pool.check(&key);
 
-            if outcome == RateLimitOutcome::Limited {
+            if check_info.outcome == RateLimitOutcome::Limited {
                 warn!(
                     route_id = route_id,
                     client_ip = client_ip,
                     key = key,
-                    count = count,
+                    count = check_info.current_count,
                     "Request rate limited by route limiter"
                 );
+                // Calculate suggested delay based on how far over limit
+                let suggested_delay_ms = if check_info.current_count > check_info.limit as i64 {
+                    let excess = check_info.current_count - check_info.limit as i64;
+                    Some((excess as u64 * 1000) / check_info.limit as u64)
+                } else {
+                    None
+                };
                 return RateLimitResult {
                     allowed: false,
                     action: pool.action(),
                     status_code: pool.status_code(),
                     message: pool.message(),
                     limiter: route_id.to_string(),
+                    limit: check_info.limit,
+                    remaining: check_info.remaining,
+                    reset_at: check_info.reset_at,
+                    suggested_delay_ms,
                 };
             }
 
             trace!(
                 route_id = route_id,
                 key = key,
-                count = count,
+                count = check_info.current_count,
+                remaining = check_info.remaining,
                 "Request allowed by rate limiter"
             );
+
+            // Use the more restrictive limit info (lower remaining)
+            if let Some(ref existing) = best_limit_info {
+                if check_info.remaining < existing.remaining {
+                    best_limit_info = Some(check_info);
+                }
+            } else {
+                best_limit_info = Some(check_info);
+            }
         }
+
+        // Return allowed with rate limit info for headers
+        let (limit, remaining, reset_at) = best_limit_info
+            .map(|info| (info.limit, info.remaining, info.reset_at))
+            .unwrap_or((0, 0, 0));
 
         RateLimitResult {
             allowed: true,
@@ -448,6 +557,10 @@ impl RateLimitManager {
             status_code: 429,
             message: None,
             limiter: String::new(),
+            limit,
+            remaining,
+            reset_at,
+            suggested_delay_ms: None,
         }
     }
 
@@ -501,6 +614,14 @@ pub struct RateLimitResult {
     pub message: Option<String>,
     /// Which limiter triggered (for logging)
     pub limiter: String,
+    /// Maximum requests allowed per window
+    pub limit: u32,
+    /// Remaining requests in current window
+    pub remaining: u32,
+    /// Unix timestamp (seconds) when the window resets
+    pub reset_at: u64,
+    /// Suggested delay in milliseconds (for Delay action)
+    pub suggested_delay_ms: Option<u64>,
 }
 
 #[cfg(test)]
@@ -518,9 +639,11 @@ mod tests {
         let pool = RateLimiterPool::new(config);
 
         // Should allow first 10 requests
-        for _ in 0..10 {
-            let (outcome, _) = pool.check("127.0.0.1");
-            assert_eq!(outcome, RateLimitOutcome::Allowed);
+        for i in 0..10 {
+            let info = pool.check("127.0.0.1");
+            assert_eq!(info.outcome, RateLimitOutcome::Allowed);
+            assert_eq!(info.limit, 10);
+            assert_eq!(info.remaining, 10 - i - 1);
         }
     }
 
@@ -536,13 +659,14 @@ mod tests {
 
         // Should allow first 5 requests
         for _ in 0..5 {
-            let (outcome, _) = pool.check("127.0.0.1");
-            assert_eq!(outcome, RateLimitOutcome::Allowed);
+            let info = pool.check("127.0.0.1");
+            assert_eq!(info.outcome, RateLimitOutcome::Allowed);
         }
 
         // 6th request should be limited
-        let (outcome, _) = pool.check("127.0.0.1");
-        assert_eq!(outcome, RateLimitOutcome::Limited);
+        let info = pool.check("127.0.0.1");
+        assert_eq!(info.outcome, RateLimitOutcome::Limited);
+        assert_eq!(info.remaining, 0);
     }
 
     #[test]
@@ -556,22 +680,39 @@ mod tests {
         let pool = RateLimiterPool::new(config);
 
         // Each IP gets its own bucket
-        let (outcome1, _) = pool.check("192.168.1.1");
-        let (outcome2, _) = pool.check("192.168.1.2");
-        let (outcome3, _) = pool.check("192.168.1.1");
-        let (outcome4, _) = pool.check("192.168.1.2");
+        let info1 = pool.check("192.168.1.1");
+        let info2 = pool.check("192.168.1.2");
+        let info3 = pool.check("192.168.1.1");
+        let info4 = pool.check("192.168.1.2");
 
-        assert_eq!(outcome1, RateLimitOutcome::Allowed);
-        assert_eq!(outcome2, RateLimitOutcome::Allowed);
-        assert_eq!(outcome3, RateLimitOutcome::Allowed);
-        assert_eq!(outcome4, RateLimitOutcome::Allowed);
+        assert_eq!(info1.outcome, RateLimitOutcome::Allowed);
+        assert_eq!(info2.outcome, RateLimitOutcome::Allowed);
+        assert_eq!(info3.outcome, RateLimitOutcome::Allowed);
+        assert_eq!(info4.outcome, RateLimitOutcome::Allowed);
 
         // Both should hit limit now
-        let (outcome5, _) = pool.check("192.168.1.1");
-        let (outcome6, _) = pool.check("192.168.1.2");
+        let info5 = pool.check("192.168.1.1");
+        let info6 = pool.check("192.168.1.2");
 
-        assert_eq!(outcome5, RateLimitOutcome::Limited);
-        assert_eq!(outcome6, RateLimitOutcome::Limited);
+        assert_eq!(info5.outcome, RateLimitOutcome::Limited);
+        assert_eq!(info6.outcome, RateLimitOutcome::Limited);
+    }
+
+    #[test]
+    fn test_rate_limit_info_fields() {
+        let config = RateLimitConfig {
+            max_rps: 5,
+            burst: 2,
+            key: RateLimitKey::ClientIp,
+            ..Default::default()
+        };
+        let pool = RateLimiterPool::new(config);
+
+        let info = pool.check("10.0.0.1");
+        assert_eq!(info.limit, 5);
+        assert_eq!(info.remaining, 4); // 5 - 1 = 4
+        assert!(info.reset_at > 0);
+        assert_eq!(info.outcome, RateLimitOutcome::Allowed);
     }
 
     #[test]
@@ -588,19 +729,49 @@ mod tests {
             },
         );
 
-        // Route without limiter should always pass
+        // Route without limiter should always pass (no rate limit info)
         let result = manager.check("web", "127.0.0.1", "/", Option::<&NoHeaders>::None);
         assert!(result.allowed);
+        assert_eq!(result.limit, 0); // No limiter configured
 
-        // Route with limiter should enforce limits
-        for _ in 0..5 {
+        // Route with limiter should enforce limits and return rate limit info
+        for i in 0..5 {
             let result = manager.check("api", "127.0.0.1", "/api/test", Option::<&NoHeaders>::None);
             assert!(result.allowed);
+            assert_eq!(result.limit, 5);
+            assert_eq!(result.remaining, 5 - i as u32 - 1);
         }
 
         let result = manager.check("api", "127.0.0.1", "/api/test", Option::<&NoHeaders>::None);
         assert!(!result.allowed);
         assert_eq!(result.status_code, 429);
+        assert_eq!(result.limit, 5);
+        assert_eq!(result.remaining, 0);
+        assert!(result.reset_at > 0);
+    }
+
+    #[test]
+    fn test_rate_limit_result_with_delay() {
+        let manager = RateLimitManager::new();
+
+        manager.register_route(
+            "api",
+            RateLimitConfig {
+                max_rps: 2,
+                burst: 1,
+                key: RateLimitKey::ClientIp,
+                ..Default::default()
+            },
+        );
+
+        // Use up the limit
+        manager.check("api", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        manager.check("api", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+
+        // Third request should be limited with suggested delay
+        let result = manager.check("api", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        assert!(!result.allowed);
+        assert!(result.suggested_delay_ms.is_some());
     }
 
     // Helper type for tests that don't need header access

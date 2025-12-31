@@ -106,6 +106,9 @@ fn parse_rate_limit_filter(node: &kdl::KdlNode) -> Result<Filter> {
         status_code,
         limit_message: get_string_entry(node, "message"),
         backend,
+        max_delay_ms: get_int_entry(node, "max-delay-ms")
+            .map(|v| v as u64)
+            .unwrap_or(5000),
     }))
 }
 

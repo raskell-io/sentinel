@@ -139,6 +139,10 @@ pub struct Config {
     #[serde(default)]
     pub observability: ObservabilityConfig,
 
+    /// Global rate limit configuration
+    #[serde(default)]
+    pub rate_limits: GlobalRateLimitConfig,
+
     /// Default upstream for Phase 0 testing
     #[serde(skip)]
     pub default_upstream: Option<UpstreamPeer>,
@@ -483,6 +487,7 @@ impl Config {
             waf: None,
             limits: Limits::for_testing(),
             observability: ObservabilityConfig::default(),
+            rate_limits: GlobalRateLimitConfig::default(),
             default_upstream: Some(UpstreamPeer {
                 address: "127.0.0.1:8081".to_string(),
                 tls: false,

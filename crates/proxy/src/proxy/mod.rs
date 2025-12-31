@@ -387,7 +387,18 @@ impl SentinelProxy {
     fn initialize_rate_limiters(config: &Config) -> RateLimitManager {
         use sentinel_config::RateLimitAction;
 
-        let manager = RateLimitManager::new();
+        // Create manager with global rate limit if configured
+        let manager = if let Some(ref global) = config.rate_limits.global {
+            info!(
+                max_rps = global.max_rps,
+                burst = global.burst,
+                key = ?global.key,
+                "Initializing global rate limiter"
+            );
+            RateLimitManager::with_global_limit(global.max_rps, global.burst)
+        } else {
+            RateLimitManager::new()
+        };
 
         for route in &config.routes {
             // Check for rate limit in route policies

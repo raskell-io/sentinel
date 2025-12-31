@@ -226,6 +226,54 @@ pub struct RateLimitFilter {
     /// Backend for rate limiting storage
     #[serde(default)]
     pub backend: RateLimitBackend,
+
+    /// Maximum delay in milliseconds before rejecting (for Delay action)
+    #[serde(default = "default_max_delay_ms", rename = "max-delay-ms")]
+    pub max_delay_ms: u64,
+}
+
+fn default_max_delay_ms() -> u64 {
+    5000 // 5 seconds max delay
+}
+
+// =============================================================================
+// Global Rate Limit Configuration
+// =============================================================================
+
+/// Global rate limit configuration applied server-wide
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GlobalRateLimitConfig {
+    /// Default requests per second for routes without explicit rate limiting
+    #[serde(default, rename = "default-rps")]
+    pub default_rps: Option<u32>,
+
+    /// Default burst size for routes without explicit rate limiting
+    #[serde(default, rename = "default-burst")]
+    pub default_burst: Option<u32>,
+
+    /// Default rate limit key
+    #[serde(default)]
+    pub key: RateLimitKey,
+
+    /// Global rate limit applied to all requests before route-specific limits
+    #[serde(default)]
+    pub global: Option<GlobalLimitConfig>,
+}
+
+/// Global rate limit that applies to all requests
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalLimitConfig {
+    /// Maximum requests per second globally
+    #[serde(rename = "max-rps")]
+    pub max_rps: u32,
+
+    /// Burst size for global limit
+    #[serde(default = "default_burst")]
+    pub burst: u32,
+
+    /// Key for global rate limiting (usually client-ip)
+    #[serde(default)]
+    pub key: RateLimitKey,
 }
 
 /// Backend storage for rate limit state
@@ -621,6 +669,7 @@ mod tests {
                 status_code: 429,
                 limit_message: None,
                 backend: RateLimitBackend::Local,
+                max_delay_ms: 5000,
             })
             .phase(),
             FilterPhase::Request
@@ -656,6 +705,7 @@ mod tests {
                 status_code: 429,
                 limit_message: None,
                 backend: RateLimitBackend::Local,
+                max_delay_ms: 5000,
             }),
         );
 

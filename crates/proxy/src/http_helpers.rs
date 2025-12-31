@@ -240,6 +240,57 @@ pub async fn write_json_error(
     write_error(session, status, &body, "application/json").await
 }
 
+/// Write a rate limit error response with standard rate limit headers
+///
+/// Includes the following headers:
+/// - `X-RateLimit-Limit`: Maximum requests per window
+/// - `X-RateLimit-Remaining`: Remaining requests in current window
+/// - `X-RateLimit-Reset`: Unix timestamp when the window resets
+/// - `Retry-After`: Seconds until the client should retry (for 429 responses)
+///
+/// # Arguments
+///
+/// * `session` - The Pingora session to write to
+/// * `status` - HTTP status code (typically 429)
+/// * `body` - Response body as string
+/// * `limit` - Maximum requests allowed per window
+/// * `remaining` - Remaining requests in current window
+/// * `reset_at` - Unix timestamp when the window resets
+/// * `retry_after` - Seconds until client should retry
+pub async fn write_rate_limit_error(
+    session: &mut Session,
+    status: u16,
+    body: &str,
+    limit: u32,
+    remaining: u32,
+    reset_at: u64,
+    retry_after: u64,
+) -> Result<(), Box<Error>> {
+    let mut resp_header = ResponseHeader::build(status, None)?;
+    resp_header.insert_header("Content-Type", "text/plain; charset=utf-8")?;
+    resp_header.insert_header("Content-Length", body.len().to_string())?;
+
+    // Add standard rate limit headers
+    resp_header.insert_header("X-RateLimit-Limit", limit.to_string())?;
+    resp_header.insert_header("X-RateLimit-Remaining", remaining.to_string())?;
+    resp_header.insert_header("X-RateLimit-Reset", reset_at.to_string())?;
+
+    // Add Retry-After header (seconds until reset)
+    if retry_after > 0 {
+        resp_header.insert_header("Retry-After", retry_after.to_string())?;
+    }
+
+    session.set_keepalive(None);
+    session
+        .write_response_header(Box::new(resp_header), false)
+        .await?;
+    session
+        .write_response_body(Some(Bytes::copy_from_slice(body.as_bytes())), true)
+        .await?;
+
+    Ok(())
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

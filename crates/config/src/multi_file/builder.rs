@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use tracing::debug;
 
 use crate::{
-    AgentConfig, Config, Limits, ListenerConfig, ObservabilityConfig, RouteConfig, ServerConfig,
-    UpstreamConfig, WafConfig,
+    AgentConfig, Config, GlobalRateLimitConfig, Limits, ListenerConfig, ObservabilityConfig,
+    RouteConfig, ServerConfig, UpstreamConfig, WafConfig,
 };
 
 use super::parsers::{
@@ -239,6 +239,7 @@ impl ConfigBuilder {
             waf: self.waf,
             limits: self.limits.unwrap_or_default(),
             observability: self.observability.unwrap_or_default(),
+            rate_limits: GlobalRateLimitConfig::default(),
             default_upstream: None,
         })
     }
