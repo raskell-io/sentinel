@@ -384,6 +384,110 @@ upstream "backend" {
 
 ---
 
+## Priority 6: Core Architecture Refinements
+
+Based on analysis in `AGENT_ARCHITECTURE_ANALYSIS.md`, two agents are candidates for core integration to reduce IPC overhead on the hot path.
+
+### 6.1 Basic Rate Limiting in Core
+**Status:** Currently external agent only
+**Impact:** MEDIUM - Eliminates ~200μs IPC overhead per request for universal feature
+**Effort:** 2-3 weeks
+
+**Rationale:**
+- Token bucket algorithm is trivial (~50μs)
+- IPC overhead (~200μs) exceeds algorithm cost by 4x
+- 99% of deployments need rate limiting
+- NGINX, Envoy, Traefik all have this built-in
+
+**Tasks:**
+- [ ] Implement basic token bucket in `crates/proxy/src/rate_limit.rs`
+- [ ] Add per-route and per-IP rate limit config to KDL
+- [ ] Wire into request pipeline before agent calls
+- [ ] Keep external agent for: distributed (Redis), custom keys, adaptive policies
+- [ ] Add `core-rate-limit` feature flag for gradual rollout
+- [ ] Benchmark latency improvement vs external agent
+
+**Proposed KDL:**
+```kdl
+rate-limit {
+    // Core handles simple cases (no IPC)
+    local {
+        default-rps 100
+        burst 20
+    }
+
+    // Agent handles complex cases (opt-in)
+    agent "ratelimit" {
+        enabled true
+        triggers ["custom-key", "distributed", "adaptive"]
+    }
+}
+```
+
+**Files:**
+- `crates/proxy/src/rate_limit.rs` - Core implementation
+- `crates/config/src/filters.rs` - Hybrid config schema
+
+### 6.2 Geo Filtering in Core
+**Status:** Planned as external agent
+**Impact:** LOW-MEDIUM - Simple lookup faster than agent round-trip
+**Effort:** 1-2 weeks
+
+**Rationale:**
+- MaxMind DB lookup is ~50μs
+- IPC overhead (~200μs) is 4x the lookup cost
+- Database updates are infrequent (weekly/monthly)
+- ~60% of deployments use geo filtering
+
+**Tasks:**
+- [ ] Add `maxminddb` crate dependency (feature-gated)
+- [ ] Implement GeoIP lookup in `crates/proxy/src/geo.rs`
+- [ ] Add file-watch for DB reload without restart
+- [ ] Add `deny-countries` and `allow-countries` to route config
+- [ ] Keep external agent for: compliance rules, region-specific routing
+- [ ] Add `geo-filter` feature flag
+
+**Proposed KDL:**
+```kdl
+geo {
+    database "/var/lib/GeoIP/GeoLite2-Country.mmdb"
+    reload-interval "24h"
+
+    // Simple blocking in core
+    deny-countries ["XX", "YY"]
+
+    // Complex policies via agent (opt-in)
+    agent "geo-policy" {
+        enabled true
+        triggers ["compliance", "routing"]
+    }
+}
+```
+
+**Files:**
+- `crates/proxy/src/geo.rs` - New module
+- `crates/config/src/geo.rs` - Geo config types
+
+### 6.3 Agents Confirmed as External
+
+The following agents were analyzed and confirmed to be correctly positioned as external:
+
+| Agent | Reason |
+|-------|--------|
+| Auth | Auth mechanisms vary wildly; may involve external calls |
+| Denylist | Real-time updates justify IPC overhead |
+| WAF | Parsing-heavy, rules change independently |
+| Lua Scripting | Sandboxing, VM pooling—textbook agent use case |
+| Adaptive Shield | ML inference is compute-heavy |
+| AI Gateway | Specialized, not universal |
+| LLM Guardian | AI-powered, unpredictable latency |
+| Request Hold | Async/blocking behavior (human approval) |
+| WebSocket Inspector | Frame-level parsing is complex |
+
+**Reference:** See `AGENT_ARCHITECTURE_ANALYSIS.md` for full decision framework.
+
+---
+
 ## Milestone Timeline
 
 | Milestone | Target | Deliverables |
@@ -393,6 +497,7 @@ upstream "backend" {
 | **M3: Protected** | +8 weeks | WAF agent reference, body inspection |
 | **M4: Scalable** | +12 weeks | Distributed rate limiting, service discovery |
 | **M5: Observable** | +14 weeks | OpenTelemetry, enhanced audit logging |
+| **M6: Optimized** | +18 weeks | Core rate limiting, geo filtering (optional) |
 
 ---
 
@@ -417,6 +522,12 @@ upstream "backend" {
 - [ ] Service discovery with health-aware routing
 - [ ] Distributed tracing with Jaeger/Tempo
 - [ ] Grafana dashboards for all key metrics
+
+### For Optimized Deployment (M6)
+- [ ] Core rate limiting reducing p99 latency by 15%+ vs agent-only
+- [ ] Geo filtering in core with <100μs lookup time
+- [ ] Hybrid rate limit config working (core + agent triggers)
+- [ ] Feature flags allowing gradual rollout
 
 ---
 
