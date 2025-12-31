@@ -318,3 +318,87 @@ impl Default for RequestContext {
         Self::new()
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rate_limit_header_info() {
+        let info = RateLimitHeaderInfo {
+            limit: 100,
+            remaining: 42,
+            reset_at: 1704067200,
+        };
+
+        assert_eq!(info.limit, 100);
+        assert_eq!(info.remaining, 42);
+        assert_eq!(info.reset_at, 1704067200);
+    }
+
+    #[test]
+    fn test_request_context_default() {
+        let ctx = RequestContext::new();
+
+        assert!(ctx.trace_id.is_empty());
+        assert!(ctx.rate_limit_info.is_none());
+        assert!(ctx.route_id.is_none());
+        assert!(ctx.config.is_none());
+    }
+
+    #[test]
+    fn test_request_context_rate_limit_info() {
+        let mut ctx = RequestContext::new();
+
+        // Initially no rate limit info
+        assert!(ctx.rate_limit_info.is_none());
+
+        // Set rate limit info
+        ctx.rate_limit_info = Some(RateLimitHeaderInfo {
+            limit: 50,
+            remaining: 25,
+            reset_at: 1704067300,
+        });
+
+        assert!(ctx.rate_limit_info.is_some());
+        let info = ctx.rate_limit_info.as_ref().unwrap();
+        assert_eq!(info.limit, 50);
+        assert_eq!(info.remaining, 25);
+        assert_eq!(info.reset_at, 1704067300);
+    }
+
+    #[test]
+    fn test_request_context_elapsed() {
+        let ctx = RequestContext::new();
+
+        // Elapsed time should be very small (less than 1 second)
+        let elapsed = ctx.elapsed();
+        assert!(elapsed.as_secs() < 1);
+    }
+
+    #[test]
+    fn test_request_context_setters() {
+        let mut ctx = RequestContext::new();
+
+        ctx.set_trace_id("trace-123");
+        assert_eq!(ctx.trace_id(), "trace-123");
+        assert_eq!(ctx.correlation_id(), "trace-123");
+
+        ctx.set_route_id("my-route");
+        assert_eq!(ctx.route_id(), Some("my-route"));
+
+        ctx.set_upstream("backend-pool");
+        assert_eq!(ctx.upstream(), Some("backend-pool"));
+
+        ctx.inc_upstream_attempts();
+        ctx.inc_upstream_attempts();
+        assert_eq!(ctx.upstream_attempts(), 2);
+
+        ctx.set_response_bytes(1024);
+        assert_eq!(ctx.response_bytes(), 1024);
+    }
+}

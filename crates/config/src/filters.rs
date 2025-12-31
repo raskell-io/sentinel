@@ -723,4 +723,71 @@ mod tests {
         assert_eq!(config.timeout_ms, 50);
         assert!(config.fallback_local);
     }
+
+    #[test]
+    fn test_global_rate_limit_config_default() {
+        let config = GlobalRateLimitConfig::default();
+        assert!(config.default_rps.is_none());
+        assert!(config.default_burst.is_none());
+        assert_eq!(config.key, RateLimitKey::ClientIp);
+        assert!(config.global.is_none());
+    }
+
+    #[test]
+    fn test_global_rate_limit_config_with_values() {
+        let config = GlobalRateLimitConfig {
+            default_rps: Some(100),
+            default_burst: Some(20),
+            key: RateLimitKey::Path,
+            global: Some(GlobalLimitConfig {
+                max_rps: 10000,
+                burst: 1000,
+                key: RateLimitKey::ClientIp,
+            }),
+        };
+
+        assert_eq!(config.default_rps, Some(100));
+        assert_eq!(config.default_burst, Some(20));
+        assert_eq!(config.key, RateLimitKey::Path);
+        assert!(config.global.is_some());
+
+        let global = config.global.unwrap();
+        assert_eq!(global.max_rps, 10000);
+        assert_eq!(global.burst, 1000);
+        assert_eq!(global.key, RateLimitKey::ClientIp);
+    }
+
+    #[test]
+    fn test_rate_limit_filter_max_delay_ms() {
+        let filter = RateLimitFilter {
+            max_rps: 100,
+            burst: 10,
+            key: RateLimitKey::ClientIp,
+            on_limit: RateLimitAction::Delay,
+            status_code: 429,
+            limit_message: None,
+            backend: RateLimitBackend::Local,
+            max_delay_ms: 3000,
+        };
+
+        assert_eq!(filter.max_delay_ms, 3000);
+        assert_eq!(filter.on_limit, RateLimitAction::Delay);
+    }
+
+    #[test]
+    fn test_rate_limit_filter_default_max_delay() {
+        // When creating with default, max_delay_ms should be 5000
+        let filter = RateLimitFilter {
+            max_rps: 100,
+            burst: 10,
+            key: RateLimitKey::ClientIp,
+            on_limit: RateLimitAction::Reject,
+            status_code: 429,
+            limit_message: None,
+            backend: RateLimitBackend::Local,
+            max_delay_ms: 5000, // default value
+        };
+
+        assert_eq!(filter.max_delay_ms, 5000);
+    }
 }

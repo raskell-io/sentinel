@@ -781,4 +781,199 @@ mod tests {
             None
         }
     }
+
+    #[test]
+    fn test_global_rate_limiter() {
+        let manager = RateLimitManager::with_global_limit(3, 1);
+
+        // Global limiter should apply to all routes
+        for i in 0..3 {
+            let result = manager.check("any-route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+            assert!(result.allowed, "Request {} should be allowed", i);
+            assert_eq!(result.limit, 3);
+            assert_eq!(result.remaining, 3 - i as u32 - 1);
+        }
+
+        // 4th request should be blocked by global limiter
+        let result = manager.check("different-route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        assert!(!result.allowed);
+        assert_eq!(result.limiter, "global");
+    }
+
+    #[test]
+    fn test_global_and_route_limiters() {
+        let manager = RateLimitManager::with_global_limit(10, 5);
+
+        // Register a more restrictive route limiter
+        manager.register_route(
+            "strict-api",
+            RateLimitConfig {
+                max_rps: 2,
+                burst: 1,
+                key: RateLimitKey::ClientIp,
+                ..Default::default()
+            },
+        );
+
+        // Route limiter should trigger first (more restrictive)
+        let result1 = manager.check("strict-api", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        let result2 = manager.check("strict-api", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        assert!(result1.allowed);
+        assert!(result2.allowed);
+
+        // 3rd request should be blocked by route limiter
+        let result3 = manager.check("strict-api", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        assert!(!result3.allowed);
+        assert_eq!(result3.limiter, "strict-api");
+
+        // Different route should still work (global not exhausted)
+        let result4 = manager.check("other-route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        assert!(result4.allowed);
+    }
+
+    #[test]
+    fn test_suggested_delay_calculation() {
+        let manager = RateLimitManager::new();
+
+        manager.register_route(
+            "api",
+            RateLimitConfig {
+                max_rps: 10,
+                burst: 5,
+                key: RateLimitKey::ClientIp,
+                ..Default::default()
+            },
+        );
+
+        // Exhaust the limit
+        for _ in 0..10 {
+            manager.check("api", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        }
+
+        // Requests over limit should have suggested delay
+        let result = manager.check("api", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        assert!(!result.allowed);
+        assert!(result.suggested_delay_ms.is_some());
+
+        // Delay should be proportional to how far over limit
+        // Formula: (excess * 1000) / limit
+        // With 1 excess request and limit of 10: (1 * 1000) / 10 = 100ms
+        let delay = result.suggested_delay_ms.unwrap();
+        assert!(delay > 0, "Delay should be positive");
+        assert!(delay <= 1000, "Delay should be reasonable");
+    }
+
+    #[test]
+    fn test_reset_timestamp_is_future() {
+        let config = RateLimitConfig {
+            max_rps: 5,
+            burst: 2,
+            key: RateLimitKey::ClientIp,
+            ..Default::default()
+        };
+        let pool = RateLimiterPool::new(config);
+
+        let info = pool.check("10.0.0.1");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Reset timestamp should be in the future (within the next second)
+        assert!(info.reset_at >= now, "Reset time should be >= now");
+        assert!(info.reset_at <= now + 2, "Reset time should be within 2 seconds");
+    }
+
+    #[test]
+    fn test_rate_limit_check_info_remaining_clamps_to_zero() {
+        let config = RateLimitConfig {
+            max_rps: 2,
+            burst: 1,
+            key: RateLimitKey::ClientIp,
+            ..Default::default()
+        };
+        let pool = RateLimiterPool::new(config);
+
+        // Exhaust the limit
+        pool.check("10.0.0.1");
+        pool.check("10.0.0.1");
+
+        // Over-limit requests should show remaining as 0, not negative
+        let info = pool.check("10.0.0.1");
+        assert_eq!(info.remaining, 0);
+        assert_eq!(info.outcome, RateLimitOutcome::Limited);
+    }
+
+    #[test]
+    fn test_rate_limit_result_fields() {
+        // Create a result by checking a rate limited request
+        let manager = RateLimitManager::new();
+        manager.register_route(
+            "test",
+            RateLimitConfig {
+                max_rps: 1,
+                burst: 1,
+                key: RateLimitKey::ClientIp,
+                ..Default::default()
+            },
+        );
+
+        // First request allowed
+        let allowed_result = manager.check("test", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        assert!(allowed_result.allowed);
+        assert_eq!(allowed_result.limit, 1);
+        assert!(allowed_result.reset_at > 0);
+
+        // Second request should be blocked
+        let blocked_result = manager.check("test", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        assert!(!blocked_result.allowed);
+        assert_eq!(blocked_result.status_code, 429);
+        assert_eq!(blocked_result.remaining, 0);
+    }
+
+    #[test]
+    fn test_has_route_limiter() {
+        let manager = RateLimitManager::new();
+        assert!(!manager.has_route_limiter("test-route"));
+
+        manager.register_route(
+            "test-route",
+            RateLimitConfig {
+                max_rps: 10,
+                burst: 5,
+                key: RateLimitKey::ClientIp,
+                ..Default::default()
+            },
+        );
+        assert!(manager.has_route_limiter("test-route"));
+        assert!(!manager.has_route_limiter("other-route"));
+    }
+
+    #[test]
+    fn test_global_limiter_is_enabled() {
+        let manager = RateLimitManager::with_global_limit(100, 50);
+        // Global limiter should be enabled
+        assert!(manager.is_enabled());
+    }
+
+    #[test]
+    fn test_is_enabled() {
+        let empty_manager = RateLimitManager::new();
+        assert!(!empty_manager.is_enabled());
+
+        let global_manager = RateLimitManager::with_global_limit(100, 50);
+        assert!(global_manager.is_enabled());
+
+        let route_manager = RateLimitManager::new();
+        route_manager.register_route(
+            "test",
+            RateLimitConfig {
+                max_rps: 10,
+                burst: 5,
+                key: RateLimitKey::ClientIp,
+                ..Default::default()
+            },
+        );
+        assert!(route_manager.is_enabled());
+    }
 }

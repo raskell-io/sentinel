@@ -797,3 +797,189 @@ fn parse_metrics_config(node: &kdl::KdlNode) -> Result<crate::observability::Met
 
     Ok(config)
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filters::RateLimitKey;
+
+    #[test]
+    fn test_parse_rate_limits_config_empty() {
+        let kdl = r#"rate-limits {}"#;
+        let doc: kdl::KdlDocument = kdl.parse().unwrap();
+        let node = doc.nodes().first().unwrap();
+
+        let config = parse_rate_limits_config(node).unwrap();
+        assert!(config.default_rps.is_none());
+        assert!(config.default_burst.is_none());
+        assert_eq!(config.key, RateLimitKey::ClientIp);
+        assert!(config.global.is_none());
+    }
+
+    #[test]
+    fn test_parse_rate_limits_config_with_defaults() {
+        let kdl = r#"
+            rate-limits {
+                default-rps 100
+                default-burst 20
+                key "path"
+            }
+        "#;
+        let doc: kdl::KdlDocument = kdl.parse().unwrap();
+        let node = doc.nodes().first().unwrap();
+
+        let config = parse_rate_limits_config(node).unwrap();
+        assert_eq!(config.default_rps, Some(100));
+        assert_eq!(config.default_burst, Some(20));
+        assert_eq!(config.key, RateLimitKey::Path);
+        assert!(config.global.is_none());
+    }
+
+    #[test]
+    fn test_parse_rate_limits_config_with_global() {
+        let kdl = r#"
+            rate-limits {
+                default-rps 50
+                global {
+                    max-rps 10000
+                    burst 1000
+                    key "client-ip"
+                }
+            }
+        "#;
+        let doc: kdl::KdlDocument = kdl.parse().unwrap();
+        let node = doc.nodes().first().unwrap();
+
+        let config = parse_rate_limits_config(node).unwrap();
+        assert_eq!(config.default_rps, Some(50));
+        assert!(config.global.is_some());
+
+        let global = config.global.unwrap();
+        assert_eq!(global.max_rps, 10000);
+        assert_eq!(global.burst, 1000);
+        assert_eq!(global.key, RateLimitKey::ClientIp);
+    }
+
+    #[test]
+    fn test_parse_rate_limit_key_variations() {
+        assert_eq!(parse_rate_limit_key("client-ip").unwrap(), RateLimitKey::ClientIp);
+        assert_eq!(parse_rate_limit_key("ip").unwrap(), RateLimitKey::ClientIp);
+        assert_eq!(parse_rate_limit_key("path").unwrap(), RateLimitKey::Path);
+        assert_eq!(parse_rate_limit_key("route").unwrap(), RateLimitKey::Route);
+        assert_eq!(parse_rate_limit_key("client-ip-and-path").unwrap(), RateLimitKey::ClientIpAndPath);
+    }
+
+    #[test]
+    fn test_parse_rate_limit_key_header() {
+        let key = parse_rate_limit_key("header:X-Custom-Key").unwrap();
+        match key {
+            // Header name is lowercased during parsing
+            RateLimitKey::Header(name) => assert_eq!(name, "x-custom-key"),
+            _ => panic!("Expected Header variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rate_limit_key_invalid() {
+        let result = parse_rate_limit_key("invalid-key-type");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_full_config_with_rate_limits() {
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            rate-limits {
+                default-rps 100
+                default-burst 20
+                global {
+                    max-rps 5000
+                    burst 500
+                    key "client-ip"
+                }
+            }
+
+            routes {
+                route "default" {
+                    match {
+                        path-prefix "/"
+                    }
+                    builtin "status"
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).unwrap();
+
+        assert_eq!(config.rate_limits.default_rps, Some(100));
+        assert_eq!(config.rate_limits.default_burst, Some(20));
+        assert!(config.rate_limits.global.is_some());
+
+        let global = config.rate_limits.global.as_ref().unwrap();
+        assert_eq!(global.max_rps, 5000);
+        assert_eq!(global.burst, 500);
+    }
+
+    #[test]
+    fn test_parse_rate_limit_filter_with_max_delay() {
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            filters {
+                filter "api-limiter" {
+                    type "rate-limit"
+                    max-rps 50
+                    burst 10
+                    key "client-ip"
+                    on-limit "delay"
+                    max-delay-ms 3000
+                }
+            }
+
+            routes {
+                route "default" {
+                    match {
+                        path-prefix "/"
+                    }
+                    builtin "status"
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).unwrap();
+
+        let filter = config.filters.get("api-limiter").unwrap();
+        match &filter.filter {
+            crate::Filter::RateLimit(rl) => {
+                assert_eq!(rl.max_rps, 50);
+                assert_eq!(rl.burst, 10);
+                assert_eq!(rl.on_limit, crate::RateLimitAction::Delay);
+                assert_eq!(rl.max_delay_ms, 3000);
+            }
+            _ => panic!("Expected RateLimit filter"),
+        }
+    }
+}

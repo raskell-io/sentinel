@@ -95,6 +95,28 @@ routes {
         service-type "builtin"
         builtin-handler "upstreams"
     }
+
+    // Cache statistics endpoint on admin port
+    route "cache-stats" {
+        priority "high"
+        matches {
+            path "/admin/cache/stats"
+            path "/cache/stats"
+        }
+        service-type "builtin"
+        builtin-handler "cache-stats"
+    }
+
+    // Cache purge endpoint on admin port (PURGE method or POST)
+    route "cache-purge" {
+        priority "high"
+        matches {
+            path-prefix "/admin/cache/purge"
+            path-prefix "/cache/purge"
+        }
+        service-type "builtin"
+        builtin-handler "cache-purge"
+    }
 }
 
 limits {
@@ -255,6 +277,48 @@ pub fn create_default_config() -> Config {
                 websocket: false,
                 websocket_inspection: false,
             },
+            RouteConfig {
+                id: "cache-stats".to_string(),
+                priority: Priority::High,
+                matches: vec![
+                    MatchCondition::Path("/admin/cache/stats".to_string()),
+                    MatchCondition::Path("/cache/stats".to_string()),
+                ],
+                upstream: None,
+                service_type: ServiceType::Builtin,
+                policies: RoutePolicies::default(),
+                filters: vec![],
+                builtin_handler: Some(BuiltinHandler::CacheStats),
+                waf_enabled: false,
+                circuit_breaker: None,
+                retry_policy: None,
+                static_files: None,
+                api_schema: None,
+                error_pages: None,
+                websocket: false,
+                websocket_inspection: false,
+            },
+            RouteConfig {
+                id: "cache-purge".to_string(),
+                priority: Priority::High,
+                matches: vec![
+                    MatchCondition::PathPrefix("/admin/cache/purge".to_string()),
+                    MatchCondition::PathPrefix("/cache/purge".to_string()),
+                ],
+                upstream: None,
+                service_type: ServiceType::Builtin,
+                policies: RoutePolicies::default(),
+                filters: vec![],
+                builtin_handler: Some(BuiltinHandler::CachePurge),
+                waf_enabled: false,
+                circuit_breaker: None,
+                retry_policy: None,
+                static_files: None,
+                api_schema: None,
+                error_pages: None,
+                websocket: false,
+                websocket_inspection: false,
+            },
         ],
         upstreams: HashMap::new(),
         filters: HashMap::new(),
@@ -286,10 +350,12 @@ mod tests {
     fn test_create_default_config() {
         let config = create_default_config();
         assert_eq!(config.listeners.len(), 2);
-        assert_eq!(config.routes.len(), 5);
+        assert_eq!(config.routes.len(), 7);
         assert!(config.routes.iter().any(|r| r.id == "status"));
         assert!(config.routes.iter().any(|r| r.id == "health"));
         assert!(config.routes.iter().any(|r| r.id == "config"));
         assert!(config.routes.iter().any(|r| r.id == "upstreams"));
+        assert!(config.routes.iter().any(|r| r.id == "cache-stats"));
+        assert!(config.routes.iter().any(|r| r.id == "cache-purge"));
     }
 }
