@@ -129,7 +129,7 @@ listener "https" {
 - [x] Expose Prometheus text format
 - [x] Add `/_/health` and `/_/ready` endpoints
 - [ ] Document available metrics
-- [ ] Add Grafana dashboard template
+- [x] Add Grafana dashboard template (`config/grafana/sentinel-dashboard.json`)
 
 **Files:**
 - `crates/proxy/src/builtin_handlers.rs` - Add metrics handler
@@ -560,7 +560,7 @@ The following agents were analyzed and confirmed to be correctly positioned as e
 - [ ] Multi-instance deployment with shared rate limits
 - [ ] Service discovery with health-aware routing
 - [ ] Distributed tracing with Jaeger/Tempo
-- [ ] Grafana dashboards for all key metrics
+- [x] Grafana dashboards for all key metrics (`config/grafana/sentinel-dashboard.json`)
 
 ### For Optimized Deployment (M6)
 - [ ] Core rate limiting reducing p99 latency by 15%+ vs agent-only
