@@ -992,4 +992,219 @@ mod tests {
             _ => panic!("Expected RateLimit filter"),
         }
     }
+
+    #[test]
+    fn test_parse_geo_filter_block_mode() {
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            filters {
+                filter "block-countries" {
+                    type "geo"
+                    database-path "/etc/sentinel/GeoLite2-Country.mmdb"
+                    action "block"
+                    countries "RU,CN,KP,IR"
+                    on-failure "closed"
+                    status-code 403
+                    block-message "Access denied from your region"
+                    cache-ttl-secs 7200
+                    add-country-header true
+                }
+            }
+
+            routes {
+                route "default" {
+                    match {
+                        path-prefix "/"
+                    }
+                    builtin "status"
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).unwrap();
+
+        let filter = config.filters.get("block-countries").unwrap();
+        match &filter.filter {
+            crate::Filter::Geo(geo) => {
+                assert_eq!(geo.database_path, "/etc/sentinel/GeoLite2-Country.mmdb");
+                assert_eq!(geo.database_type, Some(crate::GeoDatabaseType::MaxMind));
+                assert_eq!(geo.action, crate::GeoFilterAction::Block);
+                assert_eq!(geo.countries, vec!["RU", "CN", "KP", "IR"]);
+                assert_eq!(geo.on_failure, crate::GeoFailureMode::Closed);
+                assert_eq!(geo.status_code, 403);
+                assert_eq!(
+                    geo.block_message,
+                    Some("Access denied from your region".to_string())
+                );
+                assert_eq!(geo.cache_ttl_secs, 7200);
+                assert!(geo.add_country_header);
+            }
+            _ => panic!("Expected Geo filter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_geo_filter_allow_mode() {
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            filters {
+                filter "us-only" {
+                    type "geo"
+                    database-path "/etc/sentinel/GeoLite2-Country.mmdb"
+                    action "allow"
+                    countries "US,CA"
+                    on-failure "open"
+                    status-code 451
+                }
+            }
+
+            routes {
+                route "default" {
+                    match {
+                        path-prefix "/"
+                    }
+                    builtin "status"
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).unwrap();
+
+        let filter = config.filters.get("us-only").unwrap();
+        match &filter.filter {
+            crate::Filter::Geo(geo) => {
+                assert_eq!(geo.action, crate::GeoFilterAction::Allow);
+                assert_eq!(geo.countries, vec!["US", "CA"]);
+                assert_eq!(geo.on_failure, crate::GeoFailureMode::Open);
+                assert_eq!(geo.status_code, 451);
+            }
+            _ => panic!("Expected Geo filter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_geo_filter_log_only_mode() {
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            filters {
+                filter "geo-tagging" {
+                    type "geo"
+                    database-path "/etc/sentinel/IP2LOCATION-LITE-DB1.BIN"
+                    database-type "ip2location"
+                    action "log-only"
+                }
+            }
+
+            routes {
+                route "default" {
+                    match {
+                        path-prefix "/"
+                    }
+                    builtin "status"
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).unwrap();
+
+        let filter = config.filters.get("geo-tagging").unwrap();
+        match &filter.filter {
+            crate::Filter::Geo(geo) => {
+                assert_eq!(geo.database_path, "/etc/sentinel/IP2LOCATION-LITE-DB1.BIN");
+                assert_eq!(geo.database_type, Some(crate::GeoDatabaseType::Ip2Location));
+                assert_eq!(geo.action, crate::GeoFilterAction::LogOnly);
+                assert!(geo.countries.is_empty());
+            }
+            _ => panic!("Expected Geo filter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_geo_filter_auto_detect_database_type() {
+        // MaxMind .mmdb extension
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            filters {
+                filter "geo-mmdb" {
+                    type "geo"
+                    database-path "/path/to/db.mmdb"
+                    action "log-only"
+                }
+                filter "geo-bin" {
+                    type "geo"
+                    database-path "/path/to/db.bin"
+                    action "log-only"
+                }
+            }
+
+            routes {
+                route "default" {
+                    match {
+                        path-prefix "/"
+                    }
+                    builtin "status"
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).unwrap();
+
+        // .mmdb should be detected as MaxMind
+        let filter = config.filters.get("geo-mmdb").unwrap();
+        match &filter.filter {
+            crate::Filter::Geo(geo) => {
+                assert_eq!(geo.database_type, Some(crate::GeoDatabaseType::MaxMind));
+            }
+            _ => panic!("Expected Geo filter"),
+        }
+
+        // .bin should be detected as IP2Location
+        let filter = config.filters.get("geo-bin").unwrap();
+        match &filter.filter {
+            crate::Filter::Geo(geo) => {
+                assert_eq!(geo.database_type, Some(crate::GeoDatabaseType::Ip2Location));
+            }
+            _ => panic!("Expected Geo filter"),
+        }
+    }
 }

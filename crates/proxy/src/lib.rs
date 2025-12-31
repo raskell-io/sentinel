@@ -49,6 +49,7 @@ pub mod cache;
 pub mod discovery;
 pub mod distributed_rate_limit;
 pub mod errors;
+pub mod geo_filter;
 pub mod health;
 pub mod http_helpers;
 pub mod logging;
@@ -143,6 +144,9 @@ pub use logging::{
 pub use rate_limit::{
     RateLimitConfig, RateLimitManager, RateLimitOutcome, RateLimitResult, RateLimiterPool,
 };
+
+// GeoIP filtering
+pub use geo_filter::{GeoFilterManager, GeoFilterPool, GeoFilterResult, GeoLookupError};
 
 // Distributed rate limiting
 #[cfg(feature = "distributed-rate-limit")]

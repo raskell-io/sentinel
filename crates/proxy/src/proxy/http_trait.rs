@@ -564,6 +564,65 @@ impl ProxyHttp for SentinelProxy {
             }
         }
 
+        // Geo filtering
+        if let Some(route_id) = ctx.route_id.as_deref() {
+            if let Some(ref route_config) = ctx.route_config {
+                for filter_id in &route_config.filters {
+                    if let Some(result) = self.geo_filter_manager.check(filter_id, &ctx.client_ip) {
+                        // Store country code for response header
+                        ctx.geo_country_code = result.country_code.clone();
+                        ctx.geo_lookup_performed = true;
+
+                        if !result.allowed {
+                            warn!(
+                                correlation_id = %ctx.trace_id,
+                                route_id = route_id,
+                                client_ip = %ctx.client_ip,
+                                country = ?result.country_code,
+                                filter_id = %filter_id,
+                                "Request blocked by geo filter"
+                            );
+                            self.metrics.record_blocked_request("geo_blocked");
+
+                            // Audit log the geo block
+                            let audit_entry = AuditLogEntry::new(
+                                &ctx.trace_id,
+                                AuditEventType::Blocked,
+                                &ctx.method,
+                                &ctx.path,
+                                &ctx.client_ip,
+                            )
+                            .with_route_id(route_id)
+                            .with_status_code(result.status_code)
+                            .with_reason(format!(
+                                "Geo blocked: country={}, filter={}",
+                                result.country_code.as_deref().unwrap_or("unknown"),
+                                filter_id
+                            ));
+                            self.log_manager.log_audit(&audit_entry);
+
+                            // Send geo block response
+                            let body = result
+                                .block_message
+                                .unwrap_or_else(|| "Access denied".to_string());
+
+                            crate::http_helpers::write_error(
+                                session,
+                                result.status_code,
+                                &body,
+                                "text/plain",
+                            )
+                            .await?;
+                            return Ok(true); // Request complete, don't continue
+                        }
+
+                        // Only check first geo filter that matches
+                        break;
+                    }
+                }
+            }
+        }
+
         // Check for WebSocket upgrade requests
         let is_websocket_upgrade = session
             .req_header()
@@ -1048,6 +1107,11 @@ impl ProxyHttp for SentinelProxy {
             upstream_response
                 .insert_header("X-RateLimit-Remaining", rate_info.remaining.to_string())?;
             upstream_response.insert_header("X-RateLimit-Reset", rate_info.reset_at.to_string())?;
+        }
+
+        // Add GeoIP country header if geo lookup was performed
+        if let Some(ref country_code) = ctx.geo_country_code {
+            upstream_response.insert_header("X-GeoIP-Country", country_code)?;
         }
 
         // Generate custom error pages for error responses

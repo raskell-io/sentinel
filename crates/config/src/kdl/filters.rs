@@ -43,7 +43,7 @@ pub fn parse_filter_definitions(node: &kdl::KdlNode) -> Result<HashMap<String, F
 pub fn parse_single_filter_definition(node: &kdl::KdlNode) -> Result<Filter> {
     let filter_type = get_string_entry(node, "type").ok_or_else(|| {
         anyhow::anyhow!(
-            "Filter definition requires a 'type' field. Valid types: rate-limit, agent, headers, compress, cors, timeout, log"
+            "Filter definition requires a 'type' field. Valid types: rate-limit, agent, headers, compress, cors, timeout, log, geo"
         )
     })?;
 
@@ -57,8 +57,9 @@ pub fn parse_single_filter_definition(node: &kdl::KdlNode) -> Result<Filter> {
         "cors" => Ok(Filter::Cors(CorsFilter::default())),
         "timeout" => parse_timeout_filter(node),
         "log" => parse_log_filter(node),
+        "geo" => parse_geo_filter(node),
         other => Err(anyhow::anyhow!(
-            "Unknown filter type: '{}'. Valid types: rate-limit, agent, headers, compress, cors, timeout, log",
+            "Unknown filter type: '{}'. Valid types: rate-limit, agent, headers, compress, cors, timeout, log, geo",
             other
         )),
     }
@@ -277,5 +278,79 @@ fn parse_log_filter(node: &kdl::KdlNode) -> Result<Filter> {
             .unwrap_or(4096),
         fields: vec![],
         level: get_string_entry(node, "level").unwrap_or_else(|| "info".to_string()),
+    }))
+}
+
+fn parse_geo_filter(node: &kdl::KdlNode) -> Result<Filter> {
+    let database_path = get_string_entry(node, "database-path").ok_or_else(|| {
+        anyhow::anyhow!("Geo filter requires 'database-path' pointing to a GeoIP database file")
+    })?;
+
+    // Auto-detect database type from file extension if not specified
+    let database_type = get_string_entry(node, "database-type")
+        .and_then(|s| match s.as_str() {
+            "maxmind" => Some(GeoDatabaseType::MaxMind),
+            "ip2location" => Some(GeoDatabaseType::Ip2Location),
+            _ => None,
+        })
+        .or_else(|| {
+            if database_path.ends_with(".mmdb") {
+                Some(GeoDatabaseType::MaxMind)
+            } else if database_path.ends_with(".bin") || database_path.ends_with(".BIN") {
+                Some(GeoDatabaseType::Ip2Location)
+            } else {
+                None
+            }
+        });
+
+    let action = get_string_entry(node, "action")
+        .map(|s| match s.as_str() {
+            "block" => GeoFilterAction::Block,
+            "allow" => GeoFilterAction::Allow,
+            "log-only" => GeoFilterAction::LogOnly,
+            _ => GeoFilterAction::Block,
+        })
+        .unwrap_or_default();
+
+    // Parse countries - comma-separated list of ISO 3166-1 alpha-2 codes
+    let countries = get_string_entry(node, "countries")
+        .map(|s| {
+            s.split(',')
+                .map(|c| c.trim().to_uppercase())
+                .filter(|c| !c.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let on_failure = get_string_entry(node, "on-failure")
+        .map(|s| match s.as_str() {
+            "open" => GeoFailureMode::Open,
+            "closed" => GeoFailureMode::Closed,
+            _ => GeoFailureMode::Open,
+        })
+        .unwrap_or_default();
+
+    let status_code = get_int_entry(node, "status-code")
+        .map(|v| v as u16)
+        .unwrap_or(403);
+
+    let block_message = get_string_entry(node, "block-message");
+
+    let cache_ttl_secs = get_int_entry(node, "cache-ttl-secs")
+        .map(|v| v as u64)
+        .unwrap_or(3600);
+
+    let add_country_header = get_bool_entry(node, "add-country-header").unwrap_or(true);
+
+    Ok(Filter::Geo(GeoFilter {
+        database_path,
+        database_type,
+        action,
+        countries,
+        on_failure,
+        status_code,
+        block_message,
+        cache_ttl_secs,
+        add_country_header,
     }))
 }

@@ -106,6 +106,12 @@ pub struct RequestContext {
     /// Rate limit info for response headers (set during request_filter)
     pub(crate) rate_limit_info: Option<RateLimitHeaderInfo>,
 
+    // === GeoIP Filtering ===
+    /// Country code from GeoIP lookup (ISO 3166-1 alpha-2)
+    pub(crate) geo_country_code: Option<String>,
+    /// Whether a geo lookup was performed for this request
+    pub(crate) geo_lookup_performed: bool,
+
     // === Body Streaming ===
     /// Body streaming mode for request body inspection
     pub(crate) request_body_streaming_mode: BodyStreamingMode,
@@ -157,6 +163,8 @@ impl RequestContext {
             body_buffer: Vec::new(),
             body_inspection_agents: Vec::new(),
             rate_limit_info: None,
+            geo_country_code: None,
+            geo_lookup_performed: false,
             request_body_streaming_mode: BodyStreamingMode::Buffer,
             request_body_chunk_index: 0,
             agent_needs_more: false,
@@ -278,6 +286,18 @@ impl RequestContext {
     #[inline]
     pub fn response_bytes(&self) -> u64 {
         self.response_bytes
+    }
+
+    /// Get the GeoIP country code, if determined.
+    #[inline]
+    pub fn geo_country_code(&self) -> Option<&str> {
+        self.geo_country_code.as_deref()
+    }
+
+    /// Check if a geo lookup was performed for this request.
+    #[inline]
+    pub fn geo_lookup_performed(&self) -> bool {
+        self.geo_lookup_performed
     }
 
     // === Mutation helpers ===

@@ -30,6 +30,7 @@ use crate::app::AppState;
 use crate::builtin_handlers::BuiltinHandlerState;
 use crate::cache::{CacheConfig, CacheManager};
 use crate::errors::ErrorHandler;
+use crate::geo_filter::GeoFilterManager;
 use crate::health::PassiveHealthChecker;
 use crate::http_helpers;
 use crate::logging::{LogManager, SharedLogManager};
@@ -81,6 +82,8 @@ pub struct SentinelProxy {
     pub(super) rate_limit_manager: Arc<RateLimitManager>,
     /// HTTP cache manager
     pub(super) cache_manager: Arc<CacheManager>,
+    /// GeoIP filter manager
+    pub(super) geo_filter_manager: Arc<GeoFilterManager>,
 }
 
 impl SentinelProxy {
@@ -235,6 +238,9 @@ impl SentinelProxy {
         // Initialize cache manager
         let cache_manager = Arc::new(Self::initialize_cache_manager(&config));
 
+        // Initialize geo filter manager
+        let geo_filter_manager = Arc::new(Self::initialize_geo_filters(&config));
+
         Ok(Self {
             config_manager,
             route_matcher,
@@ -253,6 +259,7 @@ impl SentinelProxy {
             health_check_runner,
             rate_limit_manager,
             cache_manager,
+            geo_filter_manager,
         })
     }
 
@@ -510,6 +517,45 @@ impl SentinelProxy {
             info!(enabled_routes = enabled_count, "HTTP caching initialized");
         } else {
             debug!("HTTP cache manager initialized (no routes with caching enabled)");
+        }
+
+        manager
+    }
+
+    /// Initialize geo filters from configuration
+    fn initialize_geo_filters(config: &Config) -> GeoFilterManager {
+        let manager = GeoFilterManager::new();
+
+        for (filter_id, filter_config) in &config.filters {
+            if let sentinel_config::Filter::Geo(ref geo_filter) = filter_config.filter {
+                match manager.register_filter(filter_id, geo_filter.clone()) {
+                    Ok(_) => {
+                        info!(
+                            filter_id = %filter_id,
+                            database_path = %geo_filter.database_path,
+                            action = ?geo_filter.action,
+                            countries_count = geo_filter.countries.len(),
+                            "Registered geo filter"
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            filter_id = %filter_id,
+                            error = %e,
+                            "Failed to register geo filter"
+                        );
+                    }
+                }
+            }
+        }
+
+        let filter_ids = manager.filter_ids();
+        if !filter_ids.is_empty() {
+            info!(
+                filter_count = filter_ids.len(),
+                filter_ids = ?filter_ids,
+                "GeoIP filtering initialized"
+            );
         }
 
         manager

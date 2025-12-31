@@ -117,6 +117,9 @@ pub enum Filter {
     /// Request/response logging filter (built-in)
     Log(LogFilter),
 
+    /// GeoIP filtering (built-in)
+    Geo(GeoFilter),
+
     /// External agent filter
     Agent(AgentFilter),
 }
@@ -138,6 +141,7 @@ impl Filter {
                     (false, false) => FilterPhase::Request, // default to request
                 }
             }
+            Filter::Geo(_) => FilterPhase::Request,
             Filter::Agent(a) => a.phase.unwrap_or(FilterPhase::Request),
         }
     }
@@ -151,6 +155,7 @@ impl Filter {
             Filter::Cors(_) => "cors",
             Filter::Timeout(_) => "timeout",
             Filter::Log(_) => "log",
+            Filter::Geo(_) => "geo",
             Filter::Agent(_) => "agent",
         }
     }
@@ -176,6 +181,20 @@ impl Filter {
             Filter::Compress(c) => {
                 if c.algorithms.is_empty() {
                     return Err("compress filter requires at least one algorithm".into());
+                }
+            }
+            Filter::Geo(g) => {
+                if g.database_path.is_empty() {
+                    return Err("geo filter requires 'database-path'".into());
+                }
+                // Validate country codes are uppercase and 2 characters
+                for code in &g.countries {
+                    if code.len() != 2 || !code.chars().all(|c| c.is_ascii_uppercase()) {
+                        return Err(format!(
+                            "geo filter: invalid country code '{}' (expected ISO 3166-1 alpha-2 like 'US', 'CN')",
+                            code
+                        ));
+                    }
                 }
             }
             Filter::Agent(a) => {
@@ -605,6 +624,108 @@ fn default_log_level() -> String {
 }
 
 // =============================================================================
+// Geo Filter
+// =============================================================================
+
+/// GeoIP database type
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum GeoDatabaseType {
+    /// MaxMind GeoLite2/GeoIP2 database (.mmdb format)
+    MaxMind,
+    /// IP2Location database (.bin format)
+    Ip2Location,
+}
+
+/// Action to take based on geo filter result
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum GeoFilterAction {
+    /// Block requests from matching countries (blocklist mode)
+    #[default]
+    Block,
+    /// Allow only requests from matching countries (allowlist mode)
+    Allow,
+    /// Log country info but don't block (monitoring mode)
+    LogOnly,
+}
+
+/// Behavior when geo lookup fails
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum GeoFailureMode {
+    /// Allow request on lookup failure (fail-open)
+    #[default]
+    Open,
+    /// Block request on lookup failure (fail-closed)
+    Closed,
+}
+
+/// GeoIP filtering configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeoFilter {
+    /// Path to GeoIP database file (.mmdb or .bin)
+    #[serde(rename = "database-path")]
+    pub database_path: String,
+
+    /// Database type (auto-detected from extension if not specified)
+    #[serde(default, rename = "database-type")]
+    pub database_type: Option<GeoDatabaseType>,
+
+    /// Filter action (block, allow, log-only)
+    #[serde(default)]
+    pub action: GeoFilterAction,
+
+    /// ISO 3166-1 alpha-2 country codes to match
+    #[serde(default)]
+    pub countries: Vec<String>,
+
+    /// Behavior when lookup fails
+    #[serde(default, rename = "on-failure")]
+    pub on_failure: GeoFailureMode,
+
+    /// HTTP status code for blocked requests
+    #[serde(default = "default_geo_status", rename = "status-code")]
+    pub status_code: u16,
+
+    /// Custom response message for blocked requests
+    #[serde(rename = "block-message")]
+    pub block_message: Option<String>,
+
+    /// Cache TTL for IP lookups (seconds)
+    #[serde(default = "default_geo_cache_ttl", rename = "cache-ttl-secs")]
+    pub cache_ttl_secs: u64,
+
+    /// Add X-GeoIP-Country header to response
+    #[serde(default = "default_true", rename = "add-country-header")]
+    pub add_country_header: bool,
+}
+
+impl Default for GeoFilter {
+    fn default() -> Self {
+        Self {
+            database_path: String::new(),
+            database_type: None,
+            action: GeoFilterAction::Block,
+            countries: Vec::new(),
+            on_failure: GeoFailureMode::Open,
+            status_code: default_geo_status(),
+            block_message: None,
+            cache_ttl_secs: default_geo_cache_ttl(),
+            add_country_header: true,
+        }
+    }
+}
+
+fn default_geo_status() -> u16 {
+    403
+}
+
+fn default_geo_cache_ttl() -> u64 {
+    3600 // 1 hour
+}
+
+// =============================================================================
 // Agent Filter
 // =============================================================================
 
@@ -789,5 +910,103 @@ mod tests {
         };
 
         assert_eq!(filter.max_delay_ms, 5000);
+    }
+
+    #[test]
+    fn test_geo_filter_default() {
+        let filter = GeoFilter::default();
+        assert!(filter.database_path.is_empty());
+        assert!(filter.database_type.is_none());
+        assert_eq!(filter.action, GeoFilterAction::Block);
+        assert!(filter.countries.is_empty());
+        assert_eq!(filter.on_failure, GeoFailureMode::Open);
+        assert_eq!(filter.status_code, 403);
+        assert!(filter.block_message.is_none());
+        assert_eq!(filter.cache_ttl_secs, 3600);
+        assert!(filter.add_country_header);
+    }
+
+    #[test]
+    fn test_geo_filter_action_enum() {
+        assert_eq!(GeoFilterAction::default(), GeoFilterAction::Block);
+        assert_ne!(GeoFilterAction::Allow, GeoFilterAction::Block);
+        assert_ne!(GeoFilterAction::LogOnly, GeoFilterAction::Block);
+    }
+
+    #[test]
+    fn test_geo_failure_mode_enum() {
+        assert_eq!(GeoFailureMode::default(), GeoFailureMode::Open);
+        assert_ne!(GeoFailureMode::Closed, GeoFailureMode::Open);
+    }
+
+    #[test]
+    fn test_geo_database_type_enum() {
+        let maxmind = GeoDatabaseType::MaxMind;
+        let ip2loc = GeoDatabaseType::Ip2Location;
+        assert_ne!(maxmind, ip2loc);
+    }
+
+    #[test]
+    fn test_geo_filter_validation_missing_path() {
+        let filter = Filter::Geo(GeoFilter::default());
+        let result = filter.validate(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("database-path"));
+    }
+
+    #[test]
+    fn test_geo_filter_validation_invalid_country_code() {
+        let filter = Filter::Geo(GeoFilter {
+            database_path: "/path/to/db.mmdb".to_string(),
+            countries: vec!["invalid".to_string()],
+            ..Default::default()
+        });
+        let result = filter.validate(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid country code"));
+    }
+
+    #[test]
+    fn test_geo_filter_validation_valid() {
+        let filter = Filter::Geo(GeoFilter {
+            database_path: "/path/to/db.mmdb".to_string(),
+            countries: vec!["US".to_string(), "CA".to_string()],
+            ..Default::default()
+        });
+        assert!(filter.validate(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_geo_filter_phase() {
+        let filter = Filter::Geo(GeoFilter::default());
+        assert_eq!(filter.phase(), FilterPhase::Request);
+    }
+
+    #[test]
+    fn test_geo_filter_type_name() {
+        let filter = Filter::Geo(GeoFilter::default());
+        assert_eq!(filter.type_name(), "geo");
+    }
+
+    #[test]
+    fn test_geo_filter_config() {
+        let config = FilterConfig::new(
+            "block-countries",
+            Filter::Geo(GeoFilter {
+                database_path: "/etc/sentinel/GeoLite2-Country.mmdb".to_string(),
+                database_type: Some(GeoDatabaseType::MaxMind),
+                action: GeoFilterAction::Block,
+                countries: vec!["RU".to_string(), "CN".to_string()],
+                on_failure: GeoFailureMode::Closed,
+                status_code: 403,
+                block_message: Some("Access denied from your region".to_string()),
+                cache_ttl_secs: 7200,
+                add_country_header: true,
+            }),
+        );
+
+        assert_eq!(config.id, "block-countries");
+        assert_eq!(config.filter_type(), "geo");
+        assert_eq!(config.phase(), FilterPhase::Request);
     }
 }
