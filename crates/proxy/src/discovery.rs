@@ -332,7 +332,9 @@ impl ServiceDiscovery for ConsulDiscovery {
             move || -> Result<BTreeSet<Backend>, Box<Error>> {
                 // Simple HTTP GET using std::net
                 // Parse URL to get host and path
-                let url_parsed = url.trim_start_matches("http://").trim_start_matches("https://");
+                let url_parsed = url
+                    .trim_start_matches("http://")
+                    .trim_start_matches("https://");
                 let (host_port, path) = url_parsed.split_once('/').unwrap_or((url_parsed, ""));
 
                 let socket_addr = host_port
@@ -345,7 +347,10 @@ impl ServiceDiscovery for ConsulDiscovery {
                     })?
                     .next()
                     .ok_or_else(|| {
-                        Error::explain(ErrorType::ConnectNoRoute, "Failed to resolve Consul address")
+                        Error::explain(
+                            ErrorType::ConnectNoRoute,
+                            "Failed to resolve Consul address",
+                        )
                     })?;
 
                 let stream = match std::net::TcpStream::connect_timeout(
@@ -361,12 +366,22 @@ impl ServiceDiscovery for ConsulDiscovery {
                     }
                 };
 
-                stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| {
-                    Error::explain(ErrorType::InternalError, format!("Failed to set read timeout: {}", e))
-                })?;
-                stream.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| {
-                    Error::explain(ErrorType::InternalError, format!("Failed to set write timeout: {}", e))
-                })?;
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .map_err(|e| {
+                        Error::explain(
+                            ErrorType::InternalError,
+                            format!("Failed to set read timeout: {}", e),
+                        )
+                    })?;
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .map_err(|e| {
+                        Error::explain(
+                            ErrorType::InternalError,
+                            format!("Failed to set write timeout: {}", e),
+                        )
+                    })?;
 
                 use std::io::{Read, Write};
                 let request = format!(
@@ -376,12 +391,18 @@ impl ServiceDiscovery for ConsulDiscovery {
 
                 let mut stream = stream;
                 stream.write_all(request.as_bytes()).map_err(|e| {
-                    Error::explain(ErrorType::WriteError, format!("Failed to send request: {}", e))
+                    Error::explain(
+                        ErrorType::WriteError,
+                        format!("Failed to send request: {}", e),
+                    )
                 })?;
 
                 let mut response = String::new();
                 stream.read_to_string(&mut response).map_err(|e| {
-                    Error::explain(ErrorType::ReadError, format!("Failed to read response: {}", e))
+                    Error::explain(
+                        ErrorType::ReadError,
+                        format!("Failed to read response: {}", e),
+                    )
                 })?;
 
                 // Parse response - find JSON body after headers
@@ -645,11 +666,7 @@ impl DiscoveryManager {
     }
 
     /// Register a service discovery for an upstream
-    pub fn register(
-        &self,
-        upstream_id: &str,
-        config: DiscoveryConfig,
-    ) -> Result<(), Box<Error>> {
+    pub fn register(&self, upstream_id: &str, config: DiscoveryConfig) -> Result<(), Box<Error>> {
         let discovery: Arc<dyn ServiceDiscovery + Send + Sync> = match config {
             DiscoveryConfig::Static { backends } => {
                 let backend_set = backends
@@ -760,7 +777,10 @@ impl DiscoveryManager {
                     kubeconfig,
                 ))
             }
-            DiscoveryConfig::File { path, watch_interval } => {
+            DiscoveryConfig::File {
+                path,
+                watch_interval,
+            } => {
                 info!(
                     upstream_id = %upstream_id,
                     path = %path,

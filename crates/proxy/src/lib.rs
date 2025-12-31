@@ -26,7 +26,6 @@
 //! let handler = ErrorHandler::new(ServiceType::Api, None);
 //! ```
 
-
 // ============================================================================
 // Module Declarations
 // ============================================================================
@@ -68,7 +67,7 @@ pub use static_files::{CacheStats, CachedFile, FileCache, StaticFileServer};
 pub use validation::SchemaValidator;
 
 // Routing
-pub use routing::{RouteMatcher, RouteMatch, RequestInfo};
+pub use routing::{RequestInfo, RouteMatch, RouteMatcher};
 
 // Upstream management
 pub use upstream::{
@@ -104,7 +103,9 @@ pub use http_helpers::{
 };
 
 // Trace ID generation (TinyFlake)
-pub use trace_id::{generate_for_format, generate_tinyflake, generate_uuid, TraceIdFormat, TINYFLAKE_LENGTH};
+pub use trace_id::{
+    generate_for_format, generate_tinyflake, generate_uuid, TraceIdFormat, TINYFLAKE_LENGTH,
+};
 
 // OpenTelemetry tracing
 pub use otel::{
@@ -127,19 +128,26 @@ pub use logging::{
 };
 
 // Rate limiting
-pub use rate_limit::{RateLimitConfig, RateLimitManager, RateLimitOutcome, RateLimitResult, RateLimiterPool};
+pub use rate_limit::{
+    RateLimitConfig, RateLimitManager, RateLimitOutcome, RateLimitResult, RateLimiterPool,
+};
 
 // Distributed rate limiting
 #[cfg(feature = "distributed-rate-limit")]
-pub use distributed_rate_limit::{create_redis_rate_limiter, DistributedRateLimitStats, RedisRateLimiter};
+pub use distributed_rate_limit::{
+    create_redis_rate_limiter, DistributedRateLimitStats, RedisRateLimiter,
+};
 
 // HTTP caching
 pub use cache::{
-    get_cache_eviction, get_cache_lock, get_cache_storage, CacheConfig, CacheManager, HttpCacheStats,
+    get_cache_eviction, get_cache_lock, get_cache_storage, CacheConfig, CacheManager,
+    HttpCacheStats,
 };
 
 // Memory caching
-pub use memory_cache::{MemoryCacheConfig, MemoryCacheManager, MemoryCacheStats, RouteMatchEntry, TypedCache};
+pub use memory_cache::{
+    MemoryCacheConfig, MemoryCacheManager, MemoryCacheStats, RouteMatchEntry, TypedCache,
+};
 
 // Service discovery
 pub use discovery::{

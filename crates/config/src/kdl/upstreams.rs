@@ -68,7 +68,11 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                 // Parse load balancing algorithm
                 let load_balancing = child
                     .children()
-                    .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "load-balancing"))
+                    .and_then(|c| {
+                        c.nodes()
+                            .iter()
+                            .find(|n| n.name().value() == "load-balancing")
+                    })
                     .and_then(|n| get_first_arg_string(n))
                     .map(|s| parse_load_balancing(&s))
                     .unwrap_or(LoadBalancingAlgorithm::RoundRobin);
@@ -76,7 +80,11 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                 // Parse health check configuration
                 let health_check = child
                     .children()
-                    .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "health-check"))
+                    .and_then(|c| {
+                        c.nodes()
+                            .iter()
+                            .find(|n| n.name().value() == "health-check")
+                    })
                     .and_then(|n| parse_health_check(n).ok());
 
                 if health_check.is_some() {
@@ -89,7 +97,11 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                 // Parse HTTP version configuration
                 let http_version = child
                     .children()
-                    .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "http-version"))
+                    .and_then(|c| {
+                        c.nodes()
+                            .iter()
+                            .find(|n| n.name().value() == "http-version")
+                    })
                     .map(|n| parse_http_version(n))
                     .unwrap_or_default();
 
@@ -104,7 +116,11 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                 // Parse connection pool configuration
                 let connection_pool = child
                     .children()
-                    .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "connection-pool"))
+                    .and_then(|c| {
+                        c.nodes()
+                            .iter()
+                            .find(|n| n.name().value() == "connection-pool")
+                    })
                     .map(|n| parse_connection_pool(n))
                     .unwrap_or_default();
 
@@ -143,7 +159,10 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
         }
     }
 
-    trace!(upstream_count = upstreams.len(), "Finished parsing upstreams");
+    trace!(
+        upstream_count = upstreams.len(),
+        "Finished parsing upstreams"
+    );
     Ok(upstreams)
 }
 
@@ -182,13 +201,9 @@ fn parse_http_version(node: &kdl::KdlNode) -> HttpVersionConfig {
             .and_then(|e| e.value().as_integer())
     };
 
-    let min_version = get_child_int("min-version")
-        .map(|v| v as u8)
-        .unwrap_or(1);
+    let min_version = get_child_int("min-version").map(|v| v as u8).unwrap_or(1);
 
-    let max_version = get_child_int("max-version")
-        .map(|v| v as u8)
-        .unwrap_or(2); // Default to HTTP/2 support
+    let max_version = get_child_int("max-version").map(|v| v as u8).unwrap_or(2); // Default to HTTP/2 support
 
     let h2_ping_interval_secs = get_child_int("h2-ping-interval")
         .map(|v| v as u64)
@@ -260,13 +275,9 @@ fn parse_upstream_timeouts(node: &kdl::KdlNode) -> UpstreamTimeouts {
         .map(|v| v as u64)
         .unwrap_or(60);
 
-    let read_secs = get_int_entry(node, "read")
-        .map(|v| v as u64)
-        .unwrap_or(30);
+    let read_secs = get_int_entry(node, "read").map(|v| v as u64).unwrap_or(30);
 
-    let write_secs = get_int_entry(node, "write")
-        .map(|v| v as u64)
-        .unwrap_or(30);
+    let write_secs = get_int_entry(node, "write").map(|v| v as u64).unwrap_or(30);
 
     UpstreamTimeouts {
         connect_secs,
@@ -295,7 +306,11 @@ fn parse_health_check(node: &kdl::KdlNode) -> Result<HealthCheck> {
 
                     let expected_status = type_node
                         .children()
-                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "expected-status"))
+                        .and_then(|c| {
+                            c.nodes()
+                                .iter()
+                                .find(|n| n.name().value() == "expected-status")
+                        })
                         .and_then(|n| get_first_arg_string(n))
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(200);

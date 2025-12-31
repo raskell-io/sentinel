@@ -17,7 +17,7 @@ mod cache;
 mod compression;
 mod range;
 
-pub use cache::{CachedFile, CacheStats, FileCache};
+pub use cache::{CacheStats, CachedFile, FileCache};
 pub use compression::ContentEncoding;
 
 use anyhow::Result;
@@ -101,10 +101,7 @@ impl StaticFileServer {
     pub fn clear_cache(&self) {
         let before = self.cache.stats().entry_count;
         self.cache.clear();
-        debug!(
-            cleared_entries = before,
-            "File cache cleared"
-        );
+        debug!(cleared_entries = before, "File cache cleared");
     }
 
     /// Serve a static file request
@@ -208,7 +205,9 @@ impl StaticFileServer {
             );
             return Ok(Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Full::new(Bytes::from_static(b"Directory listing not allowed")))?);
+                .body(Full::new(Bytes::from_static(
+                    b"Directory listing not allowed",
+                )))?);
         }
 
         // Serve the file
@@ -357,8 +356,15 @@ impl StaticFileServer {
                 size = file_size,
                 "Serving large file"
             );
-            self.serve_large_file(file_path, &content_type, file_size, &etag, modified, encoding)
-                .await
+            self.serve_large_file(
+                file_path,
+                &content_type,
+                file_size,
+                &etag,
+                modified,
+                encoding,
+            )
+            .await
         } else {
             // Small/medium file: read into memory
             trace!(
@@ -366,8 +372,16 @@ impl StaticFileServer {
                 size = file_size,
                 "Serving small/medium file"
             );
-            self.serve_small_file(req, file_path, &content_type, file_size, &etag, modified, encoding)
-                .await
+            self.serve_small_file(
+                req,
+                file_path,
+                &content_type,
+                file_size,
+                &etag,
+                modified,
+                encoding,
+            )
+            .await
         }
     }
 
@@ -438,10 +452,7 @@ impl StaticFileServer {
 
     /// Get content type for a file
     fn get_content_type(&self, path: &Path) -> String {
-        from_path(path)
-            .first_or_octet_stream()
-            .as_ref()
-            .to_string()
+        from_path(path).first_or_octet_stream().as_ref().to_string()
     }
 
     /// Serve a small file (read into memory)

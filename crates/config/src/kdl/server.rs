@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use tracing::{debug, trace};
 
-use sentinel_common::types::{TraceIdFormat, TlsVersion};
+use sentinel_common::types::{TlsVersion, TraceIdFormat};
 
 use crate::server::*;
 
@@ -127,7 +127,10 @@ pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
         }
     }
 
-    trace!(listener_count = listeners.len(), "Finished parsing listeners");
+    trace!(
+        listener_count = listeners.len(),
+        "Finished parsing listeners"
+    );
     Ok(listeners)
 }
 

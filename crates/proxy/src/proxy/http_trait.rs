@@ -10,7 +10,9 @@ use pingora::prelude::*;
 use pingora::protocols::Digest;
 use pingora::proxy::{ProxyHttp, Session};
 use pingora::upstreams::peer::Peer;
-use pingora_cache::{CacheKey, CacheMeta, ForcedInvalidationKind, HitHandler, NoCacheReason, RespCacheable};
+use pingora_cache::{
+    CacheKey, CacheMeta, ForcedInvalidationKind, HitHandler, NoCacheReason, RespCacheable,
+};
 use pingora_timeout::sleep;
 use std::os::unix::io::RawFd;
 use std::time::Duration;
@@ -189,16 +191,14 @@ impl ProxyHttp for SentinelProxy {
 
                 // Only build headers HashMap if any route needs header matching
                 if route_matcher.needs_headers() {
-                    request_info = request_info.with_headers(
-                        RequestInfo::build_headers(req_header.headers.iter())
-                    );
+                    request_info = request_info
+                        .with_headers(RequestInfo::build_headers(req_header.headers.iter()));
                 }
 
                 // Only parse query params if any route needs query param matching
                 if route_matcher.needs_query_params() {
-                    request_info = request_info.with_query_params(
-                        RequestInfo::parse_query_params(&ctx.path)
-                    );
+                    request_info =
+                        request_info.with_query_params(RequestInfo::parse_query_params(&ctx.path));
                 }
 
                 trace!(
@@ -210,18 +210,16 @@ impl ProxyHttp for SentinelProxy {
                 );
 
                 let route_start = std::time::Instant::now();
-                let route_match = route_matcher
-                    .match_request(&request_info)
-                    .ok_or_else(|| {
-                        warn!(
-                            correlation_id = %ctx.trace_id,
-                            method = %request_info.method,
-                            path = %request_info.path,
-                            host = %request_info.host,
-                            "No matching route found for request"
-                        );
-                        Error::explain(ErrorType::InternalError, "No matching route found")
-                    })?;
+                let route_match = route_matcher.match_request(&request_info).ok_or_else(|| {
+                    warn!(
+                        correlation_id = %ctx.trace_id,
+                        method = %request_info.method,
+                        path = %request_info.path,
+                        host = %request_info.host,
+                        "No matching route found for request"
+                    );
+                    Error::explain(ErrorType::InternalError, "No matching route found")
+                })?;
                 let route_duration = route_start.elapsed();
                 // Lock is dropped here when block ends
                 (route_match, route_duration)
@@ -346,17 +344,21 @@ impl ProxyHttp for SentinelProxy {
             "Looking up upstream pool"
         );
 
-        let pool = self.upstream_pools.get(upstream_name).await.ok_or_else(|| {
-            error!(
-                correlation_id = %ctx.trace_id,
-                upstream = %upstream_name,
-                "Upstream pool not found"
-            );
-            Error::explain(
-                ErrorType::InternalError,
-                format!("Upstream pool '{}' not found", upstream_name),
-            )
-        })?;
+        let pool = self
+            .upstream_pools
+            .get(upstream_name)
+            .await
+            .ok_or_else(|| {
+                error!(
+                    correlation_id = %ctx.trace_id,
+                    upstream = %upstream_name,
+                    "Upstream pool not found"
+                );
+                Error::explain(
+                    ErrorType::InternalError,
+                    format!("Upstream pool '{}' not found", upstream_name),
+                )
+            })?;
 
         // Select peer from pool with retries
         let max_retries = route_match
@@ -464,61 +466,61 @@ impl ProxyHttp for SentinelProxy {
                 );
 
                 if !rate_result.allowed {
-                use sentinel_config::RateLimitAction;
+                    use sentinel_config::RateLimitAction;
 
-                match rate_result.action {
-                    RateLimitAction::Reject => {
-                        warn!(
-                            correlation_id = %ctx.trace_id,
-                            route_id = route_id,
-                            client_ip = %ctx.client_ip,
-                            limiter = %rate_result.limiter,
-                            "Request rate limited"
-                        );
-                        self.metrics.record_blocked_request("rate_limited");
+                    match rate_result.action {
+                        RateLimitAction::Reject => {
+                            warn!(
+                                correlation_id = %ctx.trace_id,
+                                route_id = route_id,
+                                client_ip = %ctx.client_ip,
+                                limiter = %rate_result.limiter,
+                                "Request rate limited"
+                            );
+                            self.metrics.record_blocked_request("rate_limited");
 
-                        // Audit log the rate limit
-                        let audit_entry = AuditLogEntry::rate_limited(
-                            &ctx.trace_id,
-                            &ctx.method,
-                            &ctx.path,
-                            &ctx.client_ip,
-                            &rate_result.limiter,
-                        )
-                        .with_route_id(route_id)
-                        .with_status_code(rate_result.status_code);
-                        self.log_manager.log_audit(&audit_entry);
+                            // Audit log the rate limit
+                            let audit_entry = AuditLogEntry::rate_limited(
+                                &ctx.trace_id,
+                                &ctx.method,
+                                &ctx.path,
+                                &ctx.client_ip,
+                                &rate_result.limiter,
+                            )
+                            .with_route_id(route_id)
+                            .with_status_code(rate_result.status_code);
+                            self.log_manager.log_audit(&audit_entry);
 
-                        // Send rate limit response
-                        let body = rate_result
-                            .message
-                            .unwrap_or_else(|| "Rate limit exceeded".to_string());
-                        crate::http_helpers::write_error(
-                            session,
-                            rate_result.status_code,
-                            &body,
-                            "text/plain",
-                        )
-                        .await?;
-                        return Ok(true); // Request complete, don't continue
+                            // Send rate limit response
+                            let body = rate_result
+                                .message
+                                .unwrap_or_else(|| "Rate limit exceeded".to_string());
+                            crate::http_helpers::write_error(
+                                session,
+                                rate_result.status_code,
+                                &body,
+                                "text/plain",
+                            )
+                            .await?;
+                            return Ok(true); // Request complete, don't continue
+                        }
+                        RateLimitAction::LogOnly => {
+                            debug!(
+                                correlation_id = %ctx.trace_id,
+                                route_id = route_id,
+                                "Rate limit exceeded (log only mode)"
+                            );
+                            // Continue processing
+                        }
+                        RateLimitAction::Delay => {
+                            // Delay handling could be implemented here with pingora_timeout::sleep
+                            debug!(
+                                correlation_id = %ctx.trace_id,
+                                route_id = route_id,
+                                "Rate limit delay mode not yet implemented, allowing request"
+                            );
+                        }
                     }
-                    RateLimitAction::LogOnly => {
-                        debug!(
-                            correlation_id = %ctx.trace_id,
-                            route_id = route_id,
-                            "Rate limit exceeded (log only mode)"
-                        );
-                        // Continue processing
-                    }
-                    RateLimitAction::Delay => {
-                        // Delay handling could be implemented here with pingora_timeout::sleep
-                        debug!(
-                            correlation_id = %ctx.trace_id,
-                            route_id = route_id,
-                            "Rate limit delay mode not yet implemented, allowing request"
-                        );
-                    }
-                }
                 }
             }
         }
@@ -598,9 +600,9 @@ impl ProxyHttp for SentinelProxy {
                         ctx.websocket_inspection_enabled = true;
 
                         // Get agents that handle WebSocketFrame events
-                        ctx.websocket_inspection_agents = self
-                            .agent_manager
-                            .get_agents_for_event(sentinel_agent_protocol::EventType::WebSocketFrame);
+                        ctx.websocket_inspection_agents = self.agent_manager.get_agents_for_event(
+                            sentinel_agent_protocol::EventType::WebSocketFrame,
+                        );
 
                         debug!(
                             correlation_id = %ctx.trace_id,
@@ -683,7 +685,9 @@ impl ProxyHttp for SentinelProxy {
         req_header.insert_header("X-Forwarded-By", "Sentinel").ok();
 
         // Use cached config (set in upstream_peer, or fetch now if needed)
-        let config = ctx.config.get_or_insert_with(|| self.config_manager.current());
+        let config = ctx
+            .config
+            .get_or_insert_with(|| self.config_manager.current());
 
         // Enforce header limits (fast path: skip if limits are very high)
         const HEADER_LIMIT_THRESHOLD: usize = 1024 * 1024; // 1MB = effectively unlimited
@@ -801,7 +805,9 @@ impl ProxyHttp for SentinelProxy {
             );
 
             // Check body size limit (use cached config)
-            let config = ctx.config.get_or_insert_with(|| self.config_manager.current());
+            let config = ctx
+                .config
+                .get_or_insert_with(|| self.config_manager.current());
             if ctx.request_body_bytes > config.limits.max_body_size_bytes as u64 {
                 warn!(
                     correlation_id = %ctx.trace_id,
@@ -819,8 +825,12 @@ impl ProxyHttp for SentinelProxy {
 
         // Body inspection for agents (WAF, etc.)
         if ctx.body_inspection_enabled && !ctx.body_inspection_agents.is_empty() {
-            let config = ctx.config.get_or_insert_with(|| self.config_manager.current());
-            let max_inspection_bytes = config.waf.as_ref()
+            let config = ctx
+                .config
+                .get_or_insert_with(|| self.config_manager.current());
+            let max_inspection_bytes = config
+                .waf
+                .as_ref()
                 .map(|w| w.body_inspection.max_inspection_bytes as u64)
                 .unwrap_or(1024 * 1024);
 
@@ -828,18 +838,12 @@ impl ProxyHttp for SentinelProxy {
                 BodyStreamingMode::Stream => {
                     // Stream mode: send each chunk immediately
                     if body.is_some() {
-                        self.process_body_chunk_streaming(
-                            body,
-                            end_of_stream,
-                            ctx,
-                        ).await?;
+                        self.process_body_chunk_streaming(body, end_of_stream, ctx)
+                            .await?;
                     } else if end_of_stream && ctx.agent_needs_more {
                         // Send final empty chunk to signal end
-                        self.process_body_chunk_streaming(
-                            body,
-                            end_of_stream,
-                            ctx,
-                        ).await?;
+                        self.process_body_chunk_streaming(body, end_of_stream, ctx)
+                            .await?;
                     }
                 }
                 BodyStreamingMode::Hybrid { buffer_threshold } => {
@@ -855,9 +859,14 @@ impl ProxyHttp for SentinelProxy {
                             ctx.body_bytes_inspected += bytes_to_buffer as u64;
 
                             // If we've reached threshold or end of stream, switch to streaming
-                            if ctx.body_bytes_inspected >= buffer_threshold as u64 || end_of_stream {
+                            if ctx.body_bytes_inspected >= buffer_threshold as u64 || end_of_stream
+                            {
                                 // Send buffered content first
-                                self.send_buffered_body_to_agents(end_of_stream && chunk.len() == bytes_to_buffer, ctx).await?;
+                                self.send_buffered_body_to_agents(
+                                    end_of_stream && chunk.len() == bytes_to_buffer,
+                                    ctx,
+                                )
+                                .await?;
                                 ctx.body_buffer.clear();
 
                                 // If there's remaining data in this chunk, stream it
@@ -868,17 +877,15 @@ impl ProxyHttp for SentinelProxy {
                                         &mut remaining_body,
                                         end_of_stream,
                                         ctx,
-                                    ).await?;
+                                    )
+                                    .await?;
                                 }
                             }
                         }
                     } else {
                         // Past threshold, stream directly
-                        self.process_body_chunk_streaming(
-                            body,
-                            end_of_stream,
-                            ctx,
-                        ).await?;
+                        self.process_body_chunk_streaming(body, end_of_stream, ctx)
+                            .await?;
                     }
                 }
                 BodyStreamingMode::Buffer => {
@@ -890,7 +897,8 @@ impl ProxyHttp for SentinelProxy {
                                 max_inspection_bytes - ctx.body_bytes_inspected,
                             ) as usize;
 
-                            ctx.body_buffer.extend_from_slice(&chunk[..bytes_to_inspect]);
+                            ctx.body_buffer
+                                .extend_from_slice(&chunk[..bytes_to_inspect]);
                             ctx.body_bytes_inspected += bytes_to_inspect as u64;
 
                             trace!(
@@ -904,9 +912,11 @@ impl ProxyHttp for SentinelProxy {
                     }
 
                     // Send when complete or limit reached
-                    let should_send = end_of_stream || ctx.body_bytes_inspected >= max_inspection_bytes;
+                    let should_send =
+                        end_of_stream || ctx.body_bytes_inspected >= max_inspection_bytes;
                     if should_send && !ctx.body_buffer.is_empty() {
-                        self.send_buffered_body_to_agents(end_of_stream, ctx).await?;
+                        self.send_buffered_body_to_agents(end_of_stream, ctx)
+                            .await?;
                         ctx.body_buffer.clear();
                     }
                 }
@@ -946,7 +956,9 @@ impl ProxyHttp for SentinelProxy {
                 // Create WebSocket inspector and handler with metrics
                 let inspector = crate::websocket::WebSocketInspector::with_metrics(
                     self.agent_manager.clone(),
-                    ctx.route_id.clone().unwrap_or_else(|| "unknown".to_string()),
+                    ctx.route_id
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
                     ctx.trace_id.clone(),
                     ctx.client_ip.clone(),
                     100, // 100ms timeout per frame inspection
@@ -1102,7 +1114,9 @@ impl ProxyHttp for SentinelProxy {
             .ok();
 
         // Add request metadata headers
-        upstream_request.insert_header("X-Forwarded-By", "Sentinel").ok();
+        upstream_request
+            .insert_header("X-Forwarded-By", "Sentinel")
+            .ok();
 
         // Apply route-specific request header modifications
         // Clone the modifications to avoid lifetime issues with the header API
@@ -1159,9 +1173,8 @@ impl ProxyHttp for SentinelProxy {
                 // Use block_in_place to run async handler from sync context
                 // This is safe because Pingora uses a multi-threaded tokio runtime
                 let result = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        handler.process_server_data(data).await
-                    })
+                    tokio::runtime::Handle::current()
+                        .block_on(async { handler.process_server_data(data).await })
                 });
 
                 match result {
@@ -1177,7 +1190,8 @@ impl ProxyHttp for SentinelProxy {
                         );
                         // For sync filter, we can't return an error that closes the connection
                         // Instead, inject a close frame
-                        let close_frame = crate::websocket::WebSocketFrame::close(reason.code, &reason.reason);
+                        let close_frame =
+                            crate::websocket::WebSocketFrame::close(reason.code, &reason.reason);
                         let codec = crate::websocket::WebSocketCodec::new(1024 * 1024);
                         if let Ok(encoded) = codec.encode_frame(&close_frame, false) {
                             *body = Some(Bytes::from(encoded));
@@ -1204,9 +1218,15 @@ impl ProxyHttp for SentinelProxy {
             // Response body inspection (buffered mode only)
             // Note: Streaming mode for response bodies is not currently supported
             // due to Pingora's synchronous response_body_filter design
-            if ctx.response_body_inspection_enabled && !ctx.response_body_inspection_agents.is_empty() {
-                let config = ctx.config.get_or_insert_with(|| self.config_manager.current());
-                let max_inspection_bytes = config.waf.as_ref()
+            if ctx.response_body_inspection_enabled
+                && !ctx.response_body_inspection_agents.is_empty()
+            {
+                let config = ctx
+                    .config
+                    .get_or_insert_with(|| self.config_manager.current());
+                let max_inspection_bytes = config
+                    .waf
+                    .as_ref()
                     .map(|w| w.body_inspection.max_inspection_bytes as u64)
                     .unwrap_or(1024 * 1024);
 
@@ -1315,7 +1335,10 @@ impl ProxyHttp for SentinelProxy {
         }
 
         // Check if method is cacheable (typically GET/HEAD)
-        if !self.cache_manager.is_method_cacheable(route_id, &ctx.method) {
+        if !self
+            .cache_manager
+            .is_method_cacheable(route_id, &ctx.method)
+        {
             trace!(
                 correlation_id = %ctx.trace_id,
                 route_id = %route_id,
@@ -1481,13 +1504,17 @@ impl ProxyHttp for SentinelProxy {
         let route_id = match ctx.route_id.as_deref() {
             Some(id) => id,
             None => {
-                return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom("no_route")));
+                return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom(
+                    "no_route",
+                )));
             }
         };
 
         // Check if caching is enabled for this route
         if !self.cache_manager.is_enabled(route_id) {
-            return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom("disabled")));
+            return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom(
+                "disabled",
+            )));
         }
 
         let status = resp.status.as_u16();
@@ -1535,7 +1562,10 @@ impl ProxyHttp for SentinelProxy {
         }
 
         // Get route cache config for stale settings
-        let config = self.cache_manager.get_route_config(route_id).unwrap_or_default();
+        let config = self
+            .cache_manager
+            .get_route_config(route_id)
+            .unwrap_or_default();
 
         // Create timestamps for cache metadata
         let now = std::time::SystemTime::now();
@@ -1655,10 +1685,7 @@ impl ProxyHttp for SentinelProxy {
         }
 
         // Use Pingora's built-in range header parsing and handling
-        let range_type = pingora_proxy::range_header_filter(
-            session.req_header(),
-            response,
-        );
+        let range_type = pingora_proxy::range_header_filter(session.req_header(), response);
 
         match &range_type {
             pingora_proxy::RangeType::None => {
@@ -1748,7 +1775,8 @@ impl ProxyHttp for SentinelProxy {
         );
 
         // Record the error in metrics
-        self.metrics.record_blocked_request(&format!("proxy_error_{}", error_code));
+        self.metrics
+            .record_blocked_request(&format!("proxy_error_{}", error_code));
 
         // Return the error response info
         // can_reuse_downstream: allow connection reuse for client errors, not for server errors
@@ -1778,10 +1806,10 @@ impl ProxyHttp for SentinelProxy {
         let is_retryable = matches!(
             error_type,
             ErrorType::ConnectTimedout
-            | ErrorType::ReadTimedout
-            | ErrorType::WriteTimedout
-            | ErrorType::ConnectionClosed
-            | ErrorType::ConnectRefused
+                | ErrorType::ReadTimedout
+                | ErrorType::WriteTimedout
+                | ErrorType::ConnectionClosed
+                | ErrorType::ConnectRefused
         );
 
         // Log the error with context
@@ -1809,7 +1837,8 @@ impl ProxyHttp for SentinelProxy {
         });
 
         // Metrics tracking
-        self.metrics.record_blocked_request(&format!("proxy_error_{:?}", error_type));
+        self.metrics
+            .record_blocked_request(&format!("proxy_error_{:?}", error_type));
 
         // Create enhanced error with retry information
         let mut enhanced_error = e.more_context(format!(
@@ -1966,7 +1995,8 @@ impl SentinelProxy {
         let agent_ids = ctx.body_inspection_agents.clone();
         let total_size = None; // Unknown in streaming mode
 
-        match self.agent_manager
+        match self
+            .agent_manager
             .process_request_body_streaming(
                 &agent_ctx,
                 &chunk_data,
@@ -2017,16 +2047,14 @@ impl SentinelProxy {
                     self.metrics.record_blocked_request("agent_body_inspection");
 
                     let (status, message) = match &decision.action {
-                        crate::agents::AgentAction::Block { status, body, .. } => {
-                            (*status, body.clone().unwrap_or_else(|| "Blocked".to_string()))
-                        }
+                        crate::agents::AgentAction::Block { status, body, .. } => (
+                            *status,
+                            body.clone().unwrap_or_else(|| "Blocked".to_string()),
+                        ),
                         _ => (403, "Forbidden".to_string()),
                     };
 
-                    return Err(Error::explain(
-                        ErrorType::HTTPStatus(status),
-                        message,
-                    ));
+                    return Err(Error::explain(ErrorType::HTTPStatus(status), message));
                 }
 
                 trace!(
@@ -2036,7 +2064,9 @@ impl SentinelProxy {
                 );
             }
             Err(e) => {
-                let fail_closed = ctx.route_config.as_ref()
+                let fail_closed = ctx
+                    .route_config
+                    .as_ref()
                     .map(|r| r.policies.failure_mode == sentinel_config::FailureMode::Closed)
                     .unwrap_or(false);
 
@@ -2099,7 +2129,8 @@ impl SentinelProxy {
         };
 
         let agent_ids = ctx.body_inspection_agents.clone();
-        match self.agent_manager
+        match self
+            .agent_manager
             .process_request_body(&agent_ctx, &ctx.body_buffer, end_of_stream, &agent_ids)
             .await
         {
@@ -2113,16 +2144,14 @@ impl SentinelProxy {
                     self.metrics.record_blocked_request("agent_body_inspection");
 
                     let (status, message) = match &decision.action {
-                        crate::agents::AgentAction::Block { status, body, .. } => {
-                            (*status, body.clone().unwrap_or_else(|| "Blocked".to_string()))
-                        }
+                        crate::agents::AgentAction::Block { status, body, .. } => (
+                            *status,
+                            body.clone().unwrap_or_else(|| "Blocked".to_string()),
+                        ),
                         _ => (403, "Forbidden".to_string()),
                     };
 
-                    return Err(Error::explain(
-                        ErrorType::HTTPStatus(status),
-                        message,
-                    ));
+                    return Err(Error::explain(ErrorType::HTTPStatus(status), message));
                 }
 
                 trace!(
@@ -2131,7 +2160,9 @@ impl SentinelProxy {
                 );
             }
             Err(e) => {
-                let fail_closed = ctx.route_config.as_ref()
+                let fail_closed = ctx
+                    .route_config
+                    .as_ref()
                     .map(|r| r.policies.failure_mode == sentinel_config::FailureMode::Closed)
                     .unwrap_or(false);
 

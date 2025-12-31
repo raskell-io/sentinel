@@ -332,7 +332,9 @@ impl SentinelProxy {
         };
 
         // Use cached config (or fetch if not yet cached)
-        let config = ctx.config.get_or_insert_with(|| self.config_manager.current());
+        let config = ctx
+            .config
+            .get_or_insert_with(|| self.config_manager.current());
 
         // Extract agent IDs from filter chain by looking up filter definitions
         let agent_ids: Vec<String> = route_config
@@ -361,26 +363,31 @@ impl SentinelProxy {
         );
 
         // Set up body inspection if enabled
-        let body_inspection_enabled = config.waf.as_ref()
+        let body_inspection_enabled = config
+            .waf
+            .as_ref()
             .map(|w| w.body_inspection.inspect_request_body)
             .unwrap_or(false);
 
         if body_inspection_enabled {
             // Check content-type allowlist
-            let content_type = session.req_header()
+            let content_type = session
+                .req_header()
                 .headers
                 .get("content-type")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
 
-            let allowed_types = config.waf.as_ref()
+            let allowed_types = config
+                .waf
+                .as_ref()
                 .map(|w| &w.body_inspection.content_types)
                 .cloned()
                 .unwrap_or_default();
 
-            let is_allowed_type = allowed_types.iter().any(|allowed| {
-                content_type.starts_with(allowed)
-            });
+            let is_allowed_type = allowed_types
+                .iter()
+                .any(|allowed| content_type.starts_with(allowed));
 
             if is_allowed_type || allowed_types.is_empty() {
                 ctx.body_inspection_enabled = true;
@@ -455,10 +462,14 @@ impl SentinelProxy {
 
                             // Audit log the block decision
                             // Collect tags and rule_ids from all audit metadata
-                            let all_tags: Vec<String> = decision.audit.iter()
+                            let all_tags: Vec<String> = decision
+                                .audit
+                                .iter()
                                 .flat_map(|a| a.tags.iter().cloned())
                                 .collect();
-                            let all_rule_ids: Vec<String> = decision.audit.iter()
+                            let all_rule_ids: Vec<String> = decision
+                                .audit
+                                .iter()
                                 .flat_map(|a| a.rule_ids.iter().cloned())
                                 .collect();
 
@@ -472,7 +483,10 @@ impl SentinelProxy {
                             .with_route_id(ctx.route_id.as_deref().unwrap_or("unknown"))
                             .with_action("block")
                             .with_status_code(status)
-                            .with_reason(body.clone().unwrap_or_else(|| "Blocked by agent".to_string()))
+                            .with_reason(
+                                body.clone()
+                                    .unwrap_or_else(|| "Blocked by agent".to_string()),
+                            )
                             .with_tags(all_tags)
                             .with_rule_ids(all_rule_ids);
                             self.log_manager.log_audit(&audit_entry);
@@ -573,12 +587,7 @@ impl SentinelProxy {
                 let headers_owned: Vec<(String, String)> = error_response
                     .headers()
                     .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.as_str().to_string(),
-                            v.to_str().unwrap_or("").to_string(),
-                        )
-                    })
+                    .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect();
 
                 for (key, value) in headers_owned {
@@ -617,12 +626,7 @@ impl SentinelProxy {
         let headers_owned: Vec<(String, String)> = response
             .headers()
             .iter()
-            .map(|(k, v)| {
-                (
-                    k.as_str().to_string(),
-                    v.to_str().unwrap_or("").to_string(),
-                )
-            })
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
         // Get the body

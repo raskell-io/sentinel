@@ -92,7 +92,9 @@ pub use protocol::{
 pub use client::AgentClient;
 
 // Re-export server and handler
-pub use server::{AgentHandler, AgentServer, DenylistAgent, EchoAgent, GrpcAgentHandler, GrpcAgentServer};
+pub use server::{
+    AgentHandler, AgentServer, DenylistAgent, EchoAgent, GrpcAgentHandler, GrpcAgentServer,
+};
 
 #[cfg(test)]
 mod tests {
@@ -245,11 +247,13 @@ mod tests {
 
         // Test response with body mutation
         let mutation = BodyMutation::replace(0, "new content".to_string());
-        let response = AgentResponse::default_allow()
-            .with_request_body_mutation(mutation.clone());
+        let response = AgentResponse::default_allow().with_request_body_mutation(mutation.clone());
         assert!(!response.needs_more);
         assert!(response.request_body_mutation.is_some());
-        assert_eq!(response.request_body_mutation.unwrap().data, Some("new content".to_string()));
+        assert_eq!(
+            response.request_body_mutation.unwrap().data,
+            Some("new content".to_string())
+        );
 
         // Test set_needs_more
         let response = AgentResponse::default_allow().set_needs_more(true);

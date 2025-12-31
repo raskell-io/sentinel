@@ -499,13 +499,10 @@ impl LoadBalancer for AdaptiveBalancer {
         }
 
         // Select target based on scores
-        let target_index = self
-            .weighted_select(&scores)
-            .await
-            .ok_or_else(|| {
-                warn!("Adaptive: Failed to select from scores");
-                SentinelError::NoHealthyUpstream
-            })?;
+        let target_index = self.weighted_select(&scores).await.ok_or_else(|| {
+            warn!("Adaptive: Failed to select from scores");
+            SentinelError::NoHealthyUpstream
+        })?;
 
         let target = &self.targets[target_index];
         let metrics = &self.metrics[target_index];
@@ -631,7 +628,8 @@ impl LoadBalancer for AdaptiveBalancer {
             if let Ok(index) = index_str.parse::<usize>() {
                 let connections = self.metrics[index]
                     .active_connections
-                    .fetch_sub(1, Ordering::Relaxed) - 1;
+                    .fetch_sub(1, Ordering::Relaxed)
+                    - 1;
                 trace!(
                     target_index = index,
                     address = %selection.address,

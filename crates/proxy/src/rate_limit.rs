@@ -184,7 +184,10 @@ impl RateLimiterPool {
                 let (outcome, count) = self.check(key);
                 (outcome, count as i64)
             }
-            RateLimitBackendType::Distributed { redis, local_fallback } => {
+            RateLimitBackendType::Distributed {
+                redis,
+                local_fallback,
+            } => {
                 // Try Redis first
                 match redis.check(key).await {
                     Ok((outcome, count)) => (outcome, count),
@@ -243,11 +246,9 @@ impl RateLimiterPool {
             RateLimitKey::Path => path.to_string(),
             RateLimitKey::Route => route_id.to_string(),
             RateLimitKey::ClientIpAndPath => format!("{}:{}", client_ip, path),
-            RateLimitKey::Header(header_name) => {
-                headers
-                    .and_then(|h| h.get_header(header_name))
-                    .unwrap_or_else(|| "unknown".to_string())
-            }
+            RateLimitKey::Header(header_name) => headers
+                .and_then(|h| h.get_header(header_name))
+                .unwrap_or_else(|| "unknown".to_string()),
         }
     }
 
@@ -374,10 +375,8 @@ impl RateLimitManager {
             "Registering rate limiter for route"
         );
 
-        self.route_limiters.insert(
-            route_id.to_string(),
-            Arc::new(RateLimiterPool::new(config)),
-        );
+        self.route_limiters
+            .insert(route_id.to_string(), Arc::new(RateLimiterPool::new(config)));
     }
 
     /// Check if a request should be rate limited
@@ -579,12 +578,15 @@ mod tests {
     fn test_rate_limit_manager() {
         let manager = RateLimitManager::new();
 
-        manager.register_route("api", RateLimitConfig {
-            max_rps: 5,
-            burst: 2,
-            key: RateLimitKey::ClientIp,
-            ..Default::default()
-        });
+        manager.register_route(
+            "api",
+            RateLimitConfig {
+                max_rps: 5,
+                burst: 2,
+                key: RateLimitKey::ClientIp,
+                ..Default::default()
+            },
+        );
 
         // Route without limiter should always pass
         let result = manager.check("web", "127.0.0.1", "/", Option::<&NoHeaders>::None);

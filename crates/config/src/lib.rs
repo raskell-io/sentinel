@@ -211,10 +211,7 @@ impl Config {
 
     /// Parse configuration from KDL format
     pub fn from_kdl(content: &str) -> Result<Self> {
-        trace!(
-            content_length = content.len(),
-            "Parsing KDL configuration"
-        );
+        trace!(content_length = content.len(), "Parsing KDL configuration");
         let doc: ::kdl::KdlDocument = content.parse().map_err(|e: ::kdl::KdlError| {
             use miette::Diagnostic;
 

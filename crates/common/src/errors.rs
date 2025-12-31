@@ -293,11 +293,7 @@ impl SentinelError {
     }
 
     /// Create a limit exceeded error
-    pub fn limit_exceeded(
-        limit_type: LimitType,
-        current_value: usize,
-        limit: usize,
-    ) -> Self {
+    pub fn limit_exceeded(limit_type: LimitType, current_value: usize, limit: usize) -> Self {
         Self::LimitExceeded {
             limit_type,
             message: format!("Current value {} exceeds limit {}", current_value, limit),
@@ -309,12 +305,30 @@ impl SentinelError {
     /// Add correlation ID to the error
     pub fn with_correlation_id(mut self, correlation_id: impl Into<String>) -> Self {
         match &mut self {
-            Self::RequestValidation { correlation_id: cid, .. }
-            | Self::ResponseValidation { correlation_id: cid, .. }
-            | Self::Timeout { correlation_id: cid, .. }
-            | Self::AuthenticationFailed { correlation_id: cid, .. }
-            | Self::AuthorizationFailed { correlation_id: cid, .. }
-            | Self::Internal { correlation_id: cid, .. } => {
+            Self::RequestValidation {
+                correlation_id: cid,
+                ..
+            }
+            | Self::ResponseValidation {
+                correlation_id: cid,
+                ..
+            }
+            | Self::Timeout {
+                correlation_id: cid,
+                ..
+            }
+            | Self::AuthenticationFailed {
+                correlation_id: cid,
+                ..
+            }
+            | Self::AuthorizationFailed {
+                correlation_id: cid,
+                ..
+            }
+            | Self::Internal {
+                correlation_id: cid,
+                ..
+            } => {
                 *cid = Some(correlation_id.into());
             }
             _ => {}
@@ -340,8 +354,14 @@ mod tests {
 
     #[test]
     fn test_error_http_status() {
-        assert_eq!(SentinelError::upstream("backend", "connection refused").to_http_status(), 502);
-        assert_eq!(SentinelError::timeout("upstream", 5000).to_http_status(), 504);
+        assert_eq!(
+            SentinelError::upstream("backend", "connection refused").to_http_status(),
+            502
+        );
+        assert_eq!(
+            SentinelError::timeout("upstream", 5000).to_http_status(),
+            504
+        );
         assert_eq!(
             SentinelError::limit_exceeded(LimitType::HeaderSize, 2048, 1024).to_http_status(),
             429
@@ -381,6 +401,9 @@ mod tests {
             confidence: 0.95,
             correlation_id: "456".to_string(),
         };
-        assert_eq!(err.client_message(), "Request blocked: SQL injection detected");
+        assert_eq!(
+            err.client_message(),
+            "Request blocked: SQL injection detected"
+        );
     }
 }

@@ -302,13 +302,22 @@ mod tests {
 
     #[test]
     fn test_trace_id_format_from_str() {
-        assert_eq!(TraceIdFormat::from_str_loose("tinyflake"), TraceIdFormat::TinyFlake);
-        assert_eq!(TraceIdFormat::from_str_loose("TINYFLAKE"), TraceIdFormat::TinyFlake);
+        assert_eq!(
+            TraceIdFormat::from_str_loose("tinyflake"),
+            TraceIdFormat::TinyFlake
+        );
+        assert_eq!(
+            TraceIdFormat::from_str_loose("TINYFLAKE"),
+            TraceIdFormat::TinyFlake
+        );
         assert_eq!(TraceIdFormat::from_str_loose("uuid"), TraceIdFormat::Uuid);
         assert_eq!(TraceIdFormat::from_str_loose("UUID"), TraceIdFormat::Uuid);
         assert_eq!(TraceIdFormat::from_str_loose("uuid4"), TraceIdFormat::Uuid);
         assert_eq!(TraceIdFormat::from_str_loose("uuidv4"), TraceIdFormat::Uuid);
-        assert_eq!(TraceIdFormat::from_str_loose("unknown"), TraceIdFormat::TinyFlake); // Default
+        assert_eq!(
+            TraceIdFormat::from_str_loose("unknown"),
+            TraceIdFormat::TinyFlake
+        ); // Default
     }
 
     #[test]

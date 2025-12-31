@@ -308,7 +308,8 @@ mod tests {
 
     #[test]
     fn test_typed_cache() {
-        let cache: TypedCache<String, String> = TypedCache::new(1024 * 1024, Duration::from_secs(60));
+        let cache: TypedCache<String, String> =
+            TypedCache::new(1024 * 1024, Duration::from_secs(60));
 
         let key = "key1".to_string();
         cache.put(&key, "value1".to_string());

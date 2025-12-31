@@ -32,7 +32,10 @@ pub fn parse_filter_definitions(node: &kdl::KdlNode) -> Result<HashMap<String, F
         }
     }
 
-    trace!(filter_count = filters.len(), "Finished parsing filter definitions");
+    trace!(
+        filter_count = filters.len(),
+        "Finished parsing filter definitions"
+    );
     Ok(filters)
 }
 

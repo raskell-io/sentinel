@@ -54,9 +54,9 @@ use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use rustls::client::ClientConfig;
+use rustls::pki_types::CertificateDer;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
-use rustls::pki_types::CertificateDer;
 use rustls::{RootCertStore, ServerConfig};
 use tracing::{debug, error, info, trace, warn};
 
@@ -320,7 +320,9 @@ impl CertificateReloader {
     /// Register a resolver for a listener
     pub fn register(&self, listener_id: &str, resolver: Arc<HotReloadableSniResolver>) {
         debug!(listener_id = %listener_id, "Registering TLS resolver for hot-reload");
-        self.resolvers.write().insert(listener_id.to_string(), resolver);
+        self.resolvers
+            .write()
+            .insert(listener_id.to_string(), resolver);
     }
 
     /// Reload all registered certificates
@@ -331,7 +333,10 @@ impl CertificateReloader {
         let mut success_count = 0;
         let mut errors = Vec::new();
 
-        info!(listener_count = resolvers.len(), "Reloading certificates for all TLS listeners");
+        info!(
+            listener_count = resolvers.len(),
+            "Reloading certificates for all TLS listeners"
+        );
 
         for (listener_id, resolver) in resolvers.iter() {
             match resolver.reload() {
@@ -347,7 +352,10 @@ impl CertificateReloader {
         }
 
         if errors.is_empty() {
-            info!(success_count = success_count, "All certificates reloaded successfully");
+            info!(
+                success_count = success_count,
+                "All certificates reloaded successfully"
+            );
         } else {
             warn!(
                 success_count = success_count,
@@ -454,7 +462,7 @@ impl OcspStapler {
 
         warn!("OCSP stapling fetch not yet implemented - certificates will work without stapling");
         Err(TlsError::OcspFetch(
-            "OCSP responder URL extraction requires x509-parser dependency".to_string()
+            "OCSP responder URL extraction requires x509-parser dependency".to_string(),
         ))
     }
 
@@ -502,9 +510,8 @@ pub fn build_upstream_tls_config(config: &UpstreamTlsConfig) -> Result<ClientCon
 
     // Load CA certificates for server verification
     if let Some(ca_path) = &config.ca_cert {
-        let ca_file = File::open(ca_path).map_err(|e| {
-            TlsError::CertificateLoad(format!("{}: {}", ca_path.display(), e))
-        })?;
+        let ca_file = File::open(ca_path)
+            .map_err(|e| TlsError::CertificateLoad(format!("{}: {}", ca_path.display(), e)))?;
         let mut ca_reader = BufReader::new(ca_file);
 
         let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut ca_reader)
@@ -531,14 +538,14 @@ pub fn build_upstream_tls_config(config: &UpstreamTlsConfig) -> Result<ClientCon
     }
 
     // Build the client config
-    let builder = ClientConfig::builder()
-        .with_root_certificates(root_store);
+    let builder = ClientConfig::builder().with_root_certificates(root_store);
 
-    let client_config = if let (Some(cert_path), Some(key_path)) = (&config.client_cert, &config.client_key) {
+    let client_config = if let (Some(cert_path), Some(key_path)) =
+        (&config.client_cert, &config.client_key)
+    {
         // Load client certificate for mTLS
-        let cert_file = File::open(cert_path).map_err(|e| {
-            TlsError::CertificateLoad(format!("{}: {}", cert_path.display(), e))
-        })?;
+        let cert_file = File::open(cert_path)
+            .map_err(|e| TlsError::CertificateLoad(format!("{}: {}", cert_path.display(), e)))?;
         let mut cert_reader = BufReader::new(cert_file);
 
         let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
@@ -553,9 +560,8 @@ pub fn build_upstream_tls_config(config: &UpstreamTlsConfig) -> Result<ClientCon
         }
 
         // Load client private key
-        let key_file = File::open(key_path).map_err(|e| {
-            TlsError::KeyLoad(format!("{}: {}", key_path.display(), e))
-        })?;
+        let key_file = File::open(key_path)
+            .map_err(|e| TlsError::KeyLoad(format!("{}: {}", key_path.display(), e)))?;
         let mut key_reader = BufReader::new(key_file);
 
         let key = rustls_pemfile::private_key(&mut key_reader)
@@ -612,7 +618,7 @@ pub fn validate_upstream_tls_config(config: &UpstreamTlsConfig) -> Result<(), Tl
             }
             None => {
                 return Err(TlsError::ConfigBuild(
-                    "client_cert specified without client_key".to_string()
+                    "client_cert specified without client_key".to_string(),
                 ));
             }
             _ => {}
@@ -621,7 +627,7 @@ pub fn validate_upstream_tls_config(config: &UpstreamTlsConfig) -> Result<(), Tl
 
     if config.client_key.is_some() && config.client_cert.is_none() {
         return Err(TlsError::ConfigBuild(
-            "client_key specified without client_cert".to_string()
+            "client_key specified without client_cert".to_string(),
         ));
     }
 
@@ -633,14 +639,10 @@ pub fn validate_upstream_tls_config(config: &UpstreamTlsConfig) -> Result<(), Tl
 // ============================================================================
 
 /// Load a certificate chain and private key from files
-fn load_certified_key(
-    cert_path: &Path,
-    key_path: &Path,
-) -> Result<CertifiedKey, TlsError> {
+fn load_certified_key(cert_path: &Path, key_path: &Path) -> Result<CertifiedKey, TlsError> {
     // Load certificate chain
-    let cert_file = File::open(cert_path).map_err(|e| {
-        TlsError::CertificateLoad(format!("{}: {}", cert_path.display(), e))
-    })?;
+    let cert_file = File::open(cert_path)
+        .map_err(|e| TlsError::CertificateLoad(format!("{}: {}", cert_path.display(), e)))?;
     let mut cert_reader = BufReader::new(cert_file);
 
     let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
@@ -655,15 +657,17 @@ fn load_certified_key(
     }
 
     // Load private key
-    let key_file = File::open(key_path).map_err(|e| {
-        TlsError::KeyLoad(format!("{}: {}", key_path.display(), e))
-    })?;
+    let key_file = File::open(key_path)
+        .map_err(|e| TlsError::KeyLoad(format!("{}: {}", key_path.display(), e)))?;
     let mut key_reader = BufReader::new(key_file);
 
     let key = rustls_pemfile::private_key(&mut key_reader)
         .map_err(|e| TlsError::KeyLoad(format!("{}: {}", key_path.display(), e)))?
         .ok_or_else(|| {
-            TlsError::KeyLoad(format!("{}: No private key found in file", key_path.display()))
+            TlsError::KeyLoad(format!(
+                "{}: No private key found in file",
+                key_path.display()
+            ))
         })?;
 
     // Create signing key using the default crypto provider
@@ -681,9 +685,8 @@ fn load_certified_key(
 
 /// Load CA certificates for client verification (mTLS)
 pub fn load_client_ca(ca_path: &Path) -> Result<RootCertStore, TlsError> {
-    let ca_file = File::open(ca_path).map_err(|e| {
-        TlsError::CertificateLoad(format!("{}: {}", ca_path.display(), e))
-    })?;
+    let ca_file = File::open(ca_path)
+        .map_err(|e| TlsError::CertificateLoad(format!("{}: {}", ca_path.display(), e)))?;
     let mut ca_reader = BufReader::new(ca_file);
 
     let mut root_store = RootCertStore::empty();
@@ -726,7 +729,9 @@ pub fn build_server_config(config: &TlsConfig) -> Result<ServerConfig, TlsError>
             let root_store = load_client_ca(ca_path)?;
             let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
                 .build()
-                .map_err(|e| TlsError::ConfigBuild(format!("Failed to build client verifier: {}", e)))?;
+                .map_err(|e| {
+                    TlsError::ConfigBuild(format!("Failed to build client verifier: {}", e))
+                })?;
 
             info!("mTLS enabled: client certificates required");
 

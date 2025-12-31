@@ -110,12 +110,9 @@ impl ManagedProcess {
             cmd.env(key, value);
         }
 
-        let child = cmd.spawn().with_context(|| {
-            format!(
-                "Failed to spawn agent '{}': {}",
-                self.config.id, program
-            )
-        })?;
+        let child = cmd
+            .spawn()
+            .with_context(|| format!("Failed to spawn agent '{}': {}", self.config.id, program))?;
 
         let pid = child.id().unwrap_or(0);
         info!(
@@ -294,12 +291,11 @@ fn parse_agent_configs(config_path: &PathBuf) -> Result<Vec<AgentConfig>> {
                         .unwrap_or(RestartPolicy::OnFailure);
 
                     // Parse restart delay
-                    let restart_delay_ms = get_child_int(node, "restart-delay-ms")
-                        .unwrap_or(1000) as u64;
+                    let restart_delay_ms =
+                        get_child_int(node, "restart-delay-ms").unwrap_or(1000) as u64;
 
                     // Parse max restarts
-                    let max_restarts = get_child_int(node, "max-restarts")
-                        .unwrap_or(0) as u32;
+                    let max_restarts = get_child_int(node, "max-restarts").unwrap_or(0) as u32;
 
                     // Parse environment
                     let mut env = HashMap::new();
@@ -310,7 +306,9 @@ fn parse_agent_configs(config_path: &PathBuf) -> Result<Vec<AgentConfig>> {
                                     let key = env_entry.name().value().to_string();
                                     if let Some(value_str) = get_first_string(env_entry) {
                                         // Expand environment variables
-                                        let expanded = if value_str.starts_with("${") && value_str.ends_with("}") {
+                                        let expanded = if value_str.starts_with("${")
+                                            && value_str.ends_with("}")
+                                        {
                                             let var_name = &value_str[2..value_str.len() - 1];
                                             std::env::var(var_name).unwrap_or_default()
                                         } else {

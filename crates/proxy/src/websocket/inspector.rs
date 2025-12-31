@@ -67,7 +67,14 @@ impl WebSocketInspector {
         client_ip: String,
         timeout_ms: u64,
     ) -> Self {
-        Self::with_metrics(agent_manager, route_id, correlation_id, client_ip, timeout_ms, None)
+        Self::with_metrics(
+            agent_manager,
+            route_id,
+            correlation_id,
+            client_ip,
+            timeout_ms,
+            None,
+        )
     }
 
     /// Create a new WebSocket inspector with metrics
@@ -165,7 +172,8 @@ impl WebSocketInspector {
         // Send to agent manager for processing
         let result = match tokio::time::timeout(
             std::time::Duration::from_millis(self.timeout_ms),
-            self.agent_manager.process_websocket_frame(&self.route_id, event),
+            self.agent_manager
+                .process_websocket_frame(&self.route_id, event),
         )
         .await
         {

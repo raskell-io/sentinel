@@ -184,10 +184,7 @@ impl FileCache {
     pub fn clear(&self) {
         let count = self.entries.len();
         self.entries.clear();
-        debug!(
-            cleared_entries = count,
-            "File cache cleared"
-        );
+        debug!(cleared_entries = count, "File cache cleared");
     }
 }
 
@@ -250,7 +247,10 @@ mod tests {
 
         let retrieved = cache.get(&path);
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().content, Bytes::from_static(b"Hello, World!"));
+        assert_eq!(
+            retrieved.unwrap().content,
+            Bytes::from_static(b"Hello, World!")
+        );
     }
 
     #[test]

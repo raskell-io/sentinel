@@ -198,9 +198,8 @@ fn status_handler(state: &BuiltinHandlerState, request_id: &str) -> Response<Ful
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
 
-    let body = serde_json::to_vec_pretty(&response).unwrap_or_else(|_| {
-        b"{\"status\":\"ok\"}".to_vec()
-    });
+    let body =
+        serde_json::to_vec_pretty(&response).unwrap_or_else(|_| b"{\"status\":\"ok\"}".to_vec());
 
     Response::builder()
         .status(StatusCode::OK)
@@ -218,9 +217,8 @@ fn health_handler(request_id: &str) -> Response<Full<Bytes>> {
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
 
-    let body = serde_json::to_vec(&response).unwrap_or_else(|_| {
-        b"{\"status\":\"healthy\"}".to_vec()
-    });
+    let body =
+        serde_json::to_vec(&response).unwrap_or_else(|_| b"{\"status\":\"healthy\"}".to_vec());
 
     Response::builder()
         .status(StatusCode::OK)
@@ -232,7 +230,10 @@ fn health_handler(request_id: &str) -> Response<Full<Bytes>> {
 }
 
 /// Prometheus metrics handler
-fn metrics_handler(request_id: &str, cache_stats: Option<&Arc<HttpCacheStats>>) -> Response<Full<Bytes>> {
+fn metrics_handler(
+    request_id: &str,
+    cache_stats: Option<&Arc<HttpCacheStats>>,
+) -> Response<Full<Bytes>> {
     use prometheus::{Encoder, TextEncoder};
 
     // Create encoder for Prometheus text format
@@ -310,9 +311,8 @@ fn not_found_handler(request_id: &str) -> Response<Full<Bytes>> {
         "timestamp": chrono::Utc::now().to_rfc3339(),
     });
 
-    let body_bytes = serde_json::to_vec_pretty(&body).unwrap_or_else(|_| {
-        b"{\"error\":\"Not Found\",\"status\":404}".to_vec()
-    });
+    let body_bytes = serde_json::to_vec_pretty(&body)
+        .unwrap_or_else(|_| b"{\"error\":\"Not Found\",\"status\":404}".to_vec());
 
     Response::builder()
         .status(StatusCode::NOT_FOUND)
@@ -406,18 +406,18 @@ fn config_handler(config: Option<Arc<Config>>, request_id: &str) -> Response<Ful
                 serde_json::to_vec(&serde_json::json!({
                     "error": "Failed to serialize config",
                     "message": e.to_string(),
-                })).unwrap_or_default()
+                }))
+                .unwrap_or_default()
             })
         }
-        None => {
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "error": "Configuration unavailable",
-                "status": 503,
-                "message": "Config manager not available",
-                "request_id": request_id,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-            })).unwrap_or_default()
-        }
+        None => serde_json::to_vec_pretty(&serde_json::json!({
+            "error": "Configuration unavailable",
+            "status": 503,
+            "message": "Config manager not available",
+            "request_id": request_id,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        }))
+        .unwrap_or_default(),
     };
 
     let status = if config.is_some() {
@@ -476,7 +476,8 @@ fn upstreams_handler(
                 serde_json::to_vec(&serde_json::json!({
                     "error": "Failed to serialize upstreams",
                     "message": e.to_string(),
-                })).unwrap_or_default()
+                }))
+                .unwrap_or_default()
             })
         }
         None => {
@@ -493,7 +494,8 @@ fn upstreams_handler(
                 },
                 "upstreams": [],
                 "message": "No upstreams configured",
-            })).unwrap_or_default()
+            }))
+            .unwrap_or_default()
         }
     };
 
@@ -550,7 +552,8 @@ fn cache_purge_handler(
                 "active_purges": manager.active_purge_count(),
                 "request_id": request_id,
                 "timestamp": chrono::Utc::now().to_rfc3339(),
-            })).unwrap_or_default()
+            }))
+            .unwrap_or_default()
         }
         (Some(request), None) => {
             // Cache manager not available - log warning and acknowledge request
@@ -568,7 +571,8 @@ fn cache_purge_handler(
                 "purged_entries": 0,
                 "request_id": request_id,
                 "timestamp": chrono::Utc::now().to_rfc3339(),
-            })).unwrap_or_default()
+            }))
+            .unwrap_or_default()
         }
         (None, _) => {
             // No purge request provided - return error
@@ -635,22 +639,20 @@ fn cache_stats_handler(
                 timestamp: chrono::Utc::now().to_rfc3339(),
             };
 
-            serde_json::to_vec_pretty(&response).unwrap_or_else(|_| {
-                b"{\"error\":\"Failed to serialize stats\"}".to_vec()
-            })
+            serde_json::to_vec_pretty(&response)
+                .unwrap_or_else(|_| b"{\"error\":\"Failed to serialize stats\"}".to_vec())
         }
-        None => {
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "hits": 0,
-                "misses": 0,
-                "stores": 0,
-                "evictions": 0,
-                "hit_ratio": 0.0,
-                "message": "Cache statistics not available",
-                "request_id": request_id,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-            })).unwrap_or_default()
-        }
+        None => serde_json::to_vec_pretty(&serde_json::json!({
+            "hits": 0,
+            "misses": 0,
+            "stores": 0,
+            "evictions": 0,
+            "hit_ratio": 0.0,
+            "message": "Cache statistics not available",
+            "request_id": request_id,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        }))
+        .unwrap_or_default(),
     };
 
     Response::builder()
@@ -668,10 +670,7 @@ mod tests {
 
     #[test]
     fn test_status_handler() {
-        let state = BuiltinHandlerState::new(
-            "0.1.0".to_string(),
-            "test-instance".to_string(),
-        );
+        let state = BuiltinHandlerState::new("0.1.0".to_string(), "test-instance".to_string());
 
         let response = status_handler(&state, "test-request-id");
         assert_eq!(response.status(), StatusCode::OK);
@@ -837,10 +836,7 @@ mod tests {
 
     #[test]
     fn test_uptime_formatting() {
-        let state = BuiltinHandlerState::new(
-            "0.1.0".to_string(),
-            "test".to_string(),
-        );
+        let state = BuiltinHandlerState::new("0.1.0".to_string(), "test".to_string());
 
         // Just verify it doesn't panic and returns a string
         let uptime = state.uptime_string();

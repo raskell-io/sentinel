@@ -2,9 +2,9 @@
 //!
 //! This module contains application-level logic and utilities for the proxy.
 
-use std::sync::Arc;
 use parking_lot::RwLock;
-use tracing::{info, warn, error};
+use std::sync::Arc;
+use tracing::{error, info, warn};
 
 /// Application state for the proxy
 pub struct AppState {
@@ -95,7 +95,7 @@ impl HealthStatus {
     pub fn to_http_status(&self) -> u16 {
         match self {
             Self::Healthy => 200,
-            Self::Degraded => 200,  // Still return 200 for degraded
+            Self::Degraded => 200, // Still return 200 for degraded
             Self::Unhealthy => 503,
         }
     }

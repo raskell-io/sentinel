@@ -137,17 +137,20 @@ impl HttpCacheStats {
 
     /// Record a cache miss
     pub fn record_miss(&self) {
-        self.misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Record a cache store
     pub fn record_store(&self) {
-        self.stores.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.stores
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Record an eviction
     pub fn record_eviction(&self) {
-        self.evictions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.evictions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Get current hit count
@@ -236,7 +239,9 @@ impl CacheManager {
             default_ttl = config.default_ttl_secs,
             "Registering cache configuration for route"
         );
-        self.route_configs.write().insert(route_id.to_string(), config);
+        self.route_configs
+            .write()
+            .insert(route_id.to_string(), config);
     }
 
     /// Get cache configuration for a route
@@ -254,12 +259,7 @@ impl CacheManager {
     }
 
     /// Generate a cache key string from request info
-    pub fn generate_cache_key(
-        method: &str,
-        host: &str,
-        path: &str,
-        query: Option<&str>,
-    ) -> String {
+    pub fn generate_cache_key(method: &str, host: &str, path: &str, query: Option<&str>) -> String {
         match query {
             Some(q) => format!("{}:{}:{}?{}", method, host, path, q),
             None => format!("{}:{}:{}", method, host, path),
@@ -271,7 +271,11 @@ impl CacheManager {
         self.route_configs
             .read()
             .get(route_id)
-            .map(|c| c.cacheable_methods.iter().any(|m| m.eq_ignore_ascii_case(method)))
+            .map(|c| {
+                c.cacheable_methods
+                    .iter()
+                    .any(|m| m.eq_ignore_ascii_case(method))
+            })
             .unwrap_or(false)
     }
 
@@ -362,10 +366,8 @@ impl CacheManager {
     pub fn purge(&self, path: &str) -> usize {
         // Generate cache key for common methods
         // Since we don't know the exact method/host, we purge all variants
-        let keys_to_purge: Vec<String> = vec![
-            format!("GET:*:{}", path),
-            format!("HEAD:*:{}", path),
-        ];
+        let keys_to_purge: Vec<String> =
+            vec![format!("GET:*:{}", path), format!("HEAD:*:{}", path)];
 
         let now = Instant::now();
         let mut purged = self.purged_keys.write();
@@ -486,25 +488,20 @@ impl CacheManager {
         // Cleanup exact keys
         {
             let mut purged = self.purged_keys.write();
-            purged.retain(|_, created_at| {
-                now.duration_since(*created_at) < PURGE_ENTRY_LIFETIME
-            });
+            purged.retain(|_, created_at| now.duration_since(*created_at) < PURGE_ENTRY_LIFETIME);
         }
 
         // Cleanup patterns
         {
             let mut patterns = self.purge_patterns.write();
-            patterns.retain(|entry| {
-                now.duration_since(entry.created_at) < PURGE_ENTRY_LIFETIME
-            });
+            patterns.retain(|entry| now.duration_since(entry.created_at) < PURGE_ENTRY_LIFETIME);
         }
 
         // Cleanup compiled patterns
         {
             let mut compiled = self.compiled_patterns.write();
-            compiled.retain(|(_, created_at)| {
-                now.duration_since(*created_at) < PURGE_ENTRY_LIFETIME
-            });
+            compiled
+                .retain(|(_, created_at)| now.duration_since(*created_at) < PURGE_ENTRY_LIFETIME);
         }
     }
 
@@ -625,11 +622,14 @@ mod tests {
     fn test_route_config_registration() {
         let manager = CacheManager::new();
 
-        manager.register_route("api", CacheConfig {
-            enabled: true,
-            default_ttl_secs: 300,
-            ..Default::default()
-        });
+        manager.register_route(
+            "api",
+            CacheConfig {
+                enabled: true,
+                default_ttl_secs: 300,
+                ..Default::default()
+            },
+        );
 
         assert!(manager.is_enabled("api"));
         assert!(!manager.is_enabled("unknown"));
@@ -639,11 +639,14 @@ mod tests {
     fn test_method_cacheability() {
         let manager = CacheManager::new();
 
-        manager.register_route("api", CacheConfig {
-            enabled: true,
-            cacheable_methods: vec!["GET".to_string(), "HEAD".to_string()],
-            ..Default::default()
-        });
+        manager.register_route(
+            "api",
+            CacheConfig {
+                enabled: true,
+                cacheable_methods: vec!["GET".to_string(), "HEAD".to_string()],
+                ..Default::default()
+            },
+        );
 
         assert!(manager.is_method_cacheable("api", "GET"));
         assert!(manager.is_method_cacheable("api", "get"));
@@ -653,8 +656,14 @@ mod tests {
     #[test]
     fn test_parse_max_age() {
         assert_eq!(CacheManager::parse_max_age("max-age=3600"), Some(3600));
-        assert_eq!(CacheManager::parse_max_age("public, max-age=300"), Some(300));
-        assert_eq!(CacheManager::parse_max_age("s-maxage=600, max-age=300"), Some(600));
+        assert_eq!(
+            CacheManager::parse_max_age("public, max-age=300"),
+            Some(300)
+        );
+        assert_eq!(
+            CacheManager::parse_max_age("s-maxage=600, max-age=300"),
+            Some(600)
+        );
         assert_eq!(CacheManager::parse_max_age("no-store"), None);
     }
 
@@ -683,11 +692,14 @@ mod tests {
     #[test]
     fn test_calculate_ttl() {
         let manager = CacheManager::new();
-        manager.register_route("api", CacheConfig {
-            enabled: true,
-            default_ttl_secs: 600,
-            ..Default::default()
-        });
+        manager.register_route(
+            "api",
+            CacheConfig {
+                enabled: true,
+                default_ttl_secs: 600,
+                ..Default::default()
+            },
+        );
 
         // Uses max-age from header
         let ttl = manager.calculate_ttl("api", Some("max-age=3600"));
@@ -718,11 +730,13 @@ mod tests {
         assert!(manager.active_purge_count() > 0);
 
         // Should invalidate matching cache key
-        let cache_key = CacheManager::generate_cache_key("GET", "example.com", "/api/users/123", None);
+        let cache_key =
+            CacheManager::generate_cache_key("GET", "example.com", "/api/users/123", None);
         assert!(manager.should_invalidate(&cache_key));
 
         // Should not invalidate non-matching cache key
-        let other_key = CacheManager::generate_cache_key("GET", "example.com", "/api/users/456", None);
+        let other_key =
+            CacheManager::generate_cache_key("GET", "example.com", "/api/users/456", None);
         assert!(!manager.should_invalidate(&other_key));
 
         // Clean up for next test
@@ -744,7 +758,7 @@ mod tests {
 
         // Should not invalidate non-matching paths
         assert!(!manager.should_invalidate("/api/posts/123"));
-        assert!(!manager.should_invalidate("/api/users"));  // No trailing /
+        assert!(!manager.should_invalidate("/api/users")); // No trailing /
 
         manager.clear_purges();
     }

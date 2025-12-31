@@ -89,9 +89,7 @@ pub mod p2c;
 
 // Re-export commonly used types from sub-modules
 pub use adaptive::{AdaptiveBalancer, AdaptiveConfig};
-pub use consistent_hash::{
-    ConsistentHashBalancer, ConsistentHashConfig,
-};
+pub use consistent_hash::{ConsistentHashBalancer, ConsistentHashConfig};
 pub use health::{ActiveHealthChecker, HealthCheckRunner};
 pub use p2c::{P2cBalancer, P2cConfig};
 
@@ -682,7 +680,8 @@ impl UpstreamPool {
             write_timeout_secs = config.timeouts.write_secs,
             "Creating connection pool configuration"
         );
-        let pool_config = ConnectionPoolConfig::from_config(&config.connection_pool, &config.timeouts);
+        let pool_config =
+            ConnectionPoolConfig::from_config(&config.connection_pool, &config.timeouts);
 
         // Create HTTP version configuration
         let http_version = HttpVersionOptions {
@@ -779,9 +778,7 @@ impl UpstreamPool {
                 targets: targets.to_vec(),
                 health_status: Arc::new(RwLock::new(HashMap::new())),
             }),
-            LoadBalancingAlgorithm::Random => {
-                Arc::new(RoundRobinBalancer::new(targets.to_vec()))
-            }
+            LoadBalancingAlgorithm::Random => Arc::new(RoundRobinBalancer::new(targets.to_vec())),
             LoadBalancingAlgorithm::ConsistentHash => Arc::new(ConsistentHashBalancer::new(
                 targets.to_vec(),
                 ConsistentHashConfig::default(),
@@ -851,7 +848,9 @@ impl UpstreamPool {
                         attempt = attempts,
                         "Circuit breaker is open, skipping target"
                     );
-                    self.stats.circuit_breaker_trips.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .circuit_breaker_trips
+                        .fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
             }
@@ -899,14 +898,15 @@ impl UpstreamPool {
         // Determine SNI hostname for TLS connections
         let sni_hostname = self.tls_sni.clone().unwrap_or_else(|| {
             // Extract hostname from address (strip port)
-            selection.address.split(':').next().unwrap_or(&selection.address).to_string()
+            selection
+                .address
+                .split(':')
+                .next()
+                .unwrap_or(&selection.address)
+                .to_string()
         });
 
-        let mut peer = HttpPeer::new(
-            &selection.address,
-            self.tls_enabled,
-            sni_hostname.clone(),
-        );
+        let mut peer = HttpPeer::new(&selection.address, self.tls_enabled, sni_hostname.clone());
 
         // Configure connection pooling options for better performance
         // idle_timeout enables Pingora's connection pooling - connections are

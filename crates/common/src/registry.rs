@@ -150,8 +150,12 @@ mod tests {
         let registry: Registry<String> = Registry::new();
 
         // Insert
-        registry.insert("key1", Arc::new("value1".to_string())).await;
-        registry.insert("key2", Arc::new("value2".to_string())).await;
+        registry
+            .insert("key1", Arc::new("value1".to_string()))
+            .await;
+        registry
+            .insert("key2", Arc::new("value2".to_string()))
+            .await;
 
         // Get
         assert_eq!(
@@ -220,9 +224,7 @@ mod tests {
         let registry1: Registry<String> = Registry::new();
         let registry2 = registry1.clone();
 
-        registry1
-            .insert("key", Arc::new("value".to_string()))
-            .await;
+        registry1.insert("key", Arc::new("value".to_string())).await;
 
         // Clone should see the same data
         assert!(registry2.contains("key").await);

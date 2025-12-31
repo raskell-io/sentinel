@@ -289,11 +289,7 @@ impl P2cBalancer {
         for &idx in &candidates {
             let load = self.metrics[idx].get_load(self.config.load_metric).await;
 
-            trace!(
-                target_index = idx,
-                load = load,
-                "Candidate load"
-            );
+            trace!(target_index = idx, load = load, "Candidate load");
 
             if load < min_load {
                 min_load = load;
@@ -315,10 +311,12 @@ impl P2cBalancer {
     pub fn acquire_connection(&self, target_index: usize) {
         let connections = self.metrics[target_index]
             .connections
-            .fetch_add(1, Ordering::Relaxed) + 1;
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
         let requests = self.metrics[target_index]
             .requests
-            .fetch_add(1, Ordering::Relaxed) + 1;
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
 
         trace!(
             target_index = target_index,
@@ -332,7 +330,8 @@ impl P2cBalancer {
     pub fn release_connection(&self, target_index: usize) {
         let connections = self.metrics[target_index]
             .connections
-            .fetch_sub(1, Ordering::Relaxed) - 1;
+            .fetch_sub(1, Ordering::Relaxed)
+            - 1;
 
         trace!(
             target_index = target_index,
@@ -371,10 +370,7 @@ impl P2cBalancer {
 
 #[async_trait]
 impl LoadBalancer for P2cBalancer {
-    async fn select(
-        &self,
-        _context: Option<&RequestContext>,
-    ) -> SentinelResult<TargetSelection> {
+    async fn select(&self, _context: Option<&RequestContext>) -> SentinelResult<TargetSelection> {
         // Select candidates
         let num_choices = if self.config.power_of_three { 3 } else { 2 };
 
@@ -390,11 +386,7 @@ impl LoadBalancer for P2cBalancer {
             if let Some(idx) = self.random_healthy_target().await {
                 if !candidates.contains(&idx) {
                     candidates.push(idx);
-                    trace!(
-                        choice = i,
-                        target_index = idx,
-                        "Added candidate"
-                    );
+                    trace!(choice = i, target_index = idx, "Added candidate");
                 }
             }
         }
@@ -405,13 +397,10 @@ impl LoadBalancer for P2cBalancer {
         }
 
         // Select least loaded from candidates
-        let target_index = self
-            .select_least_loaded(candidates)
-            .await
-            .ok_or_else(|| {
-                warn!("P2C: Failed to select from candidates");
-                SentinelError::NoHealthyUpstream
-            })?;
+        let target_index = self.select_least_loaded(candidates).await.ok_or_else(|| {
+            warn!("P2C: Failed to select from candidates");
+            SentinelError::NoHealthyUpstream
+        })?;
 
         let target = &self.targets[target_index];
 
@@ -480,7 +469,8 @@ impl LoadBalancer for P2cBalancer {
 
     async fn healthy_targets(&self) -> Vec<String> {
         let health = self.health_status.read().await;
-        let targets: Vec<String> = self.targets
+        let targets: Vec<String> = self
+            .targets
             .iter()
             .filter_map(|t| {
                 let target_id = format!("{}:{}", t.address, t.port);

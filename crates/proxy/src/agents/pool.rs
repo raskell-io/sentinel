@@ -70,13 +70,18 @@ impl AgentConnectionPool {
     /// Get active connection count.
     pub fn active_count(&self) -> u32 {
         let count = self.active_count.load(std::sync::atomic::Ordering::Relaxed);
-        trace!(active_connections = count, "Retrieved active connection count");
+        trace!(
+            active_connections = count,
+            "Retrieved active connection count"
+        );
         count
     }
 
     /// Get total connections created.
     pub fn total_created(&self) -> u64 {
-        let total = self.total_created.load(std::sync::atomic::Ordering::Relaxed);
+        let total = self
+            .total_created
+            .load(std::sync::atomic::Ordering::Relaxed);
         trace!(total_created = total, "Retrieved total connections created");
         total
     }

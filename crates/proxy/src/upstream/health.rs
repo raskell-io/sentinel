@@ -5,9 +5,9 @@
 //! health tracking in load balancers by periodically probing backends.
 
 use pingora_load_balancing::{
+    discovery::Static,
     health_check::{HealthCheck as PingoraHealthCheck, HttpHealthCheck, TcpHealthCheck},
     Backend, Backends,
-    discovery::Static,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -107,7 +107,11 @@ impl ActiveHealthChecker {
         upstream_id: &str,
     ) -> Box<dyn PingoraHealthCheck + Send + Sync> {
         match &config.check_type {
-            HealthCheckType::Http { path, expected_status, host } => {
+            HealthCheckType::Http {
+                path,
+                expected_status,
+                host,
+            } => {
                 let hostname = host.as_deref().unwrap_or("localhost");
                 let mut hc = HttpHealthCheck::new(hostname, false);
 
@@ -120,7 +124,9 @@ impl ActiveHealthChecker {
                 // We customize by modifying hc.req for non-root paths
                 if path != "/" {
                     // Create custom request header for the health check path
-                    if let Ok(req) = pingora_http::RequestHeader::build("GET", path.as_bytes(), None) {
+                    if let Ok(req) =
+                        pingora_http::RequestHeader::build("GET", path.as_bytes(), None)
+                    {
                         hc.req = req;
                     }
                 }
@@ -270,7 +276,8 @@ impl HealthCheckRunner {
         );
 
         // Find minimum interval
-        let min_interval = self.checkers
+        let min_interval = self
+            .checkers
             .iter()
             .map(|c| c.interval)
             .min()
@@ -337,21 +344,21 @@ impl Default for HealthCheckRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentinel_config::{ConnectionPoolConfig, HttpVersionConfig, UpstreamTarget, UpstreamTimeouts};
     use sentinel_common::types::LoadBalancingAlgorithm;
+    use sentinel_config::{
+        ConnectionPoolConfig, HttpVersionConfig, UpstreamTarget, UpstreamTimeouts,
+    };
     use std::collections::HashMap;
 
     fn create_test_config() -> UpstreamConfig {
         UpstreamConfig {
             id: "test-upstream".to_string(),
-            targets: vec![
-                UpstreamTarget {
-                    address: "127.0.0.1:8081".to_string(),
-                    weight: 1,
-                    max_requests: None,
-                    metadata: HashMap::new(),
-                },
-            ],
+            targets: vec![UpstreamTarget {
+                address: "127.0.0.1:8081".to_string(),
+                weight: 1,
+                max_requests: None,
+                metadata: HashMap::new(),
+            }],
             load_balancing: LoadBalancingAlgorithm::RoundRobin,
             health_check: Some(HealthCheckConfig {
                 check_type: HealthCheckType::Http {

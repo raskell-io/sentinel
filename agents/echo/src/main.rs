@@ -20,21 +20,11 @@ use sentinel_agent_protocol::{
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Unix socket path to listen on (mutually exclusive with --grpc)
-    #[arg(
-        short,
-        long,
-        env = "ECHO_AGENT_SOCKET",
-        conflicts_with = "grpc"
-    )]
+    #[arg(short, long, env = "ECHO_AGENT_SOCKET", conflicts_with = "grpc")]
     socket: Option<PathBuf>,
 
     /// gRPC address to listen on (e.g., "0.0.0.0:50051")
-    #[arg(
-        short,
-        long,
-        env = "ECHO_AGENT_GRPC",
-        conflicts_with = "socket"
-    )]
+    #[arg(short, long, env = "ECHO_AGENT_GRPC", conflicts_with = "socket")]
     grpc: Option<String>,
 
     /// Log level (trace, debug, info, warn, error)

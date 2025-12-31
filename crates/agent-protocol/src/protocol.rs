@@ -395,7 +395,6 @@ pub struct AgentResponse {
     // ========================================================================
     // Streaming-specific fields
     // ========================================================================
-
     /// Agent needs more data to make a final decision
     ///
     /// When `true`, the current `decision` is provisional and may change

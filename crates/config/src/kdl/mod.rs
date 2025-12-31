@@ -42,10 +42,7 @@ use crate::{AgentConfig, Config};
 
 /// Convert a parsed KDL document to Config
 pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
-    trace!(
-        node_count = doc.nodes().len(),
-        "Parsing KDL document"
-    );
+    trace!(node_count = doc.nodes().len(), "Parsing KDL document");
 
     let mut server = None;
     let mut listeners = Vec::new();
@@ -161,7 +158,7 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
 // Agent Parsing
 // ============================================================================
 
-use crate::agents::{AgentEvent, AgentTransport, AgentTlsConfig, AgentType, BodyStreamingMode};
+use crate::agents::{AgentEvent, AgentTlsConfig, AgentTransport, AgentType, BodyStreamingMode};
 use crate::routes::FailureMode;
 use sentinel_common::types::CircuitBreakerConfig;
 use std::path::PathBuf;

@@ -212,7 +212,9 @@ impl<I: FrameInspector> WebSocketHandler<I> {
 
                             // Create and forward a close frame
                             let close_frame = WebSocketFrame::close(code, &reason);
-                            if let Ok(encoded) = self.codec.encode_frame(&close_frame, !client_to_server) {
+                            if let Ok(encoded) =
+                                self.codec.encode_frame(&close_frame, !client_to_server)
+                            {
                                 output.extend_from_slice(&encoded);
                             }
 
@@ -497,7 +499,9 @@ mod tests {
         assert_eq!(inspector.client_frames_inspected(), 1);
 
         // Subsequent calls should also return Close
-        let result = handler.process_client_data(Some(make_text_frame("More data", false))).await;
+        let result = handler
+            .process_client_data(Some(make_text_frame("More data", false)))
+            .await;
         match result {
             ProcessResult::Close(_) => {}
             _ => panic!("Expected Close result on subsequent call"),
@@ -546,24 +550,36 @@ mod tests {
         let (part1, part2) = full_frame.split_at(full_frame.len() / 2);
 
         // Send first part - should return empty (buffering)
-        let result = handler.process_client_data(Some(Bytes::from(part1.to_vec()))).await;
+        let result = handler
+            .process_client_data(Some(Bytes::from(part1.to_vec())))
+            .await;
         match result {
             ProcessResult::Forward(Some(data)) => {
                 assert!(data.is_empty(), "Partial frame should not produce output");
             }
             _ => panic!("Expected Forward with empty data for partial frame"),
         }
-        assert_eq!(inspector.client_frames_inspected(), 0, "Partial frame should not be inspected");
+        assert_eq!(
+            inspector.client_frames_inspected(),
+            0,
+            "Partial frame should not be inspected"
+        );
 
         // Send second part - should return complete frame
-        let result = handler.process_client_data(Some(Bytes::from(part2.to_vec()))).await;
+        let result = handler
+            .process_client_data(Some(Bytes::from(part2.to_vec())))
+            .await;
         match result {
             ProcessResult::Forward(Some(data)) => {
                 assert_eq!(data, full_frame, "Complete frame should be forwarded");
             }
             _ => panic!("Expected Forward with complete frame"),
         }
-        assert_eq!(inspector.client_frames_inspected(), 1, "Complete frame should be inspected");
+        assert_eq!(
+            inspector.client_frames_inspected(),
+            1,
+            "Complete frame should be inspected"
+        );
     }
 
     #[tokio::test]

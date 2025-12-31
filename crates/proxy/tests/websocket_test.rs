@@ -175,17 +175,22 @@ impl AgentHandler for FilteringAgent {
         self.frames_inspected.fetch_add(1, Ordering::SeqCst);
 
         // Decode the base64 payload
-        let payload = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &event.data) {
-            Ok(data) => data,
-            Err(_) => return AgentResponse::default_allow().with_websocket_decision(WebSocketDecision::Allow),
-        };
+        let payload =
+            match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &event.data) {
+                Ok(data) => data,
+                Err(_) => {
+                    return AgentResponse::default_allow()
+                        .with_websocket_decision(WebSocketDecision::Allow)
+                }
+            };
 
         // Check if payload contains blocked keywords
         let payload_str = String::from_utf8_lossy(&payload);
         for keyword in &self.blocked_keywords {
             if payload_str.contains(keyword) {
                 self.frames_dropped.fetch_add(1, Ordering::SeqCst);
-                return AgentResponse::default_allow().with_websocket_decision(WebSocketDecision::Drop);
+                return AgentResponse::default_allow()
+                    .with_websocket_decision(WebSocketDecision::Drop);
             }
         }
 
@@ -226,19 +231,25 @@ impl AgentHandler for ClosingAgent {
         self.frames_inspected.fetch_add(1, Ordering::SeqCst);
 
         // Decode the base64 payload
-        let payload = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &event.data) {
-            Ok(data) => data,
-            Err(_) => return AgentResponse::default_allow().with_websocket_decision(WebSocketDecision::Allow),
-        };
+        let payload =
+            match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &event.data) {
+                Ok(data) => data,
+                Err(_) => {
+                    return AgentResponse::default_allow()
+                        .with_websocket_decision(WebSocketDecision::Allow)
+                }
+            };
 
         // Check if payload contains close patterns
         let payload_str = String::from_utf8_lossy(&payload);
         for pattern in &self.close_patterns {
             if payload_str.contains(pattern) {
-                return AgentResponse::default_allow().with_websocket_decision(WebSocketDecision::Close {
-                    code: self.close_code,
-                    reason: self.close_reason.clone(),
-                });
+                return AgentResponse::default_allow().with_websocket_decision(
+                    WebSocketDecision::Close {
+                        code: self.close_code,
+                        reason: self.close_reason.clone(),
+                    },
+                );
             }
         }
 
@@ -328,7 +339,11 @@ async fn test_agent_allows_all_frames() {
     let agent_clone = agent.clone();
 
     // Start agent server
-    let server = AgentServer::new("allow-agent", socket_path.clone(), Box::new(AllowingAgentWrapper(agent_clone)));
+    let server = AgentServer::new(
+        "allow-agent",
+        socket_path.clone(),
+        Box::new(AllowingAgentWrapper(agent_clone)),
+    );
 
     let server_handle = tokio::spawn(async move {
         let _ = server.run().await;
@@ -392,7 +407,10 @@ async fn test_agent_drops_blocked_frames() {
     let socket_path = dir.path().join("filter-agent.sock");
 
     // Create filtering agent that blocks "secret" keyword
-    let agent = Arc::new(FilteringAgent::new(vec!["secret".to_string(), "password".to_string()]));
+    let agent = Arc::new(FilteringAgent::new(vec![
+        "secret".to_string(),
+        "password".to_string(),
+    ]));
     let agent_clone = agent.clone();
 
     // Start agent server
@@ -439,7 +457,10 @@ async fn test_agent_drops_blocked_frames() {
     let event = WebSocketFrameEvent {
         correlation_id: "test-2".to_string(),
         opcode: "text".to_string(),
-        data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"my secret data"),
+        data: base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b"my secret data",
+        ),
         client_to_server: true,
         frame_index: 1,
         fin: true,
@@ -531,7 +552,10 @@ async fn test_agent_closes_connection() {
     let event = WebSocketFrameEvent {
         correlation_id: "test-2".to_string(),
         opcode: "text".to_string(),
-        data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"malicious payload"),
+        data: base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b"malicious payload",
+        ),
         client_to_server: true,
         frame_index: 1,
         fin: true,
@@ -676,7 +700,9 @@ async fn test_frame_index_tracking() {
     let server = AgentServer::new(
         "index-agent",
         socket_path.clone(),
-        Box::new(IndexTrackingAgent { indices: indices_clone }),
+        Box::new(IndexTrackingAgent {
+            indices: indices_clone,
+        }),
     );
 
     let server_handle = tokio::spawn(async move {
@@ -749,7 +775,9 @@ async fn test_binary_frame_inspection() {
     let server = AgentServer::new(
         "binary-agent",
         socket_path.clone(),
-        Box::new(BinaryDataAgent { received: received_clone }),
+        Box::new(BinaryDataAgent {
+            received: received_clone,
+        }),
     );
 
     let server_handle = tokio::spawn(async move {
@@ -804,7 +832,9 @@ impl AgentHandler for BinaryDataAgent {
     }
 
     async fn on_websocket_frame(&self, event: WebSocketFrameEvent) -> AgentResponse {
-        if let Ok(data) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &event.data) {
+        if let Ok(data) =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &event.data)
+        {
             let mut received = self.received.lock().await;
             received.push(data);
         }
@@ -852,7 +882,10 @@ async fn test_fragmented_message_handling() {
         let event = WebSocketFrameEvent {
             correlation_id: format!("frag-{}", i),
             opcode: if i == 0 { "text" } else { "continuation" }.to_string(),
-            data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data.as_bytes()),
+            data: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                data.as_bytes(),
+            ),
             client_to_server: true,
             frame_index: i as u64,
             fin: *fin,

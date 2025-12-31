@@ -86,7 +86,10 @@ pub fn validate_config_semantics(config: &Config) -> Result<(), validator::Valid
     if errors.is_empty() {
         debug!("Semantic validation passed");
     } else {
-        debug!(error_count = errors.len(), "Semantic validation found errors");
+        debug!(
+            error_count = errors.len(),
+            "Semantic validation found errors"
+        );
     }
 
     build_validation_result(errors)
@@ -99,7 +102,10 @@ fn validate_routes(
     filter_ids: &HashSet<&str>,
     errors: &mut Vec<String>,
 ) {
-    trace!(route_count = config.routes.len(), "Validating route configurations");
+    trace!(
+        route_count = config.routes.len(),
+        "Validating route configurations"
+    );
 
     // Routes needing upstreams
     let routes_needing_upstreams: Vec<_> = config
@@ -206,12 +212,11 @@ fn validate_routes(
     }
 }
 
-fn validate_listeners(
-    config: &Config,
-    route_ids: &HashSet<&str>,
-    errors: &mut Vec<String>,
-) {
-    trace!(listener_count = config.listeners.len(), "Validating listener configurations");
+fn validate_listeners(config: &Config, route_ids: &HashSet<&str>, errors: &mut Vec<String>) {
+    trace!(
+        listener_count = config.listeners.len(),
+        "Validating listener configurations"
+    );
 
     for listener in &config.listeners {
         trace!(listener_id = %listener.id, "Validating listener");
@@ -234,12 +239,11 @@ fn validate_listeners(
     }
 }
 
-fn validate_filters(
-    config: &Config,
-    agent_ids: &HashSet<&str>,
-    errors: &mut Vec<String>,
-) {
-    trace!(filter_count = config.filters.len(), "Validating filter configurations");
+fn validate_filters(config: &Config, agent_ids: &HashSet<&str>, errors: &mut Vec<String>) {
+    trace!(
+        filter_count = config.filters.len(),
+        "Validating filter configurations"
+    );
 
     for (filter_id, filter_config) in &config.filters {
         trace!(filter_id = %filter_id, "Validating filter");
@@ -263,7 +267,10 @@ fn validate_filters(
 }
 
 fn validate_upstreams(config: &Config, errors: &mut Vec<String>) {
-    trace!(upstream_count = config.upstreams.len(), "Validating upstream configurations");
+    trace!(
+        upstream_count = config.upstreams.len(),
+        "Validating upstream configurations"
+    );
 
     for (upstream_id, upstream) in &config.upstreams {
         trace!(

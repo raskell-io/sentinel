@@ -156,10 +156,7 @@ impl RedisRateLimiter {
         })
         .await
         .map_err(|_| {
-            redis::RedisError::from((
-                redis::ErrorKind::IoError,
-                "Redis operation timed out",
-            ))
+            redis::RedisError::from((redis::ErrorKind::IoError, "Redis operation timed out"))
         })?;
 
         let (count,) = result?;
@@ -185,7 +182,11 @@ impl RedisRateLimiter {
     }
 
     /// Update configuration
-    pub fn update_config(&self, backend_config: &RedisBackendConfig, rate_config: &RateLimitConfig) {
+    pub fn update_config(
+        &self,
+        backend_config: &RedisBackendConfig,
+        rate_config: &RateLimitConfig,
+    ) {
         let mut config = self.config.write();
         config.key_prefix = backend_config.key_prefix.clone();
         config.max_rps = rate_config.max_rps;
@@ -257,7 +258,9 @@ pub async fn create_redis_rate_limiter(
     _backend_config: &RedisBackendConfig,
     _rate_config: &RateLimitConfig,
 ) -> Option<RedisRateLimiter> {
-    warn!("Distributed rate limiting requested but feature is disabled. Using local rate limiting.");
+    warn!(
+        "Distributed rate limiting requested but feature is disabled. Using local rate limiting."
+    );
     None
 }
 

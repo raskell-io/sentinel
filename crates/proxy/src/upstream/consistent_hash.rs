@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::{LoadBalancer, RequestContext, TargetSelection, UpstreamTarget};
-use sentinel_common::errors::{SentinelError, SentinelResult};
 use async_trait::async_trait;
+use sentinel_common::errors::{SentinelError, SentinelResult};
 use tracing::{debug, info, trace, warn};
 
 /// Hash function types supported by the consistent hash balancer
@@ -503,13 +503,10 @@ impl LoadBalancer for ConsistentHashBalancer {
                 (key, true)
             });
 
-        let target_index = self
-            .find_target(&hash_key)
-            .await
-            .ok_or_else(|| {
-                warn!("No healthy upstream targets available");
-                SentinelError::NoHealthyUpstream
-            })?;
+        let target_index = self.find_target(&hash_key).await.ok_or_else(|| {
+            warn!("No healthy upstream targets available");
+            SentinelError::NoHealthyUpstream
+        })?;
 
         let target = &self.targets[target_index];
 
@@ -568,7 +565,8 @@ impl LoadBalancer for ConsistentHashBalancer {
 
     async fn healthy_targets(&self) -> Vec<String> {
         let health = self.health_status.read().await;
-        let targets: Vec<String> = self.targets
+        let targets: Vec<String> = self
+            .targets
             .iter()
             .filter_map(|t| {
                 let target_id = format!("{}:{}", t.address, t.port);

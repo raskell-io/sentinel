@@ -91,7 +91,10 @@ pub fn compress_content(content: &Bytes, encoding: ContentEncoding) -> Result<By
                 encoding = "gzip",
                 original_size = original_size,
                 compressed_size = compressed_size,
-                ratio = format!("{:.1}%", (compressed_size as f64 / original_size as f64) * 100.0),
+                ratio = format!(
+                    "{:.1}%",
+                    (compressed_size as f64 / original_size as f64) * 100.0
+                ),
                 "Compressed content"
             );
 
@@ -109,7 +112,10 @@ pub fn compress_content(content: &Bytes, encoding: ContentEncoding) -> Result<By
                 encoding = "brotli",
                 original_size = original_size,
                 compressed_size = compressed_size,
-                ratio = format!("{:.1}%", (compressed_size as f64 / original_size as f64) * 100.0),
+                ratio = format!(
+                    "{:.1}%",
+                    (compressed_size as f64 / original_size as f64) * 100.0
+                ),
                 "Compressed content"
             );
 

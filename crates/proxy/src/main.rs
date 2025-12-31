@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use sentinel_config::Config;
-use sentinel_proxy::{ReloadTrigger, SignalManager, SignalType, SentinelProxy};
+use sentinel_proxy::{ReloadTrigger, SentinelProxy, SignalManager, SignalType};
 
 /// Version string combining Cargo semver and CalVer release tag
 const VERSION: &str = concat!(
@@ -90,12 +90,7 @@ fn main() -> Result<()> {
             return test_config(config.as_deref().or(cli.config.as_deref()));
         }
         Some(Commands::Run { config }) => {
-            return run_server(
-                config.or(cli.config),
-                cli.verbose,
-                cli.daemon,
-                cli.upgrade,
-            );
+            return run_server(config.or(cli.config), cli.verbose, cli.daemon, cli.upgrade);
         }
         None => {
             // Default: run the server
@@ -124,7 +119,9 @@ fn test_config(config_path: Option<&str>) -> Result<()> {
     };
 
     // Validate the configuration
-    config.validate().context("Configuration validation failed")?;
+    config
+        .validate()
+        .context("Configuration validation failed")?;
 
     // Additional validation checks
     let route_count = config.routes.len();
@@ -148,8 +145,10 @@ fn test_config(config_path: Option<&str>) -> Result<()> {
         }
     }
 
-    println!("sentinel: configuration file {} test is successful",
-        config_path.unwrap_or("(embedded)"));
+    println!(
+        "sentinel: configuration file {} test is successful",
+        config_path.unwrap_or("(embedded)")
+    );
 
     Ok(())
 }
@@ -166,7 +165,7 @@ fn run_server(
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
         )
         .init();
 
@@ -177,8 +176,7 @@ fn run_server(
     // Note: We'll configure threads via ServerConf after loading our config
 
     // Get config path with priority: CLI arg > env var > None (embedded default)
-    let effective_config_path = config_path
-        .or_else(|| std::env::var("SENTINEL_CONFIG").ok());
+    let effective_config_path = config_path.or_else(|| std::env::var("SENTINEL_CONFIG").ok());
 
     // Handle config file creation/loading
     let effective_config_path = match effective_config_path {
@@ -216,9 +214,8 @@ fn run_server(
     let runtime = tokio::runtime::Runtime::new()?;
 
     // Create proxy with configuration
-    let proxy = runtime.block_on(async {
-        SentinelProxy::new(effective_config_path.as_deref()).await
-    })?;
+    let proxy =
+        runtime.block_on(async { SentinelProxy::new(effective_config_path.as_deref()).await })?;
 
     // Get config manager for reload operations
     let config_manager = proxy.config_manager.clone();
@@ -372,8 +369,10 @@ fn setup_signal_handlers(signal_tx: std::sync::mpsc::Sender<SignalType>) {
         for sig in signals.forever() {
             let signal_type = match sig {
                 SIGTERM | SIGINT => {
-                    info!("Received shutdown signal ({}), initiating graceful shutdown",
-                        if sig == SIGTERM { "SIGTERM" } else { "SIGINT" });
+                    info!(
+                        "Received shutdown signal ({}), initiating graceful shutdown",
+                        if sig == SIGTERM { "SIGTERM" } else { "SIGINT" }
+                    );
                     SignalType::Shutdown
                 }
                 SIGHUP => {
@@ -404,8 +403,8 @@ fn setup_signal_handlers(signal_tx: std::sync::mpsc::Sender<SignalType>) {
 ///
 /// Creates parent directories if needed and writes the embedded default config.
 fn create_default_config_file(path: &std::path::Path) -> Result<()> {
-    use std::fs;
     use sentinel_config::DEFAULT_CONFIG_KDL;
+    use std::fs;
 
     // Create parent directories if they don't exist
     if let Some(parent) = path.parent() {
@@ -432,9 +431,8 @@ async fn run_signal_handler(
     loop {
         // Use spawn_blocking to wait for signals without blocking the async runtime
         let signal_manager_clone = signal_manager.clone();
-        let signal = tokio::task::spawn_blocking(move || {
-            signal_manager_clone.recv_blocking()
-        }).await;
+        let signal =
+            tokio::task::spawn_blocking(move || signal_manager_clone.recv_blocking()).await;
 
         match signal {
             Ok(Some(SignalType::Reload)) => {

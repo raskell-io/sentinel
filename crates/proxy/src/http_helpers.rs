@@ -149,12 +149,7 @@ pub async fn write_response(
     let headers_owned: Vec<(String, String)> = response
         .headers()
         .iter()
-        .map(|(k, v)| {
-            (
-                k.as_str().to_string(),
-                v.to_str().unwrap_or("").to_string(),
-            )
-        })
+        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
 
     // Extract body bytes

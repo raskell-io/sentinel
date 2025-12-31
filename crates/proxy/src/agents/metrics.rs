@@ -36,7 +36,8 @@ impl AgentMetrics {
     pub fn record_success(&self, duration_us: u64) {
         self.calls_total.fetch_add(1, Ordering::Relaxed);
         self.calls_success.fetch_add(1, Ordering::Relaxed);
-        self.duration_total_us.fetch_add(duration_us, Ordering::Relaxed);
+        self.duration_total_us
+            .fetch_add(duration_us, Ordering::Relaxed);
     }
 
     /// Record a failed call.

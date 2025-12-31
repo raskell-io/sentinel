@@ -258,9 +258,11 @@ impl ConfigManager {
     /// Reload configuration
     pub async fn reload(&self, trigger: ReloadTrigger) -> SentinelResult<()> {
         let start = Instant::now();
-        let reload_num = self.stats
+        let reload_num = self
+            .stats
             .total_reloads
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
 
         info!(
             trigger = ?trigger,
@@ -389,9 +391,11 @@ impl ConfigManager {
 
         // Update statistics
         let duration = start.elapsed();
-        let successful_count = self.stats
+        let successful_count = self
+            .stats
             .successful_reloads
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         *self.stats.last_success.write().await = Some(Instant::now());
 
         // Update average duration
@@ -460,9 +464,11 @@ impl ConfigManager {
             // Apply previous configuration
             trace!("Applying previous configuration");
             self.current_config.store(prev_config.clone());
-            let rollback_count = self.stats
+            let rollback_count = self
+                .stats
                 .rollbacks
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
 
             let _ = self.reload_tx.send(ReloadEvent::RolledBack {
                 timestamp: Instant::now(),

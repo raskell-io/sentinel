@@ -289,10 +289,7 @@ impl SentinelProxy {
                                     new_pools.insert(upstream_id.clone(), Arc::new(pool));
                                 }
                                 Err(e) => {
-                                    error!(
-                                        "Failed to create upstream pool {}: {}",
-                                        upstream_id, e
-                                    );
+                                    error!("Failed to create upstream pool {}: {}", upstream_id, e);
                                 }
                             }
                         }
@@ -503,10 +500,7 @@ impl SentinelProxy {
         }
 
         if enabled_count > 0 {
-            info!(
-                enabled_routes = enabled_count,
-                "HTTP caching initialized"
-            );
+            info!(enabled_routes = enabled_count, "HTTP caching initialized");
         } else {
             debug!("HTTP cache manager initialized (no routes with caching enabled)");
         }

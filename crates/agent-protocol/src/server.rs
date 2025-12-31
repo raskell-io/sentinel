@@ -14,11 +14,14 @@ use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::errors::AgentProtocolError;
-use crate::grpc::{self, agent_processor_server::AgentProcessor, agent_processor_server::AgentProcessorServer};
+use crate::grpc::{
+    self, agent_processor_server::AgentProcessor, agent_processor_server::AgentProcessorServer,
+};
 use crate::protocol::{
-    AgentRequest, AgentResponse, AuditMetadata, Decision, EventType, HeaderOp, RequestBodyChunkEvent,
-    RequestCompleteEvent, RequestHeadersEvent, RequestMetadata, ResponseBodyChunkEvent, ResponseHeadersEvent,
-    WebSocketDecision, WebSocketFrameEvent, MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
+    AgentRequest, AgentResponse, AuditMetadata, Decision, EventType, HeaderOp,
+    RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, RequestMetadata,
+    ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketDecision, WebSocketFrameEvent,
+    MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
 };
 
 /// Agent server for testing and reference implementations
@@ -618,7 +621,9 @@ impl GrpcAgentHandler {
     }
 
     /// Convert gRPC RequestBodyChunkEvent to internal format
-    fn convert_request_body_chunk_from_grpc(e: grpc::RequestBodyChunkEvent) -> RequestBodyChunkEvent {
+    fn convert_request_body_chunk_from_grpc(
+        e: grpc::RequestBodyChunkEvent,
+    ) -> RequestBodyChunkEvent {
         RequestBodyChunkEvent {
             correlation_id: e.correlation_id,
             data: String::from_utf8_lossy(&e.data).to_string(),
@@ -639,7 +644,9 @@ impl GrpcAgentHandler {
     }
 
     /// Convert gRPC ResponseBodyChunkEvent to internal format
-    fn convert_response_body_chunk_from_grpc(e: grpc::ResponseBodyChunkEvent) -> ResponseBodyChunkEvent {
+    fn convert_response_body_chunk_from_grpc(
+        e: grpc::ResponseBodyChunkEvent,
+    ) -> ResponseBodyChunkEvent {
         ResponseBodyChunkEvent {
             correlation_id: e.correlation_id,
             data: String::from_utf8_lossy(&e.data).to_string(),
@@ -665,7 +672,7 @@ impl GrpcAgentHandler {
 
     /// Convert gRPC WebSocketFrameEvent to internal format
     fn convert_websocket_frame_from_grpc(e: grpc::WebSocketFrameEvent) -> WebSocketFrameEvent {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
         WebSocketFrameEvent {
             correlation_id: e.correlation_id,
             opcode: e.opcode,
@@ -713,34 +720,43 @@ impl GrpcAgentHandler {
     /// Convert internal response to gRPC format
     fn convert_response_to_grpc(response: AgentResponse) -> grpc::AgentResponse {
         let decision = match response.decision {
-            Decision::Allow => Some(grpc::agent_response::Decision::Allow(grpc::AllowDecision {})),
-            Decision::Block { status, body, headers } => {
-                Some(grpc::agent_response::Decision::Block(grpc::BlockDecision {
-                    status: status as u32,
-                    body,
-                    headers: headers.unwrap_or_default(),
-                }))
-            }
-            Decision::Redirect { url, status } => {
-                Some(grpc::agent_response::Decision::Redirect(grpc::RedirectDecision {
+            Decision::Allow => Some(grpc::agent_response::Decision::Allow(
+                grpc::AllowDecision {},
+            )),
+            Decision::Block {
+                status,
+                body,
+                headers,
+            } => Some(grpc::agent_response::Decision::Block(grpc::BlockDecision {
+                status: status as u32,
+                body,
+                headers: headers.unwrap_or_default(),
+            })),
+            Decision::Redirect { url, status } => Some(grpc::agent_response::Decision::Redirect(
+                grpc::RedirectDecision {
                     url,
                     status: status as u32,
-                }))
-            }
-            Decision::Challenge { challenge_type, params } => {
-                Some(grpc::agent_response::Decision::Challenge(grpc::ChallengeDecision {
+                },
+            )),
+            Decision::Challenge {
+                challenge_type,
+                params,
+            } => Some(grpc::agent_response::Decision::Challenge(
+                grpc::ChallengeDecision {
                     challenge_type,
                     params,
-                }))
-            }
+                },
+            )),
         };
 
-        let request_headers: Vec<grpc::HeaderOp> = response.request_headers
+        let request_headers: Vec<grpc::HeaderOp> = response
+            .request_headers
             .into_iter()
             .map(Self::convert_header_op_to_grpc)
             .collect();
 
-        let response_headers: Vec<grpc::HeaderOp> = response.response_headers
+        let response_headers: Vec<grpc::HeaderOp> = response
+            .response_headers
             .into_iter()
             .map(Self::convert_header_op_to_grpc)
             .collect();
@@ -750,9 +766,12 @@ impl GrpcAgentHandler {
             rule_ids: response.audit.rule_ids,
             confidence: response.audit.confidence,
             reason_codes: response.audit.reason_codes,
-            custom: response.audit.custom.into_iter().map(|(k, v)| {
-                (k, v.to_string())
-            }).collect(),
+            custom: response
+                .audit
+                .custom
+                .into_iter()
+                .map(|(k, v)| (k, v.to_string()))
+                .collect(),
         });
 
         // Convert body mutations
@@ -767,22 +786,26 @@ impl GrpcAgentHandler {
         });
 
         // Convert WebSocket decision
-        let websocket_decision = response.websocket_decision.map(|ws_decision| {
-            match ws_decision {
+        let websocket_decision = response
+            .websocket_decision
+            .map(|ws_decision| match ws_decision {
                 WebSocketDecision::Allow => {
-                    grpc::agent_response::WebsocketDecision::WebsocketAllow(grpc::WebSocketAllowDecision {})
+                    grpc::agent_response::WebsocketDecision::WebsocketAllow(
+                        grpc::WebSocketAllowDecision {},
+                    )
                 }
-                WebSocketDecision::Drop => {
-                    grpc::agent_response::WebsocketDecision::WebsocketDrop(grpc::WebSocketDropDecision {})
-                }
+                WebSocketDecision::Drop => grpc::agent_response::WebsocketDecision::WebsocketDrop(
+                    grpc::WebSocketDropDecision {},
+                ),
                 WebSocketDecision::Close { code, reason } => {
-                    grpc::agent_response::WebsocketDecision::WebsocketClose(grpc::WebSocketCloseDecision {
-                        code: code as u32,
-                        reason,
-                    })
+                    grpc::agent_response::WebsocketDecision::WebsocketClose(
+                        grpc::WebSocketCloseDecision {
+                            code: code as u32,
+                            reason,
+                        },
+                    )
                 }
-            }
-        });
+            });
 
         grpc::AgentResponse {
             version: PROTOCOL_VERSION,
@@ -802,13 +825,21 @@ impl GrpcAgentHandler {
     fn convert_header_op_to_grpc(op: HeaderOp) -> grpc::HeaderOp {
         let operation = match op {
             HeaderOp::Set { name, value } => {
-                Some(grpc::header_op::Operation::Set(grpc::SetHeader { name, value }))
+                Some(grpc::header_op::Operation::Set(grpc::SetHeader {
+                    name,
+                    value,
+                }))
             }
             HeaderOp::Add { name, value } => {
-                Some(grpc::header_op::Operation::Add(grpc::AddHeader { name, value }))
+                Some(grpc::header_op::Operation::Add(grpc::AddHeader {
+                    name,
+                    value,
+                }))
             }
             HeaderOp::Remove { name } => {
-                Some(grpc::header_op::Operation::Remove(grpc::RemoveHeader { name }))
+                Some(grpc::header_op::Operation::Remove(grpc::RemoveHeader {
+                    name,
+                }))
             }
         };
         grpc::HeaderOp { operation }

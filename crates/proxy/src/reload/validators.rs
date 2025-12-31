@@ -118,7 +118,10 @@ pub struct UpstreamValidator;
 #[async_trait::async_trait]
 impl ConfigValidator for UpstreamValidator {
     async fn validate(&self, config: &Config) -> SentinelResult<()> {
-        trace!(upstream_count = config.upstreams.len(), "Running upstream validator");
+        trace!(
+            upstream_count = config.upstreams.len(),
+            "Running upstream validator"
+        );
 
         // Most validation is now handled by Config's validate_config_semantics
         // This validator handles runtime-specific checks

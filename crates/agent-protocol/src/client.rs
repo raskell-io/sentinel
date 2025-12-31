@@ -56,17 +56,15 @@ impl AgentClient {
             "Connecting to agent via Unix socket"
         );
 
-        let stream = UnixStream::connect(path)
-            .await
-            .map_err(|e| {
-                error!(
-                    agent_id = %id,
-                    socket_path = %path.display(),
-                    error = %e,
-                    "Failed to connect to agent via Unix socket"
-                );
-                AgentProtocolError::ConnectionFailed(e.to_string())
-            })?;
+        let stream = UnixStream::connect(path).await.map_err(|e| {
+            error!(
+                agent_id = %id,
+                socket_path = %path.display(),
+                error = %e,
+                "Failed to connect to agent via Unix socket"
+            );
+            AgentProtocolError::ConnectionFailed(e.to_string())
+        })?;
 
         debug!(
             agent_id = %id,
@@ -158,9 +156,7 @@ impl AgentClient {
             AgentConnection::UnixSocket(_) => {
                 self.send_event_unix_socket(event_type, payload).await
             }
-            AgentConnection::Grpc(_) => {
-                self.send_event_grpc(event_type, payload).await
-            }
+            AgentConnection::Grpc(_) => self.send_event_grpc(event_type, payload).await,
         }
     }
 
@@ -229,7 +225,9 @@ impl AgentClient {
         let response = tokio::time::timeout(self.timeout, client.process_event(grpc_request))
             .await
             .map_err(|_| AgentProtocolError::Timeout(self.timeout))?
-            .map_err(|e| AgentProtocolError::ConnectionFailed(format!("gRPC call failed: {}", e)))?;
+            .map_err(|e| {
+                AgentProtocolError::ConnectionFailed(format!("gRPC call failed: {}", e))
+            })?;
 
         // Convert gRPC response to internal format
         Self::convert_grpc_response(response.into_inner())
@@ -260,9 +258,11 @@ impl AgentClient {
                     metadata: Some(Self::convert_metadata_to_grpc(&event.metadata)),
                     method: event.method,
                     uri: event.uri,
-                    headers: event.headers.into_iter().map(|(k, v)| {
-                        (k, grpc::HeaderValues { values: v })
-                    }).collect(),
+                    headers: event
+                        .headers
+                        .into_iter()
+                        .map(|(k, v)| (k, grpc::HeaderValues { values: v }))
+                        .collect(),
                 })
             }
             EventType::RequestBodyChunk => {
@@ -283,9 +283,11 @@ impl AgentClient {
                 grpc::agent_request::Event::ResponseHeaders(grpc::ResponseHeadersEvent {
                     correlation_id: event.correlation_id,
                     status: event.status as u32,
-                    headers: event.headers.into_iter().map(|(k, v)| {
-                        (k, grpc::HeaderValues { values: v })
-                    }).collect(),
+                    headers: event
+                        .headers
+                        .into_iter()
+                        .map(|(k, v)| (k, grpc::HeaderValues { values: v }))
+                        .collect(),
                 })
             }
             EventType::ResponseBodyChunk => {
@@ -314,7 +316,7 @@ impl AgentClient {
                 })
             }
             EventType::WebSocketFrame => {
-                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                use base64::{engine::general_purpose::STANDARD, Engine as _};
                 let event: WebSocketFrameEvent = serde_json::from_value(payload_json)
                     .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?;
                 grpc::agent_request::Event::WebsocketFrame(grpc::WebSocketFrameEvent {
@@ -363,7 +365,11 @@ impl AgentClient {
             Some(grpc::agent_response::Decision::Block(b)) => Decision::Block {
                 status: b.status as u16,
                 body: b.body,
-                headers: if b.headers.is_empty() { None } else { Some(b.headers) },
+                headers: if b.headers.is_empty() {
+                    None
+                } else {
+                    Some(b.headers)
+                },
             },
             Some(grpc::agent_response::Decision::Redirect(r)) => Decision::Redirect {
                 url: r.url,
@@ -376,12 +382,14 @@ impl AgentClient {
             None => Decision::Allow, // Default to allow if no decision
         };
 
-        let request_headers: Vec<HeaderOp> = response.request_headers
+        let request_headers: Vec<HeaderOp> = response
+            .request_headers
             .into_iter()
             .filter_map(Self::convert_header_op_from_grpc)
             .collect();
 
-        let response_headers: Vec<HeaderOp> = response.response_headers
+        let response_headers: Vec<HeaderOp> = response
+            .response_headers
             .into_iter()
             .filter_map(Self::convert_header_op_from_grpc)
             .collect();
@@ -391,9 +399,11 @@ impl AgentClient {
             rule_ids: a.rule_ids,
             confidence: a.confidence,
             reason_codes: a.reason_codes,
-            custom: a.custom.into_iter().map(|(k, v)| {
-                (k, serde_json::Value::String(v))
-            }).collect(),
+            custom: a
+                .custom
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect(),
         });
 
         // Convert body mutations
@@ -408,16 +418,22 @@ impl AgentClient {
         });
 
         // Convert WebSocket decision
-        let websocket_decision = response.websocket_decision.map(|ws_decision| {
-            match ws_decision {
-                grpc::agent_response::WebsocketDecision::WebsocketAllow(_) => WebSocketDecision::Allow,
-                grpc::agent_response::WebsocketDecision::WebsocketDrop(_) => WebSocketDecision::Drop,
-                grpc::agent_response::WebsocketDecision::WebsocketClose(c) => WebSocketDecision::Close {
-                    code: c.code as u16,
-                    reason: c.reason,
-                },
-            }
-        });
+        let websocket_decision = response
+            .websocket_decision
+            .map(|ws_decision| match ws_decision {
+                grpc::agent_response::WebsocketDecision::WebsocketAllow(_) => {
+                    WebSocketDecision::Allow
+                }
+                grpc::agent_response::WebsocketDecision::WebsocketDrop(_) => {
+                    WebSocketDecision::Drop
+                }
+                grpc::agent_response::WebsocketDecision::WebsocketClose(c) => {
+                    WebSocketDecision::Close {
+                        code: c.code as u16,
+                        reason: c.reason,
+                    }
+                }
+            });
 
         Ok(AgentResponse {
             version: response.version,
@@ -444,9 +460,7 @@ impl AgentClient {
                 name: a.name,
                 value: a.value,
             }),
-            grpc::header_op::Operation::Remove(r) => Some(HeaderOp::Remove {
-                name: r.name,
-            }),
+            grpc::header_op::Operation::Remove(r) => Some(HeaderOp::Remove { name: r.name }),
         }
     }
 

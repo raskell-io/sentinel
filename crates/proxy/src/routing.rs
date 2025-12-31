@@ -136,9 +136,7 @@ impl RouteMatcher {
 
         info!(
             compiled_routes = compiled_routes.len(),
-            needs_headers,
-            needs_query_params,
-            "Route matcher initialized"
+            needs_headers, needs_query_params, "Route matcher initialized"
         );
 
         Ok(Self {
@@ -491,7 +489,8 @@ impl RouteCache {
         });
 
         // Update count (approximate)
-        self.entry_count.store(self.entries.len(), Ordering::Relaxed);
+        self.entry_count
+            .store(self.entries.len(), Ordering::Relaxed);
     }
 
     /// Get current cache size
@@ -552,14 +551,18 @@ impl<'a> RequestInfo<'a> {
     #[inline]
     pub fn headers(&self) -> &HashMap<String, String> {
         static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
-        self.headers.as_ref().unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))
+        self.headers
+            .as_ref()
+            .unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))
     }
 
     /// Get query params (returns empty map if not set)
     #[inline]
     pub fn query_params(&self) -> &HashMap<String, String> {
         static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
-        self.query_params.as_ref().unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))
+        self.query_params
+            .as_ref()
+            .unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))
     }
 
     /// Generate a cache key for this request

@@ -231,7 +231,10 @@ impl WebSocketCodec {
     ///
     /// This is a non-mutating version for use with the proxy handler.
     /// Returns `Ok(None)` if more data is needed.
-    pub fn decode_frame(&self, src: &BytesMut) -> Result<Option<(WebSocketFrame, usize)>, std::io::Error> {
+    pub fn decode_frame(
+        &self,
+        src: &BytesMut,
+    ) -> Result<Option<(WebSocketFrame, usize)>, std::io::Error> {
         // Need at least 2 bytes for the header
         if src.len() < 2 {
             return Ok(None);
@@ -331,7 +334,11 @@ impl WebSocketCodec {
     /// Encode a frame to bytes.
     ///
     /// If `masked` is true, the frame will be masked with a random key.
-    pub fn encode_frame(&self, frame: &WebSocketFrame, masked: bool) -> Result<Vec<u8>, std::io::Error> {
+    pub fn encode_frame(
+        &self,
+        frame: &WebSocketFrame,
+        masked: bool,
+    ) -> Result<Vec<u8>, std::io::Error> {
         let payload_len = frame.payload.len();
 
         // Check frame size

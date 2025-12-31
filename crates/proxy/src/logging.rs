@@ -359,10 +359,16 @@ impl AuditLogEntry {
         client_ip: impl Into<String>,
         limit_key: impl Into<String>,
     ) -> Self {
-        Self::new(trace_id, AuditEventType::RateLimitExceeded, method, path, client_ip)
-            .with_reason("Rate limit exceeded")
-            .with_action("block")
-            .with_metadata("limit_key", limit_key)
+        Self::new(
+            trace_id,
+            AuditEventType::RateLimitExceeded,
+            method,
+            path,
+            client_ip,
+        )
+        .with_reason("Rate limit exceeded")
+        .with_action("block")
+        .with_metadata("limit_key", limit_key)
     }
 
     /// Create an entry for WAF block
@@ -384,9 +390,15 @@ impl AuditLogEntry {
         change_type: impl Into<String>,
         details: impl Into<String>,
     ) -> Self {
-        Self::new(trace_id, AuditEventType::ConfigChange, "-", "/-/config", "internal")
-            .with_reason(change_type)
-            .with_metadata("details", details)
+        Self::new(
+            trace_id,
+            AuditEventType::ConfigChange,
+            "-",
+            "/-/config",
+            "internal",
+        )
+        .with_reason(change_type)
+        .with_metadata("details", details)
     }
 
     /// Create an entry for certificate reload
@@ -395,9 +407,15 @@ impl AuditLogEntry {
         listener_id: impl Into<String>,
         success: bool,
     ) -> Self {
-        Self::new(trace_id, AuditEventType::CertReload, "-", "/-/certs", "internal")
-            .with_metadata("listener_id", listener_id)
-            .with_metadata("success", success.to_string())
+        Self::new(
+            trace_id,
+            AuditEventType::CertReload,
+            "-",
+            "/-/certs",
+            "internal",
+        )
+        .with_metadata("listener_id", listener_id)
+        .with_metadata("success", success.to_string())
     }
 
     /// Create an entry for cache purge
@@ -408,9 +426,15 @@ impl AuditLogEntry {
         client_ip: impl Into<String>,
         pattern: impl Into<String>,
     ) -> Self {
-        Self::new(trace_id, AuditEventType::CachePurge, method, path, client_ip)
-            .with_metadata("pattern", pattern)
-            .with_action("purge")
+        Self::new(
+            trace_id,
+            AuditEventType::CachePurge,
+            method,
+            path,
+            client_ip,
+        )
+        .with_metadata("pattern", pattern)
+        .with_action("purge")
     }
 
     /// Create an entry for admin action
@@ -421,8 +445,14 @@ impl AuditLogEntry {
         client_ip: impl Into<String>,
         action: impl Into<String>,
     ) -> Self {
-        Self::new(trace_id, AuditEventType::AdminAction, method, path, client_ip)
-            .with_action(action)
+        Self::new(
+            trace_id,
+            AuditEventType::AdminAction,
+            method,
+            path,
+            client_ip,
+        )
+        .with_action(action)
     }
 }
 

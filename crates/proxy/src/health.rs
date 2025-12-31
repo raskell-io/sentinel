@@ -14,10 +14,7 @@ use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, error, info, trace, warn};
 
-use sentinel_common::{
-    errors::SentinelResult,
-    types::HealthCheckType,
-};
+use sentinel_common::{errors::SentinelResult, types::HealthCheckType};
 use sentinel_config::{HealthCheck as HealthCheckConfig, UpstreamTarget};
 
 /// Active health checker for upstream targets
@@ -323,10 +320,7 @@ impl ActiveHealthChecker {
     /// Stop health checking
     pub async fn stop(&self) {
         let task_count = self.check_handles.read().await.len();
-        info!(
-            task_count = task_count,
-            "Stopping health checker"
-        );
+        info!(task_count = task_count, "Stopping health checker");
 
         // Send shutdown signal
         let _ = self.shutdown_tx.send(());

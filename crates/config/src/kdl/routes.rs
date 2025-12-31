@@ -39,8 +39,8 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                 let filters = parse_route_filter_refs(child)?;
 
                 // Parse builtin-handler
-                let builtin_handler = get_string_entry(child, "builtin-handler").and_then(|s| {
-                    match s.as_str() {
+                let builtin_handler =
+                    get_string_entry(child, "builtin-handler").and_then(|s| match s.as_str() {
                         "status" => Some(BuiltinHandler::Status),
                         "health" => Some(BuiltinHandler::Health),
                         "metrics" => Some(BuiltinHandler::Metrics),
@@ -50,8 +50,7 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                         "cache-purge" | "cache_purge" => Some(BuiltinHandler::CachePurge),
                         "cache-stats" | "cache_stats" => Some(BuiltinHandler::CacheStats),
                         _ => None,
-                    }
-                });
+                    });
 
                 // Parse cache configuration
                 let cache_config = parse_cache_config_opt(child)?;
@@ -96,7 +95,8 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     api_schema: None,
                     error_pages: None,
                     websocket: get_bool_entry(child, "websocket").unwrap_or(false),
-                    websocket_inspection: get_bool_entry(child, "websocket-inspection").unwrap_or(false),
+                    websocket_inspection: get_bool_entry(child, "websocket-inspection")
+                        .unwrap_or(false),
                 });
             }
         }

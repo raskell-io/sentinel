@@ -172,9 +172,8 @@ mod otel_impl {
             };
 
             // Create resource with service info
-            let resource = Resource::new([
-                KeyValue::new("service.name", config.service_name.clone()),
-            ]);
+            let resource =
+                Resource::new([KeyValue::new("service.name", config.service_name.clone())]);
 
             // Build tracer provider
             let provider = opentelemetry_sdk::trace::TracerProvider::builder()
@@ -195,7 +194,12 @@ mod otel_impl {
         }
 
         /// Create a request span
-        pub fn start_span(&self, method: &str, path: &str, trace_ctx: Option<&TraceContext>) -> RequestSpan {
+        pub fn start_span(
+            &self,
+            method: &str,
+            path: &str,
+            trace_ctx: Option<&TraceContext>,
+        ) -> RequestSpan {
             let tracer = global::tracer("sentinel-proxy");
 
             let span = tracer
@@ -268,7 +272,12 @@ mod otel_impl {
             ))
         }
 
-        pub fn start_span(&self, _method: &str, _path: &str, trace_ctx: Option<&TraceContext>) -> RequestSpan {
+        pub fn start_span(
+            &self,
+            _method: &str,
+            _path: &str,
+            trace_ctx: Option<&TraceContext>,
+        ) -> RequestSpan {
             RequestSpan {
                 trace_id: trace_ctx
                     .map(|c| c.trace_id.clone())
@@ -323,9 +332,9 @@ static GLOBAL_TRACER: OnceLock<Option<OtelTracer>> = OnceLock::new();
 /// Initialize the global tracer
 pub fn init_tracer(config: &TracingConfig) -> Result<(), OtelError> {
     let tracer = OtelTracer::init(config)?;
-    GLOBAL_TRACER.set(Some(tracer)).map_err(|_| {
-        OtelError::TracerInit("Global tracer already initialized".to_string())
-    })?;
+    GLOBAL_TRACER
+        .set(Some(tracer))
+        .map_err(|_| OtelError::TracerInit("Global tracer already initialized".to_string()))?;
     Ok(())
 }
 
@@ -391,7 +400,10 @@ mod tests {
         let new_span_id = "1234567890abcdef";
         let traceparent = ctx.to_traceparent(new_span_id);
 
-        assert_eq!(traceparent, "00-0af7651916cd43dd8448eb211c80319c-1234567890abcdef-01");
+        assert_eq!(
+            traceparent,
+            "00-0af7651916cd43dd8448eb211c80319c-1234567890abcdef-01"
+        );
     }
 
     #[test]
@@ -410,12 +422,12 @@ mod tests {
 
     #[test]
     fn test_create_traceparent() {
-        let traceparent = create_traceparent(
-            "0af7651916cd43dd8448eb211c80319c",
-            "b7ad6b7169203331",
-            true,
+        let traceparent =
+            create_traceparent("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331", true);
+        assert_eq!(
+            traceparent,
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
         );
-        assert_eq!(traceparent, "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
     }
 
     #[test]

@@ -319,7 +319,10 @@ impl AgentManager {
                         agent_id = %agent.id(),
                         "Closing WebSocket due to circuit breaker (fail-closed mode)"
                     );
-                    return Ok(AgentResponse::websocket_close(1011, "Service unavailable".to_string()));
+                    return Ok(AgentResponse::websocket_close(
+                        1011,
+                        "Service unavailable".to_string(),
+                    ));
                 }
                 continue;
             }
@@ -328,7 +331,11 @@ impl AgentManager {
             let start = Instant::now();
             let timeout_duration = Duration::from_millis(agent.timeout_ms());
 
-            match timeout(timeout_duration, agent.call_event(EventType::WebSocketFrame, &event)).await
+            match timeout(
+                timeout_duration,
+                agent.call_event(EventType::WebSocketFrame, &event),
+            )
+            .await
             {
                 Ok(Ok(response)) => {
                     let duration = start.elapsed();
@@ -343,7 +350,10 @@ impl AgentManager {
 
                     // If agent returned a WebSocket decision that's not Allow, return immediately
                     if let Some(ref ws_decision) = response.websocket_decision {
-                        if !matches!(ws_decision, sentinel_agent_protocol::WebSocketDecision::Allow) {
+                        if !matches!(
+                            ws_decision,
+                            sentinel_agent_protocol::WebSocketDecision::Allow
+                        ) {
                             debug!(
                                 correlation_id = %event.correlation_id,
                                 agent_id = %agent.id(),
@@ -366,7 +376,10 @@ impl AgentManager {
                     );
 
                     if agent.failure_mode() == FailureMode::Closed {
-                        return Ok(AgentResponse::websocket_close(1011, "Agent error".to_string()));
+                        return Ok(AgentResponse::websocket_close(
+                            1011,
+                            "Agent error".to_string(),
+                        ));
                     }
                 }
                 Err(_) => {
@@ -380,7 +393,10 @@ impl AgentManager {
                     );
 
                     if agent.failure_mode() == FailureMode::Closed {
-                        return Ok(AgentResponse::websocket_close(1011, "Gateway timeout".to_string()));
+                        return Ok(AgentResponse::websocket_close(
+                            1011,
+                            "Gateway timeout".to_string(),
+                        ));
                     }
                 }
             }
@@ -571,10 +587,7 @@ impl AgentManager {
     pub async fn initialize(&self) -> SentinelResult<()> {
         let agents = self.agents.read().await;
 
-        info!(
-            agent_count = agents.len(),
-            "Initializing agent connections"
-        );
+        info!(agent_count = agents.len(), "Initializing agent connections");
 
         let mut initialized_count = 0;
         let mut failed_count = 0;
@@ -609,10 +622,7 @@ impl AgentManager {
     pub async fn shutdown(&self) {
         let agents = self.agents.read().await;
 
-        info!(
-            agent_count = agents.len(),
-            "Shutting down agent manager"
-        );
+        info!(agent_count = agents.len(), "Shutting down agent manager");
 
         for (id, agent) in agents.iter() {
             debug!(agent_id = %id, "Shutting down agent");

@@ -112,12 +112,28 @@ pub async fn serve_range_request<B>(
             // ETag comparison
             if if_range_str.starts_with('"') || if_range_str.starts_with("W/") {
                 if if_range_str.trim_matches('"') != etag.trim_matches('"') {
-                    return serve_full_file(file_path, content_type, file_size, etag, modified, cache_control).await;
+                    return serve_full_file(
+                        file_path,
+                        content_type,
+                        file_size,
+                        etag,
+                        modified,
+                        cache_control,
+                    )
+                    .await;
                 }
             // Date comparison
             } else if let Ok(if_range_time) = httpdate::parse_http_date(if_range_str) {
                 if modified > if_range_time {
-                    return serve_full_file(file_path, content_type, file_size, etag, modified, cache_control).await;
+                    return serve_full_file(
+                        file_path,
+                        content_type,
+                        file_size,
+                        etag,
+                        modified,
+                        cache_control,
+                    )
+                    .await;
                 }
             }
         }

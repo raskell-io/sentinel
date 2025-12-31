@@ -274,7 +274,11 @@ mod tests {
     #[test]
     fn test_default_config_kdl_parses() {
         let config = Config::from_kdl(DEFAULT_CONFIG_KDL);
-        assert!(config.is_ok(), "Default KDL config should parse: {:?}", config.err());
+        assert!(
+            config.is_ok(),
+            "Default KDL config should parse: {:?}",
+            config.err()
+        );
     }
 
     #[test]
