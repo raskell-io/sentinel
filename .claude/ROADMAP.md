@@ -429,7 +429,7 @@ rate-limit {
 - `crates/config/src/filters.rs` - Hybrid config schema
 
 ### 6.2 Geo Filtering in Core
-**Status:** Planned as external agent
+**Status:** DONE - MaxMind and IP2Location support implemented
 **Impact:** LOW-MEDIUM - Simple lookup faster than agent round-trip
 **Effort:** 1-2 weeks
 
@@ -440,33 +440,59 @@ rate-limit {
 - ~60% of deployments use geo filtering
 
 **Tasks:**
-- [ ] Add `maxminddb` crate dependency (feature-gated)
-- [ ] Implement GeoIP lookup in `crates/proxy/src/geo.rs`
+- [x] Add `maxminddb` and `ip2location` crate dependencies
+- [x] Implement GeoIP lookup in `crates/proxy/src/geo_filter.rs`
+- [x] Support both MaxMind (.mmdb) and IP2Location (.bin) databases
+- [x] Add block, allow (allowlist), and log-only actions
+- [x] Add X-GeoIP-Country response header
+- [x] Configurable fail-open/fail-closed on lookup errors
+- [x] IP→Country caching with configurable TTL
+- [x] Integrate as filter in route configuration
 - [ ] Add file-watch for DB reload without restart
-- [ ] Add `deny-countries` and `allow-countries` to route config
-- [ ] Keep external agent for: compliance rules, region-specific routing
-- [ ] Add `geo-filter` feature flag
 
-**Proposed KDL:**
+**KDL Configuration:**
 ```kdl
-geo {
-    database "/var/lib/GeoIP/GeoLite2-Country.mmdb"
-    reload-interval "24h"
+filters {
+    filter "block-countries" {
+        type "geo"
+        database-path "/etc/sentinel/GeoLite2-Country.mmdb"
+        action "block"
+        countries "RU,CN,KP,IR"
+        on-failure "closed"
+        status-code 403
+        block-message "Access denied from your region"
+        cache-ttl-secs 7200
+    }
 
-    // Simple blocking in core
-    deny-countries ["XX", "YY"]
+    filter "us-only" {
+        type "geo"
+        database-path "/etc/sentinel/GeoLite2-Country.mmdb"
+        action "allow"
+        countries "US,CA"
+        status-code 451
+    }
 
-    // Complex policies via agent (opt-in)
-    agent "geo-policy" {
-        enabled true
-        triggers ["compliance", "routing"]
+    filter "geo-tagging" {
+        type "geo"
+        database-path "/etc/sentinel/IP2LOCATION-LITE-DB1.BIN"
+        database-type "ip2location"
+        action "log-only"
+    }
+}
+
+routes {
+    route "api" {
+        filters ["block-countries"]
+        // ...
     }
 }
 ```
 
 **Files:**
-- `crates/proxy/src/geo.rs` - New module
-- `crates/config/src/geo.rs` - Geo config types
+- `crates/proxy/src/geo_filter.rs` - GeoFilterManager, database backends, caching
+- `crates/config/src/filters.rs` - GeoFilter, GeoFilterAction, GeoDatabaseType, GeoFailureMode
+- `crates/config/src/kdl/filters.rs` - KDL parsing for geo filter
+- `crates/proxy/src/proxy/http_trait.rs` - Integration in request/response filters
 
 ### 6.3 Agents Confirmed as External
 
@@ -525,7 +551,7 @@ The following agents were analyzed and confirmed to be correctly positioned as e
 
 ### For Optimized Deployment (M6)
 - [ ] Core rate limiting reducing p99 latency by 15%+ vs agent-only
-- [ ] Geo filtering in core with <100μs lookup time
+- [x] Geo filtering in core with <100μs lookup time (MaxMind + IP2Location)
 - [ ] Hybrid rate limit config working (core + agent triggers)
 - [ ] Feature flags allowing gradual rollout
 
