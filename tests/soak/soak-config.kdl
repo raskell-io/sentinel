@@ -1,0 +1,90 @@
+// Sentinel Soak Test Configuration
+//
+// Minimal configuration for extended stability testing.
+// Exercises core proxy functionality without external agents.
+
+server {
+    // Bind addresses
+    http-port 8080
+    metrics-port 9090
+
+    // Worker configuration
+    workers 2
+
+    // Request limits (production-like)
+    max-header-size "16KB"
+    max-body-size "1MB"
+
+    // Timeouts
+    request-timeout 30
+    connect-timeout 5
+    keepalive-timeout 60
+}
+
+// Simple upstream for testing
+upstreams {
+    upstream "backend" {
+        target "127.0.0.1:8081" weight=1
+
+        // Connection pool settings
+        connection-pool {
+            max-connections 100
+            max-idle 20
+            idle-timeout 60
+        }
+
+        // Health checking
+        health-check {
+            interval 10
+            timeout 5
+            path "/health"
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+    }
+}
+
+// Routes for testing various code paths
+routes {
+    // Basic proxy route (exercises core proxy path)
+    route "api" {
+        match {
+            path-prefix "/api"
+        }
+        upstream "backend"
+        priority 100
+    }
+
+    // Static response (exercises response generation)
+    route "health" {
+        match {
+            path "/health"
+        }
+        service-type "static"
+        priority 200
+    }
+
+    // Default route
+    route "default" {
+        match {
+            path-prefix "/"
+        }
+        upstream "backend"
+        priority 1
+    }
+}
+
+// Rate limiting (exercises rate limit code paths)
+rate-limits {
+    defaults {
+        window-seconds 1
+        max-requests 1000
+        burst 100
+    }
+}
+
+// Logging configuration
+logging {
+    level "warn"  // Reduce logging overhead during soak test
+    format "json"
+}

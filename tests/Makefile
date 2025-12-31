@@ -1,7 +1,7 @@
 # Sentinel Test Makefile
 # Provides convenient targets for running various test scenarios
 
-.PHONY: all help up down build test test-quick test-echo test-ratelimit test-waf test-security test-performance logs clean
+.PHONY: all help up down build test test-quick test-echo test-ratelimit test-waf test-security test-performance test-soak test-soak-quick test-soak-extended analyze-soak logs clean
 
 DOCKER_COMPOSE = docker compose -f ../docker-compose.yml
 DOCKER_COMPOSE_TEST = docker compose -f ../docker-compose.yml -f ../docker-compose.test.yml
@@ -29,6 +29,12 @@ help:
 	@echo "  test-waf     - Test WAF agent security scenarios"
 	@echo "  test-security - Run full security test suite"
 	@echo "  test-performance - Run performance/load tests"
+	@echo ""
+	@echo "Soak Tests (stability/leak detection):"
+	@echo "  test-soak-quick    - 1-hour quick soak test"
+	@echo "  test-soak          - 24-hour standard soak test"
+	@echo "  test-soak-extended - 72-hour extended soak test"
+	@echo "  analyze-soak       - Analyze most recent soak results"
 	@echo ""
 	@echo "Local (non-Docker):"
 	@echo "  test-local   - Run tests against local binaries"
@@ -148,6 +154,33 @@ test-performance: up
 test-local:
 	@echo "Running tests against local binaries..."
 	./test_agents.sh
+
+# Run soak tests (extended stability testing)
+test-soak-quick:
+	@echo ""
+	@echo "Running 1-hour quick soak test..."
+	cd soak && ./run-soak-test.sh --duration 1 --skip-build
+
+test-soak:
+	@echo ""
+	@echo "Running 24-hour soak test..."
+	cd soak && ./run-soak-test.sh --duration 24
+
+test-soak-extended:
+	@echo ""
+	@echo "Running 72-hour extended soak test..."
+	cd soak && ./run-soak-test.sh --duration 72
+
+# Analyze soak test results
+analyze-soak:
+	@echo ""
+	@echo "Analyzing most recent soak test results..."
+	@LATEST=$$(ls -td soak/results/*/ 2>/dev/null | head -1); \
+	if [ -n "$$LATEST" ]; then \
+		python3 soak/analyze-results.py "$$LATEST"; \
+	else \
+		echo "No soak test results found"; \
+	fi
 
 # Watch test logs
 watch:
