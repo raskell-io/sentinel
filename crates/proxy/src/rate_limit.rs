@@ -795,7 +795,12 @@ mod tests {
         }
 
         // 4th request should be blocked by global limiter
-        let result = manager.check("different-route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        let result = manager.check(
+            "different-route",
+            "127.0.0.1",
+            "/",
+            Option::<&NoHeaders>::None,
+        );
         assert!(!result.allowed);
         assert_eq!(result.limiter, "global");
     }
@@ -881,7 +886,10 @@ mod tests {
 
         // Reset timestamp should be in the future (within the next second)
         assert!(info.reset_at >= now, "Reset time should be >= now");
-        assert!(info.reset_at <= now + 2, "Reset time should be within 2 seconds");
+        assert!(
+            info.reset_at <= now + 2,
+            "Reset time should be within 2 seconds"
+        );
     }
 
     #[test]

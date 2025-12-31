@@ -587,7 +587,11 @@ fn parse_global_limit_config(node: &kdl::KdlNode) -> Result<GlobalLimitConfig> {
         RateLimitKey::ClientIp
     };
 
-    Ok(GlobalLimitConfig { max_rps, burst, key })
+    Ok(GlobalLimitConfig {
+        max_rps,
+        burst,
+        key,
+    })
 }
 
 /// Parse a rate limit key string into the enum
@@ -866,11 +870,17 @@ mod tests {
 
     #[test]
     fn test_parse_rate_limit_key_variations() {
-        assert_eq!(parse_rate_limit_key("client-ip").unwrap(), RateLimitKey::ClientIp);
+        assert_eq!(
+            parse_rate_limit_key("client-ip").unwrap(),
+            RateLimitKey::ClientIp
+        );
         assert_eq!(parse_rate_limit_key("ip").unwrap(), RateLimitKey::ClientIp);
         assert_eq!(parse_rate_limit_key("path").unwrap(), RateLimitKey::Path);
         assert_eq!(parse_rate_limit_key("route").unwrap(), RateLimitKey::Route);
-        assert_eq!(parse_rate_limit_key("client-ip-and-path").unwrap(), RateLimitKey::ClientIpAndPath);
+        assert_eq!(
+            parse_rate_limit_key("client-ip-and-path").unwrap(),
+            RateLimitKey::ClientIpAndPath
+        );
     }
 
     #[test]

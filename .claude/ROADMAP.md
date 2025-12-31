@@ -100,18 +100,18 @@ listener "https" {
 - `crates/config/src/kdl/server.rs` - KDL parsing for TLS
 
 ### 1.2 Enable HTTP Caching
-**Status:** Core infrastructure implemented, enabled for static routes
+**Status:** Core infrastructure implemented, PURGE API available
 **Impact:** HIGH - 30-50% origin load reduction
-**Effort:** 1-2 weeks (remaining: cache config in KDL + PURGE API)
+**Effort:** 1-2 weeks (remaining: cache config in KDL)
 
 **Tasks:**
 - [x] Enable pingora-cache storage backend (MemCache)
 - [x] Wire `request_cache_filter()` to call `session.cache.enable()`
 - [x] Implement proper `CacheMeta` creation in `response_cache_filter()`
 - [x] Enable caching by default for static routes (1 hour TTL)
+- [x] Implement cache invalidation API (PURGE method)
+- [x] Add cache statistics endpoint (`/cache/stats`, `/admin/cache/stats`)
 - [ ] Add cache storage configuration to KDL schema
-- [ ] Implement cache invalidation API (PURGE method)
-- [ ] Add cache statistics to metrics endpoint
 - [ ] Test stale-while-revalidate and stale-if-error
 
 **Files:**
