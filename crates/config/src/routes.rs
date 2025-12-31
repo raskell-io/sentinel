@@ -320,17 +320,12 @@ pub struct RateLimitPolicy {
 }
 
 /// Failure mode for degraded operation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureMode {
-    Open,   // Allow traffic through on failure
+    Open, // Allow traffic through on failure
+    #[default]
     Closed, // Block traffic on failure (default for security)
-}
-
-impl Default for FailureMode {
-    fn default() -> Self {
-        Self::Closed // Default to safe/closed behavior
-    }
 }
 
 pub(crate) fn default_failure_mode() -> FailureMode {
