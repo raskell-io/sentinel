@@ -128,7 +128,7 @@ listener "https" {
 - [x] Add `/metrics` builtin handler route
 - [x] Expose Prometheus text format
 - [x] Add `/_/health` and `/_/ready` endpoints
-- [ ] Document available metrics
+- [x] Document available metrics (`docs/METRICS.md`)
 - [x] Add Grafana dashboard template (`config/grafana/sentinel-dashboard.json`)
 
 **Files:**
