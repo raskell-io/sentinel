@@ -51,3 +51,6 @@ jobs:
 
       - name: Build
         run: cargo build --workspace
+
+      - name: Test
+        run: cargo test --workspace
