@@ -347,28 +347,49 @@ exceeds Envoy performance.
 ## Priority 3: Scalability
 
 ### 3.1 Distributed Rate Limiting
-**Status:** DONE - Redis backend implemented (requires feature flag)
+**Status:** DONE - Redis and Memcached backends implemented (requires feature flags)
 **Impact:** HIGH - Multi-instance deployments enabled
-**Effort:** 2-3 weeks (remaining: Memcached backend, documentation)
+**Effort:** COMPLETE
 
 **Tasks:**
 - [x] Add Redis backend for rate limit state
 - [x] Implement sliding window algorithm with Redis (sorted sets)
-- [ ] Add Memcached as alternative backend
+- [x] Add Memcached as alternative backend
 - [x] Support rate limit synchronization across instances
 - [x] Add fallback to local rate limiting if backend unavailable
 - [x] Document distributed deployment patterns (`docs/DISTRIBUTED_DEPLOYMENT.md`)
 
 **Features:**
-- Sliding window log algorithm using Redis sorted sets
-- Automatic fallback to local rate limiting on Redis failure
-- Configurable via KDL: `backend "redis"`, `redis-url`, `redis-prefix`, etc.
-- Feature flag: `distributed-rate-limit`
+- **Redis backend:** Sliding window log algorithm using sorted sets
+- **Memcached backend:** Fixed window counter algorithm (simpler, faster)
+- Automatic fallback to local rate limiting on backend failure
+- Configurable via KDL: `backend "redis"` or `backend "memcached"`
+- Feature flags: `distributed-rate-limit`, `distributed-rate-limit-redis`, `distributed-rate-limit-memcached`
+
+**Memcached KDL Configuration:**
+```kdl
+filters {
+    filter "api-rate-limit" {
+        type "rate-limit"
+        max-rps 100
+        burst 20
+        backend "memcached"
+        memcached-url "memcache://127.0.0.1:11211"
+        memcached-prefix "sentinel:ratelimit:"
+        memcached-pool-size 10
+        memcached-timeout-ms 50
+        memcached-fallback true
+        memcached-ttl 2
+    }
+}
+```
 
 **Files:**
 - `crates/proxy/src/rate_limit.rs` - Distributed backend integration
 - `crates/proxy/src/distributed_rate_limit.rs` - Redis rate limiter
-- `crates/config/src/filters.rs` - Backend configuration
+- `crates/proxy/src/memcached_rate_limit.rs` - Memcached rate limiter
+- `crates/config/src/filters.rs` - Backend configuration (RedisBackendConfig, MemcachedBackendConfig)
+- `crates/config/src/kdl/filters.rs` - KDL parsing for memcached backend
 
 ### 3.2 Service Discovery Integration
 **Status:** DONE - Core implementations complete

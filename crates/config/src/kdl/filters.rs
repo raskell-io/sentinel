@@ -141,8 +141,34 @@ fn parse_rate_limit_backend(node: &kdl::KdlNode) -> Result<RateLimitBackend> {
                 fallback_local,
             }))
         }
+        "memcached" | "memcache" => {
+            // Look for memcached configuration
+            let memcached_url = get_string_entry(node, "memcached-url")
+                .unwrap_or_else(|| "memcache://127.0.0.1:11211".to_string());
+            let key_prefix = get_string_entry(node, "memcached-prefix")
+                .unwrap_or_else(|| "sentinel:ratelimit:".to_string());
+            let pool_size = get_int_entry(node, "memcached-pool-size")
+                .map(|v| v as u32)
+                .unwrap_or(10);
+            let timeout_ms = get_int_entry(node, "memcached-timeout-ms")
+                .map(|v| v as u64)
+                .unwrap_or(50);
+            let fallback_local = get_bool_entry(node, "memcached-fallback").unwrap_or(true);
+            let ttl_secs = get_int_entry(node, "memcached-ttl")
+                .map(|v| v as u32)
+                .unwrap_or(2);
+
+            Ok(RateLimitBackend::Memcached(MemcachedBackendConfig {
+                url: memcached_url,
+                key_prefix,
+                pool_size,
+                timeout_ms,
+                fallback_local,
+                ttl_secs,
+            }))
+        }
         other => Err(anyhow::anyhow!(
-            "Unknown rate limit backend: '{}'. Valid backends: local, redis",
+            "Unknown rate limit backend: '{}'. Valid backends: local, redis, memcached",
             other
         )),
     }

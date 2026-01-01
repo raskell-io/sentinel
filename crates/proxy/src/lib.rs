@@ -48,6 +48,7 @@ pub mod builtin_handlers;
 pub mod cache;
 pub mod discovery;
 pub mod distributed_rate_limit;
+pub mod memcached_rate_limit;
 pub mod errors;
 pub mod geo_filter;
 pub mod health;
@@ -150,10 +151,16 @@ pub use geo_filter::{
     GeoDatabaseWatcher, GeoFilterManager, GeoFilterPool, GeoFilterResult, GeoLookupError,
 };
 
-// Distributed rate limiting
+// Distributed rate limiting - Redis
 #[cfg(feature = "distributed-rate-limit")]
 pub use distributed_rate_limit::{
     create_redis_rate_limiter, DistributedRateLimitStats, RedisRateLimiter,
+};
+
+// Distributed rate limiting - Memcached
+#[cfg(feature = "distributed-rate-limit-memcached")]
+pub use memcached_rate_limit::{
+    create_memcached_rate_limiter, MemcachedRateLimitStats, MemcachedRateLimiter,
 };
 
 // HTTP caching

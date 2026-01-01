@@ -112,6 +112,7 @@ hex = "0.4"
 
 # Distributed rate limiting
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+async-memcached = { version = "0.5", optional = true }
 
 # OpenTelemetry for distributed tracing
 opentelemetry = { version = "0.27", optional = true }
@@ -132,7 +133,9 @@ futures = "0.3"
 
 [features]
 default = []
-distributed-rate-limit = ["redis"]
+distributed-rate-limit = ["redis", "async-memcached"]
+distributed-rate-limit-redis = ["redis"]
+distributed-rate-limit-memcached = ["async-memcached"]
 opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
 
 [dev-dependencies]

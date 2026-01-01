@@ -304,6 +304,8 @@ pub enum RateLimitBackend {
     Local,
     /// Redis backend for distributed rate limiting
     Redis(RedisBackendConfig),
+    /// Memcached backend for distributed rate limiting
+    Memcached(MemcachedBackendConfig),
 }
 
 /// Redis backend configuration for distributed rate limiting
@@ -351,6 +353,62 @@ fn default_redis_pool_size() -> u32 {
 
 fn default_redis_timeout_ms() -> u64 {
     50
+}
+
+/// Memcached backend configuration for distributed rate limiting
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemcachedBackendConfig {
+    /// Memcached server URL (e.g., "memcache://127.0.0.1:11211")
+    pub url: String,
+
+    /// Key prefix for rate limit keys (default: "sentinel:ratelimit:")
+    #[serde(default = "default_memcached_prefix", rename = "key-prefix")]
+    pub key_prefix: String,
+
+    /// Connection pool size
+    #[serde(default = "default_memcached_pool_size", rename = "pool-size")]
+    pub pool_size: u32,
+
+    /// Connection timeout in milliseconds
+    #[serde(default = "default_memcached_timeout_ms", rename = "timeout-ms")]
+    pub timeout_ms: u64,
+
+    /// Fallback to local rate limiting if Memcached is unavailable
+    #[serde(default = "default_true", rename = "fallback-local")]
+    pub fallback_local: bool,
+
+    /// TTL for rate limit keys in seconds (default: 2 seconds, covers the window)
+    #[serde(default = "default_memcached_ttl", rename = "ttl-secs")]
+    pub ttl_secs: u32,
+}
+
+impl Default for MemcachedBackendConfig {
+    fn default() -> Self {
+        Self {
+            url: "memcache://127.0.0.1:11211".to_string(),
+            key_prefix: default_memcached_prefix(),
+            pool_size: default_memcached_pool_size(),
+            timeout_ms: default_memcached_timeout_ms(),
+            fallback_local: true,
+            ttl_secs: default_memcached_ttl(),
+        }
+    }
+}
+
+fn default_memcached_prefix() -> String {
+    "sentinel:ratelimit:".to_string()
+}
+
+fn default_memcached_pool_size() -> u32 {
+    10
+}
+
+fn default_memcached_timeout_ms() -> u64 {
+    50
+}
+
+fn default_memcached_ttl() -> u32 {
+    2
 }
 
 fn default_burst() -> u32 {
