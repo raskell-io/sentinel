@@ -392,9 +392,9 @@ filters {
 - `crates/config/src/kdl/filters.rs` - KDL parsing for memcached backend
 
 ### 3.2 Service Discovery Integration
-**Status:** DONE - Core implementations complete
+**Status:** DONE - All implementations complete including kubeconfig
 **Impact:** MEDIUM - Cloud-native deployment
-**Effort:** 2-3 weeks
+**Effort:** COMPLETE
 
 **Tasks:**
 - [x] Implement Static discovery (existing)
@@ -403,21 +403,45 @@ filters {
 - [x] Implement Kubernetes endpoint discovery (in-cluster)
 - [x] Add DNS SRV record support (basic)
 - [x] Add discovery refresh intervals
-- [ ] Implement kubeconfig file parsing for K8s
-- [ ] Add async HTTP client for HTTPS K8s API
+- [x] Implement kubeconfig file parsing for K8s
+- [x] Add async HTTP client for HTTPS K8s API
 - [ ] Document service mesh integration
 
 **Features:**
 - Static: Fixed list of backends
 - DNS: Resolve A/AAAA records with configurable refresh
 - Consul: HTTP API integration with health filtering
-- Kubernetes: In-cluster endpoint discovery
+- Kubernetes: In-cluster and kubeconfig-based endpoint discovery
 - Caching with fallback on failure
 - Configurable refresh intervals
 
+**Kubernetes Authentication Methods:**
+- In-cluster: Service account token from `/var/run/secrets/kubernetes.io/serviceaccount/token`
+- Kubeconfig: Parses `~/.kube/config` or custom path
+- Token-based: Bearer token authentication
+- Client certificate: mTLS with client cert/key
+- Exec-based: External commands (e.g., `aws eks get-token`)
+
+**Kubernetes KDL Configuration:**
+```kdl
+upstream "k8s-backend" {
+    discovery "kubernetes" {
+        namespace "production"
+        service "api-server"
+        port-name "http"
+        refresh-interval 10
+        kubeconfig "~/.kube/config"  // Optional, uses in-cluster if omitted
+    }
+}
+```
+
+**Feature Flag:**
+- `kubernetes` - Enables kubeconfig parsing and async HTTP client (requires `reqwest`)
+
 **Files:**
 - `crates/proxy/src/discovery.rs` - All discovery implementations
-- `crates/proxy/src/lib.rs` - Exports ConsulDiscovery, KubernetesDiscovery
+- `crates/proxy/src/kubeconfig.rs` - Kubeconfig file parsing
+- `crates/proxy/src/lib.rs` - Exports ConsulDiscovery, KubernetesDiscovery, Kubeconfig
 
 ---
 

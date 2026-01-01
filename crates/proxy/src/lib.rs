@@ -50,6 +50,10 @@ pub mod discovery;
 pub mod distributed_rate_limit;
 pub mod memcached_rate_limit;
 pub mod errors;
+
+// Kubernetes kubeconfig parsing (requires kubernetes feature)
+#[cfg(feature = "kubernetes")]
+pub mod kubeconfig;
 pub mod geo_filter;
 pub mod health;
 pub mod http_helpers;
@@ -178,6 +182,10 @@ pub use memory_cache::{
 pub use discovery::{
     ConsulDiscovery, DiscoveryConfig, DiscoveryManager, DnsDiscovery, KubernetesDiscovery,
 };
+
+// Kubernetes kubeconfig parsing
+#[cfg(feature = "kubernetes")]
+pub use kubeconfig::{KubeAuth, Kubeconfig, KubeconfigError, ResolvedKubeConfig};
 
 // Re-export common error types for convenience
 pub use sentinel_common::errors::{LimitType, SentinelError, SentinelResult};

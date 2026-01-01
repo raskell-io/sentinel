@@ -508,10 +508,32 @@ fn parse_consul_response(body: &str, service_name: &str) -> Result<BTreeSet<Back
 // Kubernetes Endpoint Discovery
 // ============================================================================
 
+#[cfg(feature = "kubernetes")]
+use crate::kubeconfig::{KubeAuth, Kubeconfig, ResolvedKubeConfig};
+
 /// Kubernetes endpoint discovery
 ///
 /// Discovers backends from Kubernetes Endpoints resource.
 /// Requires either in-cluster configuration or kubeconfig file.
+///
+/// # Authentication Methods
+///
+/// - **In-cluster**: Uses service account token from `/var/run/secrets/kubernetes.io/serviceaccount/token`
+/// - **Kubeconfig**: Parses `~/.kube/config` or specified kubeconfig file for credentials
+///
+/// # Example KDL Configuration
+///
+/// ```kdl
+/// upstream "k8s-service" {
+///     discovery "kubernetes" {
+///         namespace "default"
+///         service "my-service"
+///         port-name "http"
+///         refresh-interval 10
+///         kubeconfig "~/.kube/config"  // Optional, uses in-cluster if omitted
+///     }
+/// }
+/// ```
 pub struct KubernetesDiscovery {
     /// Kubernetes namespace
     namespace: String,
@@ -527,6 +549,9 @@ pub struct KubernetesDiscovery {
     cached_backends: RwLock<BTreeSet<Backend>>,
     /// Last resolution time
     last_resolution: RwLock<Instant>,
+    /// Cached resolved config (for kubeconfig mode)
+    #[cfg(feature = "kubernetes")]
+    resolved_config: RwLock<Option<ResolvedKubeConfig>>,
 }
 
 impl KubernetesDiscovery {
@@ -546,6 +571,8 @@ impl KubernetesDiscovery {
             kubeconfig,
             cached_backends: RwLock::new(BTreeSet::new()),
             last_resolution: RwLock::new(Instant::now() - refresh_interval),
+            #[cfg(feature = "kubernetes")]
+            resolved_config: RwLock::new(None),
         }
     }
 
@@ -555,17 +582,8 @@ impl KubernetesDiscovery {
         last.elapsed() >= self.refresh_interval
     }
 
-    /// Get the Kubernetes API server address and token
-    fn get_api_config(&self) -> Result<(String, String), Box<Error>> {
-        if self.kubeconfig.is_some() {
-            // TODO: Parse kubeconfig file
-            return Err(Error::explain(
-                ErrorType::InternalError,
-                "Kubeconfig parsing not yet implemented, use in-cluster config",
-            ));
-        }
-
-        // In-cluster configuration
+    /// Get in-cluster configuration (service account token)
+    fn get_in_cluster_config(&self) -> Result<(String, String), Box<Error>> {
         let host = std::env::var("KUBERNETES_SERVICE_HOST").map_err(|_| {
             Error::explain(
                 ErrorType::InternalError,
@@ -581,10 +599,78 @@ impl KubernetesDiscovery {
                 )
             })?;
 
-        Ok((format!("https://{}:{}", host, port), token))
+        Ok((format!("https://{}:{}", host, port), token.trim().to_string()))
+    }
+
+    /// Load and cache kubeconfig
+    #[cfg(feature = "kubernetes")]
+    fn load_kubeconfig(&self) -> Result<ResolvedKubeConfig, Box<Error>> {
+        // Check if we have a cached config
+        if let Some(config) = self.resolved_config.read().as_ref() {
+            return Ok(config.clone());
+        }
+
+        let kubeconfig = if let Some(path) = &self.kubeconfig {
+            Kubeconfig::from_file(path).map_err(|e| {
+                Error::explain(
+                    ErrorType::InternalError,
+                    format!("Failed to load kubeconfig from {}: {}", path, e),
+                )
+            })?
+        } else {
+            Kubeconfig::from_default_location().map_err(|e| {
+                Error::explain(
+                    ErrorType::InternalError,
+                    format!("Failed to load kubeconfig from default location: {}", e),
+                )
+            })?
+        };
+
+        let resolved = kubeconfig.resolve_current().map_err(|e| {
+            Error::explain(
+                ErrorType::InternalError,
+                format!("Failed to resolve kubeconfig context: {}", e),
+            )
+        })?;
+
+        // Cache the resolved config
+        *self.resolved_config.write() = Some(resolved.clone());
+
+        Ok(resolved)
     }
 }
 
+/// Kubernetes Endpoints API response structures
+#[cfg(feature = "kubernetes")]
+mod k8s_types {
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    pub struct Endpoints {
+        pub subsets: Option<Vec<EndpointSubset>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct EndpointSubset {
+        pub addresses: Option<Vec<EndpointAddress>>,
+        pub ports: Option<Vec<EndpointPort>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct EndpointAddress {
+        pub ip: String,
+        pub hostname: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct EndpointPort {
+        pub name: Option<String>,
+        pub port: u16,
+        pub protocol: Option<String>,
+    }
+}
+
+#[cfg(feature = "kubernetes")]
 #[async_trait]
 impl ServiceDiscovery for KubernetesDiscovery {
     async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>)> {
@@ -599,52 +685,193 @@ impl ServiceDiscovery for KubernetesDiscovery {
             "Querying Kubernetes for endpoint discovery"
         );
 
-        // Get API configuration
-        let (api_server, _token) = match self.get_api_config() {
-            Ok(config) => config,
-            Err(e) => {
-                let cached = self.cached_backends.read().clone();
-                if !cached.is_empty() {
-                    warn!(
-                        service = %self.service,
-                        error = %e,
-                        cached_count = cached.len(),
-                        "Kubernetes config unavailable, using cached backends"
-                    );
-                    return Ok((cached, HashMap::new()));
+        // Determine if we're using kubeconfig or in-cluster config
+        let (api_server, auth, ca_cert, skip_verify) = if self.kubeconfig.is_some() {
+            let config = self.load_kubeconfig()?;
+            (config.server, config.auth, config.ca_cert, config.insecure_skip_tls_verify)
+        } else {
+            // Try in-cluster first
+            match self.get_in_cluster_config() {
+                Ok((server, token)) => {
+                    // In-cluster uses the service account CA
+                    let ca = std::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt").ok();
+                    (server, KubeAuth::Token(token), ca, false)
                 }
-                return Err(e);
+                Err(e) => {
+                    // Fall back to default kubeconfig location
+                    debug!(
+                        error = %e,
+                        "In-cluster config not available, trying default kubeconfig"
+                    );
+                    let config = self.load_kubeconfig()?;
+                    (config.server, config.auth, config.ca_cert, config.insecure_skip_tls_verify)
+                }
             }
         };
 
         // Build endpoint URL
         let url = format!(
             "{}/api/v1/namespaces/{}/endpoints/{}",
-            api_server, self.namespace, self.service
+            api_server.trim_end_matches('/'),
+            self.namespace,
+            self.service
         );
 
         debug!(
             url = %url,
             namespace = %self.namespace,
             service = %self.service,
-            "Kubernetes endpoint URL constructed"
+            "Fetching Kubernetes endpoints"
         );
 
-        // Note: In production, this should make an actual HTTPS request to the K8s API
-        // with proper TLS verification and the bearer token.
-        // For now, we return empty and log that full implementation is needed.
-        warn!(
-            service = %self.service,
-            "Kubernetes discovery requires full HTTP client - returning cached or empty"
-        );
+        // Build HTTP client with proper TLS configuration
+        let client_builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .danger_accept_invalid_certs(skip_verify);
 
-        let cached = self.cached_backends.read().clone();
-        if !cached.is_empty() {
-            return Ok((cached, HashMap::new()));
+        // Add CA certificate if available
+        let client_builder = if let Some(ca_data) = ca_cert {
+            let cert = reqwest::Certificate::from_pem(&ca_data).map_err(|e| {
+                Error::explain(
+                    ErrorType::InternalError,
+                    format!("Failed to parse CA certificate: {}", e),
+                )
+            })?;
+            client_builder.add_root_certificate(cert)
+        } else {
+            client_builder
+        };
+
+        // Add client certificate auth if needed
+        let client_builder = match &auth {
+            KubeAuth::ClientCert { cert, key } => {
+                // Combine cert and key into identity
+                let mut identity_pem = cert.clone();
+                identity_pem.extend_from_slice(key);
+                let identity = reqwest::Identity::from_pem(&identity_pem).map_err(|e| {
+                    Error::explain(
+                        ErrorType::InternalError,
+                        format!("Failed to create client identity: {}", e),
+                    )
+                })?;
+                client_builder.identity(identity)
+            }
+            _ => client_builder,
+        };
+
+        let client = client_builder.build().map_err(|e| {
+            Error::explain(
+                ErrorType::InternalError,
+                format!("Failed to create HTTP client: {}", e),
+            )
+        })?;
+
+        // Build request with authentication
+        let mut request = client.get(&url);
+        if let KubeAuth::Token(token) = &auth {
+            request = request.bearer_auth(token);
         }
 
-        // Return empty set - Kubernetes discovery requires async HTTP client
-        Ok((BTreeSet::new(), HashMap::new()))
+        // Make the request
+        let response = request.send().await.map_err(|e| {
+            Error::explain(
+                ErrorType::ConnectError,
+                format!("Failed to connect to Kubernetes API: {}", e),
+            )
+        })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::explain(
+                ErrorType::HTTPStatus(status.as_u16()),
+                format!("Kubernetes API returned {}: {}", status, body),
+            ));
+        }
+
+        // Parse the response
+        let endpoints: k8s_types::Endpoints = response.json().await.map_err(|e| {
+            Error::explain(
+                ErrorType::InternalError,
+                format!("Failed to parse Kubernetes endpoints: {}", e),
+            )
+        })?;
+
+        // Extract backends from endpoints
+        let mut backends = BTreeSet::new();
+        if let Some(subsets) = endpoints.subsets {
+            for subset in subsets {
+                // Find the target port
+                let target_port = subset.ports.as_ref().and_then(|ports| {
+                    if let Some(port_name) = &self.port_name {
+                        // Find port by name
+                        ports.iter().find(|p| p.name.as_ref() == Some(port_name)).map(|p| p.port)
+                    } else {
+                        // Use first port
+                        ports.first().map(|p| p.port)
+                    }
+                });
+
+                if let (Some(addresses), Some(port)) = (subset.addresses, target_port) {
+                    for addr in addresses {
+                        let socket_addr = format!("{}:{}", addr.ip, port);
+                        if let Ok(mut addrs) = socket_addr.to_socket_addrs() {
+                            if let Some(socket_addr) = addrs.next() {
+                                backends.insert(Backend {
+                                    addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(socket_addr),
+                                    weight: 1,
+                                    ext: http::Extensions::new(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        info!(
+            service = %self.service,
+            namespace = %self.namespace,
+            backend_count = backends.len(),
+            "Kubernetes endpoint discovery successful"
+        );
+
+        // Update cache
+        *self.cached_backends.write() = backends.clone();
+        *self.last_resolution.write() = Instant::now();
+
+        Ok((backends, HashMap::new()))
+    }
+}
+
+// Fallback implementation when kubernetes feature is not enabled
+#[cfg(not(feature = "kubernetes"))]
+#[async_trait]
+impl ServiceDiscovery for KubernetesDiscovery {
+    async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>)> {
+        if !self.needs_refresh() {
+            let backends = self.cached_backends.read().clone();
+            return Ok((backends, HashMap::new()));
+        }
+
+        // Try in-cluster config
+        if self.kubeconfig.is_none() {
+            if let Ok((_, _)) = self.get_in_cluster_config() {
+                warn!(
+                    service = %self.service,
+                    "Kubernetes discovery requires 'kubernetes' feature flag for full support"
+                );
+            }
+        } else {
+            warn!(
+                service = %self.service,
+                kubeconfig = ?self.kubeconfig,
+                "Kubeconfig support requires 'kubernetes' feature flag"
+            );
+        }
+
+        let cached = self.cached_backends.read().clone();
+        Ok((cached, HashMap::new()))
     }
 }
 

@@ -131,12 +131,16 @@ notify = "6.1"
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
 
+# Kubernetes service discovery (optional)
+reqwest = { version = "0.12", features = ["rustls-tls", "json"], optional = true }
+
 [features]
 default = []
 distributed-rate-limit = ["redis", "async-memcached"]
 distributed-rate-limit-redis = ["redis"]
 distributed-rate-limit-memcached = ["async-memcached"]
 opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-semantic-conventions"]
+kubernetes = ["reqwest"]
 
 [dev-dependencies]
 criterion = { workspace = true }
