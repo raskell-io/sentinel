@@ -473,6 +473,19 @@ impl SentinelProxy {
                 .push(value.to_str().unwrap_or("").to_string());
         }
 
+        // Add HTTP/2 pseudo-headers for agent processing
+        headers_map.insert(
+            ":method".to_string(),
+            vec![req_header.method.as_str().to_string()],
+        );
+        // Include full path with query string for WAF inspection
+        let full_path = req_header
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str().to_string())
+            .unwrap_or_else(|| req_header.uri.path().to_string());
+        headers_map.insert(":path".to_string(), vec![full_path]);
+
         // Create agent call context
         let agent_ctx = crate::agents::AgentCallContext {
             correlation_id: CorrelationId::from_string(&ctx.trace_id),
