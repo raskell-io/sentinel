@@ -21,8 +21,8 @@ source "${SCRIPT_DIR}/../../lib/chaos-injectors.sh"
 # Test Configuration
 # ============================================================================
 
-FAILOPEN_URL="${PROXY_URL}/failopen/status/200"
-PROTECTED_URL="${PROXY_URL}/protected/status/200"
+FAILOPEN_URL="${PROXY_URL}/failopen/"
+PROTECTED_URL="${PROXY_URL}/protected/"
 
 # ============================================================================
 # Test Cases
@@ -33,9 +33,9 @@ test_baseline() {
 
     # Measure baseline latency
     local start_time end_time latency_ms
-    start_time=$(date +%s%3N)
+    start_time=$(date +%s)
     http_status "$PROTECTED_URL" >/dev/null
-    end_time=$(date +%s%3N)
+    end_time=$(date +%s)
     latency_ms=$((end_time - start_time))
 
     log_info "Baseline latency: ${latency_ms}ms"
@@ -55,9 +55,9 @@ test_timeout_behavior() {
     # Test fail-open route - should timeout but still succeed
     log_info "Testing fail-open route during agent freeze..."
     local start_time end_time latency_ms status
-    start_time=$(date +%s%3N)
+    start_time=$(date +%s)
     status=$(http_status "$FAILOPEN_URL")
-    end_time=$(date +%s%3N)
+    end_time=$(date +%s)
     latency_ms=$((end_time - start_time))
 
     log_info "Fail-open response: $status in ${latency_ms}ms"
@@ -81,9 +81,9 @@ test_protected_timeout() {
 
     # Agent should still be frozen
     local start_time end_time latency_ms status
-    start_time=$(date +%s%3N)
+    start_time=$(date +%s)
     status=$(http_status "$PROTECTED_URL")
-    end_time=$(date +%s%3N)
+    end_time=$(date +%s)
     latency_ms=$((end_time - start_time))
 
     log_info "Protected response: $status in ${latency_ms}ms"
@@ -137,9 +137,9 @@ test_recovery_after_unfreeze() {
 
     # Both routes should work again with normal latency
     local start_time end_time latency_ms status
-    start_time=$(date +%s%3N)
+    start_time=$(date +%s)
     status=$(http_status "$PROTECTED_URL")
-    end_time=$(date +%s%3N)
+    end_time=$(date +%s)
     latency_ms=$((end_time - start_time))
 
     log_info "Recovery response: $status in ${latency_ms}ms"

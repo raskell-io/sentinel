@@ -49,7 +49,8 @@ get_proxy_memory_mb() {
         awk -F'/' '{print $1}' | sed 's/[^0-9.]//g')
 
     # Simplified: just get the number, docker usually reports in MiB
-    echo "$bytes" | head -1
+    # Truncate to integer for bash arithmetic compatibility
+    echo "$bytes" | head -1 | awk '{printf "%d", $1}'
 }
 
 format_bytes() {
@@ -78,7 +79,7 @@ test_baseline_memory() {
 
     # Run some baseline requests
     for i in {1..100}; do
-        http_status "${PROXY_URL}/status/200" >/dev/null 2>&1 || true
+        http_status "${PROXY_URL}/" >/dev/null 2>&1 || true
     done
 
     # Get memory after warmup
@@ -125,7 +126,7 @@ test_chaos_cycles() {
         local successes=0
         for i in $(seq 1 $REQUESTS_PER_CYCLE); do
             local status
-            status=$(http_status "${PROXY_URL}/status/200")
+            status=$(http_status "${PROXY_URL}/")
             if [[ "$status" == "200" ]]; then
                 ((successes++))
             fi
@@ -221,7 +222,7 @@ test_sustained_load_after_chaos() {
     # Send sustained load
     log_info "Sending 1000 requests..."
     for i in $(seq 1 1000); do
-        http_status "${PROXY_URL}/status/200" >/dev/null 2>&1 || true
+        http_status "${PROXY_URL}/" >/dev/null 2>&1 || true
     done
 
     # Check memory

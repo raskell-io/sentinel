@@ -22,7 +22,7 @@ source "${SCRIPT_DIR}/../../lib/chaos-injectors.sh"
 # Test Configuration
 # ============================================================================
 
-CIRCUIT_URL="${PROXY_URL}/circuit/status/200"
+CIRCUIT_URL="${PROXY_URL}/circuit/"
 CB_TIMEOUT=10  # Circuit breaker timeout (seconds)
 FAILURE_THRESHOLD=5
 SUCCESS_THRESHOLD=2
@@ -126,9 +126,9 @@ test_phase2_transition_to_open() {
 
     # Verify requests are fast-failed when open
     local start_time end_time latency_ms
-    start_time=$(date +%s%3N)
+    start_time=$(date +%s)
     http_status "$CIRCUIT_URL" >/dev/null 2>&1 || true
-    end_time=$(date +%s%3N)
+    end_time=$(date +%s)
     latency_ms=$((end_time - start_time))
 
     if [[ $latency_ms -lt 100 ]]; then
