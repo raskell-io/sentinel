@@ -18,7 +18,7 @@ use crate::grpc::{
     self, agent_processor_server::AgentProcessor, agent_processor_server::AgentProcessorServer,
 };
 use crate::protocol::{
-    AgentRequest, AgentResponse, AuditMetadata, Decision, EventType, HeaderOp,
+    AgentRequest, AgentResponse, AuditMetadata, ConfigureEvent, Decision, EventType, HeaderOp,
     RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, RequestMetadata,
     ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketDecision, WebSocketFrameEvent,
     MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
@@ -37,6 +37,17 @@ pub struct AgentServer {
 /// Trait for implementing agent logic
 #[async_trait]
 pub trait AgentHandler: Send + Sync {
+    /// Handle a configure event
+    ///
+    /// Called once when the agent connects, before any request events.
+    /// Use this to receive agent-specific configuration from the proxy.
+    ///
+    /// The default implementation accepts any configuration silently.
+    /// Override this to parse and validate your agent's configuration.
+    async fn on_configure(&self, _event: ConfigureEvent) -> AgentResponse {
+        AgentResponse::default_allow()
+    }
+
     /// Handle a request headers event
     async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
@@ -203,6 +214,15 @@ impl AgentServer {
 
             // Handle request based on event type
             let response = match request.event_type {
+                EventType::Configure => {
+                    let event: ConfigureEvent = serde_json::from_value(request.payload)
+                        .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;
+                    trace!(
+                        agent_id = %event.agent_id,
+                        "Processing configure event"
+                    );
+                    handler.on_configure(event).await
+                }
                 EventType::RequestHeaders => {
                     let event: RequestHeadersEvent = serde_json::from_value(request.payload)
                         .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;

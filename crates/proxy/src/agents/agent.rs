@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use sentinel_agent_protocol::{AgentClient, AgentResponse, EventType};
+use sentinel_agent_protocol::{AgentClient, AgentResponse, ConfigureEvent, Decision, EventType};
 use sentinel_common::{errors::SentinelError, errors::SentinelResult, CircuitBreaker};
 use sentinel_config::{AgentConfig, AgentEvent, AgentTransport};
 use tokio::sync::RwLock;
@@ -140,6 +140,10 @@ impl Agent {
                     connect_time_ms = start.elapsed().as_millis(),
                     "Agent connected via Unix socket"
                 );
+
+                // Send Configure event if config is present
+                self.send_configure_event().await?;
+
                 Ok(())
             }
             AgentTransport::Grpc { address, tls: _ } => {
@@ -175,6 +179,10 @@ impl Agent {
                     connect_time_ms = start.elapsed().as_millis(),
                     "Agent connected via gRPC"
                 );
+
+                // Send Configure event if config is present
+                self.send_configure_event().await?;
+
                 Ok(())
             }
             AgentTransport::Http { url, tls: _ } => {
@@ -186,6 +194,75 @@ impl Agent {
                 Ok(())
             }
         }
+    }
+
+    /// Send Configure event to agent if config is present.
+    async fn send_configure_event(&self) -> SentinelResult<()> {
+        // Only send Configure if agent has config
+        let config = match &self.config.config {
+            Some(c) => c.clone(),
+            None => {
+                trace!(
+                    agent_id = %self.config.id,
+                    "No config for agent, skipping Configure event"
+                );
+                return Ok(());
+            }
+        };
+
+        let event = ConfigureEvent {
+            agent_id: self.config.id.clone(),
+            config,
+        };
+
+        debug!(
+            agent_id = %self.config.id,
+            "Sending Configure event to agent"
+        );
+
+        let mut client_guard = self.client.write().await;
+        let client = client_guard.as_mut().ok_or_else(|| SentinelError::Agent {
+            agent: self.config.id.clone(),
+            message: "No client connection for Configure event".to_string(),
+            event: "configure".to_string(),
+            source: None,
+        })?;
+
+        let response = client.send_event(EventType::Configure, &event).await.map_err(|e| {
+            error!(
+                agent_id = %self.config.id,
+                error = %e,
+                "Failed to send Configure event"
+            );
+            SentinelError::Agent {
+                agent: self.config.id.clone(),
+                message: format!("Configure event failed: {}", e),
+                event: "configure".to_string(),
+                source: None,
+            }
+        })?;
+
+        // Check if agent accepted the configuration
+        if !matches!(response.decision, Decision::Allow) {
+            error!(
+                agent_id = %self.config.id,
+                decision = ?response.decision,
+                "Agent rejected configuration"
+            );
+            return Err(SentinelError::Agent {
+                agent: self.config.id.clone(),
+                message: "Agent rejected configuration".to_string(),
+                event: "configure".to_string(),
+                source: None,
+            });
+        }
+
+        info!(
+            agent_id = %self.config.id,
+            "Agent accepted configuration"
+        );
+
+        Ok(())
     }
 
     /// Call agent with event.

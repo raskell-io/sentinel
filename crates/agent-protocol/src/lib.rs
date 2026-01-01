@@ -85,8 +85,8 @@ pub use errors::AgentProtocolError;
 
 // Re-export protocol types
 pub use protocol::{
-    AgentRequest, AgentResponse, AuditMetadata, BodyMutation, Decision, EventType, HeaderOp,
-    RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, RequestMetadata,
+    AgentRequest, AgentResponse, AuditMetadata, BodyMutation, ConfigureEvent, Decision, EventType,
+    HeaderOp, RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, RequestMetadata,
     ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketDecision, WebSocketFrameEvent,
     WebSocketOpcode, MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
 };

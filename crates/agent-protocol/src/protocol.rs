@@ -16,6 +16,8 @@ pub const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventType {
+    /// Agent configuration (sent once when agent connects)
+    Configure,
     /// Request headers received
     RequestHeaders,
     /// Request body chunk received
@@ -161,6 +163,21 @@ pub struct RequestMetadata {
     pub upstream_id: Option<String>,
     /// Request start timestamp (RFC3339)
     pub timestamp: String,
+}
+
+/// Configure event
+///
+/// Sent once when an agent connects, before any request events.
+/// Contains agent-specific configuration from the proxy's config file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigureEvent {
+    /// Agent ID (from proxy config)
+    pub agent_id: String,
+    /// Agent-specific configuration (JSON object)
+    ///
+    /// The structure of this config depends on the agent type.
+    /// Agents should parse this into their own config struct.
+    pub config: serde_json::Value,
 }
 
 /// Request headers event

@@ -116,6 +116,13 @@ pub struct AgentConfig {
     /// Default: 5000ms (5 seconds)
     #[serde(default = "default_chunk_timeout")]
     pub chunk_timeout_ms: u64,
+
+    /// Agent-specific configuration
+    ///
+    /// This configuration is passed to the agent via the Configure event
+    /// when the agent connects. The structure depends on the agent type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
 }
 
 fn default_chunk_timeout() -> u64 {

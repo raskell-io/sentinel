@@ -204,6 +204,89 @@ pub fn parse_agents(node: &kdl::KdlNode) -> Result<Vec<AgentConfig>> {
     Ok(agents)
 }
 
+/// Convert a KDL config node to JSON value
+///
+/// Conversion rules:
+/// - `key value` -> `{"key": value}`
+/// - `key value1 value2` -> `{"key": [value1, value2]}`
+/// - `key { ... }` -> `{"key": {...}}` (recursive)
+/// - Named entries (`key=value`) become object properties
+fn kdl_to_json(node: &kdl::KdlNode) -> Result<serde_json::Value> {
+    let mut obj = serde_json::Map::new();
+
+    // Process children nodes
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let name = child.name().value().to_string();
+
+            // Collect arguments (unnamed entries)
+            let args: Vec<serde_json::Value> = child
+                .entries()
+                .iter()
+                .filter(|e| e.name().is_none())
+                .filter_map(|e| kdl_value_to_json(e.value()))
+                .collect();
+
+            // Collect named entries as properties
+            let mut child_obj = serde_json::Map::new();
+            for entry in child.entries().iter().filter(|e| e.name().is_some()) {
+                if let Some(name) = entry.name() {
+                    if let Some(value) = kdl_value_to_json(entry.value()) {
+                        child_obj.insert(name.value().to_string(), value);
+                    }
+                }
+            }
+
+            // If node has children, recurse
+            if child.children().is_some() {
+                let nested = kdl_to_json(child)?;
+                // Merge nested object with any named entries
+                if let serde_json::Value::Object(nested_map) = nested {
+                    for (k, v) in nested_map {
+                        child_obj.insert(k, v);
+                    }
+                }
+            }
+
+            // Determine final value for this node
+            let value = if !child_obj.is_empty() {
+                // Has properties or nested children
+                serde_json::Value::Object(child_obj)
+            } else if args.len() == 1 {
+                // Single argument
+                args.into_iter().next().unwrap()
+            } else if !args.is_empty() {
+                // Multiple arguments -> array
+                serde_json::Value::Array(args)
+            } else {
+                // No value - use true (like a flag)
+                serde_json::Value::Bool(true)
+            };
+
+            obj.insert(name, value);
+        }
+    }
+
+    Ok(serde_json::Value::Object(obj))
+}
+
+/// Convert a single KDL value to JSON
+fn kdl_value_to_json(value: &kdl::KdlValue) -> Option<serde_json::Value> {
+    if let Some(s) = value.as_string() {
+        Some(serde_json::Value::String(s.to_string()))
+    } else if let Some(n) = value.as_integer() {
+        Some(serde_json::Value::Number((n as i64).into()))
+    } else if let Some(f) = value.as_float() {
+        serde_json::Number::from_f64(f).map(serde_json::Value::Number)
+    } else if let Some(b) = value.as_bool() {
+        Some(serde_json::Value::Bool(b))
+    } else if value.is_null() {
+        Some(serde_json::Value::Null)
+    } else {
+        None
+    }
+}
+
 /// Parse a single agent configuration
 fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
     // Get agent ID from first argument
@@ -240,6 +323,7 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
     let mut request_body_mode = BodyStreamingMode::Buffer;
     let mut response_body_mode = BodyStreamingMode::Buffer;
     let mut chunk_timeout_ms = 5000u64;
+    let mut config: Option<serde_json::Value> = None;
 
     for child in children.nodes() {
         match child.name().value() {
@@ -342,6 +426,9 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
                     }
                 }
             }
+            "config" => {
+                config = Some(kdl_to_json(child)?);
+            }
             _ => {}
         }
     }
@@ -371,6 +458,7 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
         request_body_mode,
         response_body_mode,
         chunk_timeout_ms,
+        config,
     })
 }
 
