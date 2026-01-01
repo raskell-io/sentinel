@@ -427,7 +427,7 @@ filters {
 - [x] Add discovery refresh intervals
 - [x] Implement kubeconfig file parsing for K8s
 - [x] Add async HTTP client for HTTPS K8s API
-- [ ] Document service mesh integration
+- [x] Document service mesh integration
 
 **Features:**
 - Static: Fixed list of backends
