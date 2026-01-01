@@ -242,6 +242,11 @@ impl AgentClient {
             .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?;
 
         let grpc_event_type = match event_type {
+            EventType::Configure => {
+                return Err(AgentProtocolError::Serialization(
+                    "Configure events are not supported via gRPC".to_string(),
+                ))
+            }
             EventType::RequestHeaders => grpc::EventType::RequestHeaders,
             EventType::RequestBodyChunk => grpc::EventType::RequestBodyChunk,
             EventType::ResponseHeaders => grpc::EventType::ResponseHeaders,
@@ -251,6 +256,7 @@ impl AgentClient {
         };
 
         let event = match event_type {
+            EventType::Configure => unreachable!("Configure handled above"),
             EventType::RequestHeaders => {
                 let event: RequestHeadersEvent = serde_json::from_value(payload_json)
                     .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?;

@@ -274,6 +274,7 @@ pub(super) fn parse_agent(node: &KdlNode) -> Result<AgentConfig> {
         request_body_mode: Default::default(),
         response_body_mode: Default::default(),
         chunk_timeout_ms: 5000,
+        config: None,
     })
 }
 

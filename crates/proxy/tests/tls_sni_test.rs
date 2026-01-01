@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use sentinel_config::{SniCertificate, TlsConfig};
 use sentinel_proxy::tls::{
-    build_server_config, validate_tls_config, HotReloadableSniResolver, SniResolver, TlsError,
+    build_server_config, validate_tls_config, CertificateReloader, HotReloadableSniResolver,
+    SniResolver, TlsError,
 };
 
 /// Get the path to the test fixtures directory
@@ -416,6 +417,288 @@ mod hot_reload {
         let config2 = multi_sni_tls_config();
         let result = resolver.update_config(config2);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_certificate_rotation_via_file_swap() {
+        // This test verifies that when certificate files are replaced on disk,
+        // calling reload() picks up the new certificates.
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("server.crt");
+        let key_path = temp_dir.path().join("server.key");
+
+        // Copy initial certificate (server-default)
+        let fixtures = fixtures_path();
+        std::fs::copy(fixtures.join("server-default.crt"), &cert_path).unwrap();
+        std::fs::copy(fixtures.join("server-default.key"), &key_path).unwrap();
+
+        // Create resolver with initial certs
+        let config = TlsConfig {
+            cert_file: cert_path.clone(),
+            key_file: key_path.clone(),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: sentinel_common::types::TlsVersion::Tls12,
+            max_version: None,
+            cipher_suites: vec![],
+            client_auth: false,
+            ocsp_stapling: false,
+            session_resumption: true,
+        };
+
+        let resolver = HotReloadableSniResolver::from_config(config).unwrap();
+
+        // Get initial certificate
+        let cert_before = resolver.resolve(None);
+
+        // Now swap the certificate files to a different cert (server-api)
+        std::fs::copy(fixtures.join("server-api.crt"), &cert_path).unwrap();
+        std::fs::copy(fixtures.join("server-api.key"), &key_path).unwrap();
+
+        // Reload should pick up new certs
+        let reload_result = resolver.reload();
+        assert!(reload_result.is_ok(), "Reload should succeed: {:?}", reload_result.err());
+
+        // Get certificate after reload
+        let cert_after = resolver.resolve(None);
+
+        // Certificates should be different (different Arc instances with different content)
+        // Note: We can't easily compare cert content, but we can verify the Arc changed
+        assert!(
+            !Arc::ptr_eq(&cert_before, &cert_after),
+            "Certificate should change after reload with new files"
+        );
+    }
+
+    #[test]
+    fn test_reload_fails_with_invalid_replacement() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("server.crt");
+        let key_path = temp_dir.path().join("server.key");
+
+        // Copy valid initial certificate
+        let fixtures = fixtures_path();
+        std::fs::copy(fixtures.join("server-default.crt"), &cert_path).unwrap();
+        std::fs::copy(fixtures.join("server-default.key"), &key_path).unwrap();
+
+        let config = TlsConfig {
+            cert_file: cert_path.clone(),
+            key_file: key_path.clone(),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: sentinel_common::types::TlsVersion::Tls12,
+            max_version: None,
+            cipher_suites: vec![],
+            client_auth: false,
+            ocsp_stapling: false,
+            session_resumption: true,
+        };
+
+        let resolver = HotReloadableSniResolver::from_config(config).unwrap();
+        let cert_before = resolver.resolve(None);
+
+        // Replace with invalid cert content
+        std::fs::write(&cert_path, "invalid certificate content").unwrap();
+
+        // Reload should fail
+        let reload_result = resolver.reload();
+        assert!(reload_result.is_err(), "Reload should fail with invalid cert");
+
+        // Original cert should still be in use
+        let cert_after = resolver.resolve(None);
+        assert!(
+            Arc::ptr_eq(&cert_before, &cert_after),
+            "Original certificate should be preserved after failed reload"
+        );
+    }
+
+    #[test]
+    fn test_reload_fails_when_file_deleted() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("server.crt");
+        let key_path = temp_dir.path().join("server.key");
+
+        // Copy valid certificate
+        let fixtures = fixtures_path();
+        std::fs::copy(fixtures.join("server-default.crt"), &cert_path).unwrap();
+        std::fs::copy(fixtures.join("server-default.key"), &key_path).unwrap();
+
+        let config = TlsConfig {
+            cert_file: cert_path.clone(),
+            key_file: key_path.clone(),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: sentinel_common::types::TlsVersion::Tls12,
+            max_version: None,
+            cipher_suites: vec![],
+            client_auth: false,
+            ocsp_stapling: false,
+            session_resumption: true,
+        };
+
+        let resolver = HotReloadableSniResolver::from_config(config).unwrap();
+        let cert_before = resolver.resolve(None);
+
+        // Delete the certificate file
+        std::fs::remove_file(&cert_path).unwrap();
+
+        // Reload should fail
+        let reload_result = resolver.reload();
+        assert!(reload_result.is_err(), "Reload should fail when cert file is deleted");
+
+        // Original cert should still be in use
+        let cert_after = resolver.resolve(None);
+        assert!(
+            Arc::ptr_eq(&cert_before, &cert_after),
+            "Original certificate should be preserved when reload fails"
+        );
+    }
+}
+
+// ============================================================================
+// CertificateReloader Tests (Multi-Listener Management)
+// ============================================================================
+
+mod certificate_reloader {
+    use super::*;
+
+    #[test]
+    fn test_create_certificate_reloader() {
+        let reloader = CertificateReloader::new();
+        let status = reloader.status();
+        assert!(status.is_empty(), "New reloader should have no listeners");
+    }
+
+    #[test]
+    fn test_register_single_resolver() {
+        let reloader = CertificateReloader::new();
+        let config = minimal_tls_config();
+        let resolver = Arc::new(HotReloadableSniResolver::from_config(config).unwrap());
+
+        reloader.register("https-main", resolver);
+
+        let status = reloader.status();
+        assert_eq!(status.len(), 1);
+        assert!(status.contains_key("https-main"));
+    }
+
+    #[test]
+    fn test_register_multiple_resolvers() {
+        let reloader = CertificateReloader::new();
+
+        let config1 = minimal_tls_config();
+        let resolver1 = Arc::new(HotReloadableSniResolver::from_config(config1).unwrap());
+        reloader.register("https-main", resolver1);
+
+        let config2 = multi_sni_tls_config();
+        let resolver2 = Arc::new(HotReloadableSniResolver::from_config(config2).unwrap());
+        reloader.register("https-api", resolver2);
+
+        let status = reloader.status();
+        assert_eq!(status.len(), 2);
+        assert!(status.contains_key("https-main"));
+        assert!(status.contains_key("https-api"));
+    }
+
+    #[test]
+    fn test_reload_all_success() {
+        let reloader = CertificateReloader::new();
+
+        let config1 = minimal_tls_config();
+        let resolver1 = Arc::new(HotReloadableSniResolver::from_config(config1).unwrap());
+        reloader.register("https-main", resolver1);
+
+        let config2 = multi_sni_tls_config();
+        let resolver2 = Arc::new(HotReloadableSniResolver::from_config(config2).unwrap());
+        reloader.register("https-api", resolver2);
+
+        // Reload all - should succeed
+        let (success_count, errors) = reloader.reload_all();
+        assert_eq!(success_count, 2, "Both resolvers should reload successfully");
+        assert!(errors.is_empty(), "No errors expected");
+    }
+
+    #[test]
+    fn test_reload_all_partial_failure() {
+        let reloader = CertificateReloader::new();
+
+        // First resolver with valid config
+        let config1 = minimal_tls_config();
+        let resolver1 = Arc::new(HotReloadableSniResolver::from_config(config1).unwrap());
+        reloader.register("https-valid", resolver1);
+
+        // Second resolver with temp files that we'll delete
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("server.crt");
+        let key_path = temp_dir.path().join("server.key");
+
+        let fixtures = fixtures_path();
+        std::fs::copy(fixtures.join("server-default.crt"), &cert_path).unwrap();
+        std::fs::copy(fixtures.join("server-default.key"), &key_path).unwrap();
+
+        let config2 = TlsConfig {
+            cert_file: cert_path.clone(),
+            key_file: key_path.clone(),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: sentinel_common::types::TlsVersion::Tls12,
+            max_version: None,
+            cipher_suites: vec![],
+            client_auth: false,
+            ocsp_stapling: false,
+            session_resumption: true,
+        };
+        let resolver2 = Arc::new(HotReloadableSniResolver::from_config(config2).unwrap());
+        reloader.register("https-will-fail", resolver2);
+
+        // Delete the cert file for the second resolver
+        std::fs::remove_file(&cert_path).unwrap();
+
+        // Reload all - should have partial failure
+        let (success_count, errors) = reloader.reload_all();
+        assert_eq!(success_count, 1, "One resolver should succeed");
+        assert_eq!(errors.len(), 1, "One resolver should fail");
+        assert_eq!(errors[0].0, "https-will-fail", "Failed resolver should be identified");
+    }
+
+    #[test]
+    fn test_status_tracks_reload_age() {
+        let reloader = CertificateReloader::new();
+
+        let config = minimal_tls_config();
+        let resolver = Arc::new(HotReloadableSniResolver::from_config(config).unwrap());
+        reloader.register("https-main", resolver);
+
+        let status_before = reloader.status();
+        let age_before = status_before.get("https-main").unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let status_after = reloader.status();
+        let age_after = status_after.get("https-main").unwrap();
+
+        assert!(age_after > age_before, "Age should increase over time");
+    }
+
+    #[test]
+    fn test_reload_all_resets_ages() {
+        let reloader = CertificateReloader::new();
+
+        let config = minimal_tls_config();
+        let resolver = Arc::new(HotReloadableSniResolver::from_config(config).unwrap());
+        reloader.register("https-main", resolver);
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let status_before = reloader.status();
+        let age_before = status_before.get("https-main").unwrap();
+
+        reloader.reload_all();
+
+        let status_after = reloader.status();
+        let age_after = status_after.get("https-main").unwrap();
+
+        assert!(age_after < age_before, "Age should reset after reload");
     }
 }
 
