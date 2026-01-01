@@ -24,68 +24,63 @@
 </p>
 
 <p align="center">
-  <a href="MANIFESTO.md">Manifesto</a> •
-  <a href="docs/why-sentinel.md">Why Sentinel</a> •
   <a href="https://sentinel.raskell.io/docs">Documentation</a> •
   <a href="https://github.com/raskell-io/sentinel/discussions">Discussions</a> •
+  <a href="MANIFESTO.md">Manifesto</a> •
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-<hr />
-
 </div>
 
-It is designed for explicit limits, predictable behavior, and production environments where operators are expected to sleep.
-
-Sentinel is built on top of Cloudflare Pingora. It does not reinvent the proxy dataplane. Instead, it focuses on the product layer that matters in real operations: configuration, policy boundaries, extensibility, observability, and safe defaults.
-
-The core philosophy is simple:
-
-- the dataplane should be boring and predictable,
-- security decisions should be explicit and observable,
-- and complexity should be isolated rather than embedded.
-
-Sentinel exists so critical web infrastructure remains **inspectable, forkable, and shared**.
-
 ---
 
-## Why Sentinel exists
+Sentinel is a high-performance reverse proxy built on [Cloudflare Pingora](https://github.com/cloudflare/pingora). It provides explicit limits, predictable behavior, and production-grade defaults for environments where operators need to sleep.
 
-Modern reverse proxies are powerful, but often accumulate:
-- hidden behavior,
-- unbounded complexity,
-- and operational risk that only appears under stress.
+## Quick Start
 
-Sentinel takes a different approach.
+```bash
+# Install
+curl -fsSL https://getsentinel.raskell.io | sh
 
-It prioritizes:
-- bounded memory and queues,
-- deterministic timeouts everywhere,
-- clear failure modes (fail-open / fail-closed),
-- and extensibility via external agents rather than embedded logic.
+# Or via Cargo
+cargo install sentinel-proxy
 
-The goal is not to compete on feature count.
-The goal is to build infrastructure that is **correct, calm, and trustworthy**.
+# Run
+sentinel --config sentinel.kdl
+```
 
----
+## Features
 
-## Design principles
+| Feature | Description |
+|---------|-------------|
+| **KDL Configuration** | Human-readable config with hot reload |
+| **Agent System** | Extend via external processes (WAF, auth, rate limiting) |
+| **Service Types** | Optimized handling for APIs, static files, web apps |
+| **Observability** | Prometheus metrics, structured logging, distributed tracing |
+| **TLS** | Modern cipher suites, automatic certificate handling |
+| **Load Balancing** | Round-robin, least connections, consistent hashing |
 
-- **Sleepable operations**  
-  No unbounded resources. No surprise behavior.
+## Why Sentinel
 
-- **Security-first, not security-magic**  
-  Every limit and decision is explicit in configuration.
+Modern proxies accumulate hidden behavior, unbounded complexity, and operational risk that surfaces under stress.
 
-- **Small, stable core**  
-  Innovation lives outside the dataplane, behind contracts.
+Sentinel takes a different approach:
 
-- **Production correctness over cleverness**  
-  Features ship only when they can be bounded, observed, tested, and rolled back.
+- **Bounded resources** — Memory limits, queue depths, deterministic timeouts
+- **Explicit failure modes** — Fail-open or fail-closed, never ambiguous
+- **External extensibility** — Security logic lives in agents, not the core
+- **Observable by default** — Every decision is logged and metered
 
-For a deeper explanation of these principles, see [`MANIFESTO.md`](MANIFESTO.md).
+The goal is infrastructure that is **correct, calm, and trustworthy**.
 
----
+## Design Principles
+
+- **Sleepable operations** — No unbounded resources. No surprise behavior.
+- **Security-first** — Every limit and decision is explicit in configuration.
+- **Small, stable core** — Innovation lives outside the dataplane, behind contracts.
+- **Production correctness** — Features ship only when bounded, observed, and tested.
+
+See [`MANIFESTO.md`](MANIFESTO.md) for the full philosophy.
 
 ## Community
 
@@ -93,4 +88,8 @@ For a deeper explanation of these principles, see [`MANIFESTO.md`](MANIFESTO.md)
 - 🐛 [Issues](https://github.com/raskell-io/sentinel/issues) — Bug reports and feature requests
 - 📖 [Documentation](https://sentinel.raskell.io/docs) — Guides, reference, and examples
 
-Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) to get started.
+Contributions welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## License
+
+Apache 2.0 — See [LICENSE](LICENSE).
