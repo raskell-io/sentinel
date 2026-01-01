@@ -25,10 +25,10 @@ NC='\033[0m' # No Color
 # Test Counters
 # ============================================================================
 
-declare -g TESTS_RUN=0
-declare -g TESTS_PASSED=0
-declare -g TESTS_FAILED=0
-declare -g TESTS_SKIPPED=0
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+TESTS_SKIPPED=0
 
 # ============================================================================
 # Configuration
@@ -56,19 +56,19 @@ log_info() {
 
 log_pass() {
     echo -e "${GREEN}[PASS]${NC} $*"
-    ((TESTS_PASSED++))
-    ((TESTS_RUN++))
+    ((++TESTS_PASSED))
+    ((++TESTS_RUN))
 }
 
 log_fail() {
     echo -e "${RED}[FAIL]${NC} $*"
-    ((TESTS_FAILED++))
-    ((TESTS_RUN++))
+    ((++TESTS_FAILED))
+    ((++TESTS_RUN))
 }
 
 log_skip() {
     echo -e "${YELLOW}[SKIP]${NC} $*"
-    ((TESTS_SKIPPED++))
+    ((++TESTS_SKIPPED))
 }
 
 log_warn() {
@@ -126,17 +126,19 @@ service_is_up() {
 
 # Make a request and return the HTTP status code
 # Usage: http_status <url> [method]
+# Note: Do NOT use -f flag as it makes curl fail on 4xx/5xx, which would
+# cause || echo "000" to append, resulting in codes like "503000"
 http_status() {
     local url="$1"
     local method="${2:-GET}"
-    curl -sf -o /dev/null -w "%{http_code}" -X "$method" "$url" 2>/dev/null || echo "000"
+    curl -s -o /dev/null -w "%{http_code}" -X "$method" "$url" 2>/dev/null || echo "000"
 }
 
 # Make a request and return the response body
 # Usage: http_get <url>
 http_get() {
     local url="$1"
-    curl -sf "$url" 2>/dev/null || echo ""
+    curl -s "$url" 2>/dev/null || echo ""
 }
 
 # Make multiple requests and count successes
@@ -177,6 +179,7 @@ count_status() {
 # Get a metric value from Prometheus endpoint
 # Usage: get_metric <metric_name> [labels]
 # Example: get_metric "sentinel_agent_failures_total" "agent=\"echo\""
+# Note: Uses || true to avoid failing with set -o pipefail when grep finds no match
 get_metric() {
     local metric="$1"
     local labels="${2:-}"
@@ -185,21 +188,22 @@ get_metric() {
     local pattern="$metric"
     [[ -n "$labels" ]] && pattern="${metric}{${labels}}"
 
-    curl -sf "$endpoint" 2>/dev/null | grep "^${pattern}" | head -1 | awk '{print $2}'
+    # Use || true because grep returns 1 when no match, which would fail with pipefail
+    curl -s "$endpoint" 2>/dev/null | grep "^${pattern}" | head -1 | awk '{print $2}' || true
 }
 
 # Get all metrics matching a pattern
 # Usage: get_metrics_matching <pattern>
 get_metrics_matching() {
     local pattern="$1"
-    curl -sf "$METRICS_URL" 2>/dev/null | grep "$pattern"
+    curl -s "$METRICS_URL" 2>/dev/null | grep "$pattern" || true
 }
 
 # Check if a metric exists
 # Usage: metric_exists <metric_name>
 metric_exists() {
     local metric="$1"
-    curl -sf "$METRICS_URL" 2>/dev/null | grep -q "^${metric}"
+    curl -s "$METRICS_URL" 2>/dev/null | grep -q "^${metric}" && echo "true" || echo "false"
 }
 
 # ============================================================================

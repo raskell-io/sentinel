@@ -191,7 +191,7 @@ start_environment() {
     # Wait for proxy health
     local retries=30
     while [[ $retries -gt 0 ]]; do
-        if curl -sf "http://localhost:9090/health" >/dev/null 2>&1; then
+        if curl -sf "http://localhost:18080/health" >/dev/null 2>&1; then
             log_success "Proxy is healthy"
             break
         fi
@@ -236,9 +236,9 @@ run_scenario() {
 
     # Export environment for the test
     export OUTPUT_DIR
-    export PROXY_URL="http://localhost:8080"
-    export METRICS_URL="http://localhost:9090/metrics"
-    export HEALTH_URL="http://localhost:9090/health"
+    export PROXY_URL="http://localhost:18080"
+    export METRICS_URL="http://localhost:18080/metrics"
+    export HEALTH_URL="http://localhost:18080/health"
     export CHAOS_COMPOSE_FILE="$COMPOSE_FILE"
     export CHAOS_PROJECT="$PROJECT_NAME"
 
@@ -272,7 +272,7 @@ collect_artifacts() {
     done
 
     # Collect final metrics
-    curl -sf "http://localhost:9090/metrics" > "${OUTPUT_DIR}/metrics/final.txt" 2>/dev/null || true
+    curl -sf "http://localhost:18080/metrics" > "${OUTPUT_DIR}/metrics/final.txt" 2>/dev/null || true
 
     log_info "Artifacts saved to: ${OUTPUT_DIR}"
 }
@@ -423,9 +423,10 @@ main() {
         # Brief pause between scenarios to let things settle
         sleep 3
 
-        # Restore all services between scenarios
-        docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" start echo backend-primary backend-secondary 2>/dev/null || true
-        sleep 2
+        # Restore all services between scenarios (restart to recover from kill/crash)
+        # Also restart proxy to reset circuit breaker state
+        docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" restart proxy echo backend-primary backend-secondary 2>/dev/null || true
+        sleep 5  # Give proxy time to reinitialize and connect to agents
     done
 
     # Collect artifacts

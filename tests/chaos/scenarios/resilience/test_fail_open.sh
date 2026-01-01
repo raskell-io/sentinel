@@ -21,7 +21,7 @@ source "${SCRIPT_DIR}/../../lib/chaos-injectors.sh"
 # Test Configuration
 # ============================================================================
 
-FAILOPEN_URL="${PROXY_URL}/failopen/status/200"
+FAILOPEN_URL="${PROXY_URL}/failopen/"
 
 # ============================================================================
 # Test Cases
@@ -80,10 +80,11 @@ test_failopen_agent_timeout() {
 
     # Measure latency - should be around agent timeout (1000ms) then bypass
     local start_time end_time latency_ms status
-    start_time=$(date +%s%3N)
+    # Use seconds for portability (macOS doesn't support %3N)
+    start_time=$(date +%s)
     status=$(http_status "$FAILOPEN_URL")
-    end_time=$(date +%s%3N)
-    latency_ms=$((end_time - start_time))
+    end_time=$(date +%s)
+    latency_ms=$(( (end_time - start_time) * 1000 ))
 
     log_info "Response: $status in ${latency_ms}ms"
 

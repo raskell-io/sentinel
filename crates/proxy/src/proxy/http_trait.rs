@@ -834,8 +834,32 @@ impl ProxyHttp for SentinelProxy {
             correlation_id = %ctx.trace_id,
             "Processing request through agents"
         );
-        self.process_agents(session, ctx, &client_addr, client_port)
-            .await?;
+        if let Err(e) = self
+            .process_agents(session, ctx, &client_addr, client_port)
+            .await
+        {
+            // Check if this is an HTTPStatus error (e.g., agent block or fail-closed)
+            // In that case, we need to send a proper HTTP response instead of just closing the connection
+            if let ErrorType::HTTPStatus(status) = e.etype() {
+                // Extract the message from the error (the context part after "HTTPStatus context:")
+                let error_msg = e.to_string();
+                let body = error_msg
+                    .split("context:")
+                    .nth(1)
+                    .map(|s| s.trim())
+                    .unwrap_or("Request blocked");
+                debug!(
+                    correlation_id = %ctx.trace_id,
+                    status = status,
+                    body = %body,
+                    "Sending HTTP error response for agent block"
+                );
+                crate::http_helpers::write_error(session, *status, body, "text/plain").await?;
+                return Ok(true); // Request complete, don't continue to upstream
+            }
+            // For other errors, propagate them
+            return Err(e);
+        }
 
         trace!(
             correlation_id = %ctx.trace_id,
@@ -1873,6 +1897,9 @@ impl ProxyHttp for SentinelProxy {
             // Resource errors
             ErrorType::ConnectProxyFailure => 502,
             ErrorType::ConnectionClosed => 502,
+
+            // Explicit HTTP status (e.g., from agent fail-closed blocking)
+            ErrorType::HTTPStatus(status) => *status,
 
             // Internal errors
             ErrorType::InternalError => 500,

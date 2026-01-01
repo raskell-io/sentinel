@@ -338,14 +338,18 @@ impl SentinelProxy {
             .config
             .get_or_insert_with(|| self.config_manager.current());
 
-        // Extract agent IDs from filter chain by looking up filter definitions
-        let agent_ids: Vec<String> = route_config
+        // Extract agent IDs and their failure modes from filter chain by looking up filter definitions
+        let agent_filters: Vec<(String, sentinel_config::FailureMode)> = route_config
             .filters
             .iter()
             .filter_map(|filter_id| {
                 config.filters.get(filter_id).and_then(|filter_config| {
                     if let sentinel_config::Filter::Agent(agent_filter) = &filter_config.filter {
-                        Some(agent_filter.agent.clone())
+                        // Use filter's failure mode if specified, otherwise fall back to route's policy
+                        let failure_mode = agent_filter
+                            .failure_mode
+                            .unwrap_or(route_config.policies.failure_mode);
+                        Some((agent_filter.agent.clone(), failure_mode))
                     } else {
                         None
                     }
@@ -353,9 +357,12 @@ impl SentinelProxy {
             })
             .collect();
 
-        if agent_ids.is_empty() {
+        if agent_filters.is_empty() {
             return Ok(());
         }
+
+        // Extract just the agent IDs for logging and body inspection
+        let agent_ids: Vec<String> = agent_filters.iter().map(|(id, _)| id.clone()).collect();
 
         debug!(
             correlation_id = %ctx.trace_id,
@@ -444,10 +451,10 @@ impl SentinelProxy {
             response_body: None,
         };
 
-        // Process through agents
+        // Process through agents (passing filter-specific failure modes)
         match self
             .agent_manager
-            .process_request_headers(&agent_ctx, &headers_map, &agent_ids)
+            .process_request_headers(&agent_ctx, &headers_map, &agent_filters)
             .await
         {
             Ok(decision) => {
@@ -493,8 +500,9 @@ impl SentinelProxy {
                             .with_rule_ids(all_rule_ids);
                             self.log_manager.log_audit(&audit_entry);
 
+                            // Use HTTPStatus error type to send proper HTTP response
                             return Err(Error::explain(
-                                ErrorType::InternalError,
+                                ErrorType::HTTPStatus(status),
                                 body.unwrap_or_else(|| "Blocked by agent".to_string()),
                             ));
                         }

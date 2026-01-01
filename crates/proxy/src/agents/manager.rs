@@ -118,11 +118,16 @@ impl AgentManager {
     }
 
     /// Process request headers through agents.
+    ///
+    /// # Arguments
+    /// * `ctx` - Agent call context with correlation ID and metadata
+    /// * `headers` - Request headers to send to agents
+    /// * `route_agents` - List of (agent_id, failure_mode) tuples from filter chain
     pub async fn process_request_headers(
         &self,
         ctx: &AgentCallContext,
         headers: &HashMap<String, Vec<String>>,
-        route_agents: &[String],
+        route_agents: &[(String, FailureMode)],
     ) -> SentinelResult<AgentDecision> {
         let event = RequestHeadersEvent {
             metadata: ctx.metadata.clone(),
@@ -139,7 +144,7 @@ impl AgentManager {
             headers: headers.clone(),
         };
 
-        self.process_event(EventType::RequestHeaders, &event, route_agents, ctx)
+        self.process_event_with_failure_modes(EventType::RequestHeaders, &event, route_agents, ctx)
             .await
     }
 
@@ -578,6 +583,204 @@ impl AgentManager {
             decision = ?combined_decision,
             agents_processed = relevant_agents.len(),
             "Agent event processing completed"
+        );
+
+        Ok(combined_decision)
+    }
+
+    /// Process an event through relevant agents with per-filter failure modes.
+    ///
+    /// This is the preferred method for processing events as it respects the
+    /// failure mode configured on each filter, not just the agent's default.
+    async fn process_event_with_failure_modes<T: serde::Serialize>(
+        &self,
+        event_type: EventType,
+        event: &T,
+        route_agents: &[(String, FailureMode)],
+        ctx: &AgentCallContext,
+    ) -> SentinelResult<AgentDecision> {
+        trace!(
+            correlation_id = %ctx.correlation_id,
+            event_type = ?event_type,
+            route_agents = ?route_agents.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            "Starting agent event processing with failure modes"
+        );
+
+        // Get relevant agents for this route and event type, preserving failure modes
+        let agents = self.agents.read().await;
+        let relevant_agents: Vec<_> = route_agents
+            .iter()
+            .filter_map(|(id, failure_mode)| {
+                agents.get(id).map(|agent| (agent, *failure_mode))
+            })
+            .filter(|(agent, _)| agent.handles_event(event_type))
+            .collect();
+
+        if relevant_agents.is_empty() {
+            trace!(
+                correlation_id = %ctx.correlation_id,
+                event_type = ?event_type,
+                "No relevant agents for event, allowing request"
+            );
+            return Ok(AgentDecision::default_allow());
+        }
+
+        debug!(
+            correlation_id = %ctx.correlation_id,
+            event_type = ?event_type,
+            agent_count = relevant_agents.len(),
+            agent_ids = ?relevant_agents.iter().map(|(a, _)| a.id()).collect::<Vec<_>>(),
+            "Processing event through agents"
+        );
+
+        // Process through each agent sequentially
+        let mut combined_decision = AgentDecision::default_allow();
+
+        for (agent_index, (agent, filter_failure_mode)) in relevant_agents.iter().enumerate() {
+            trace!(
+                correlation_id = %ctx.correlation_id,
+                agent_id = %agent.id(),
+                agent_index = agent_index,
+                event_type = ?event_type,
+                filter_failure_mode = ?filter_failure_mode,
+                "Processing event through agent with filter failure mode"
+            );
+
+            // Acquire semaphore permit
+            let _permit = self.call_semaphore.acquire().await.map_err(|_| {
+                error!(
+                    correlation_id = %ctx.correlation_id,
+                    agent_id = %agent.id(),
+                    "Failed to acquire agent call semaphore permit"
+                );
+                SentinelError::Internal {
+                    message: "Failed to acquire agent call permit".to_string(),
+                    correlation_id: Some(ctx.correlation_id.to_string()),
+                    source: None,
+                }
+            })?;
+
+            // Check circuit breaker
+            if !agent.circuit_breaker().is_closed().await {
+                warn!(
+                    agent_id = %agent.id(),
+                    correlation_id = %ctx.correlation_id,
+                    filter_failure_mode = ?filter_failure_mode,
+                    "Circuit breaker open, skipping agent"
+                );
+
+                // Handle based on filter's failure mode (not agent's default)
+                if *filter_failure_mode == FailureMode::Closed {
+                    debug!(
+                        correlation_id = %ctx.correlation_id,
+                        agent_id = %agent.id(),
+                        "Blocking request due to circuit breaker (filter fail-closed mode)"
+                    );
+                    return Ok(AgentDecision::block(503, "Service unavailable"));
+                }
+                // Fail-open: continue to next agent
+                continue;
+            }
+
+            // Call agent with timeout
+            let start = Instant::now();
+            let timeout_duration = Duration::from_millis(agent.timeout_ms());
+
+            trace!(
+                correlation_id = %ctx.correlation_id,
+                agent_id = %agent.id(),
+                timeout_ms = agent.timeout_ms(),
+                "Calling agent"
+            );
+
+            match timeout(timeout_duration, agent.call_event(event_type, event)).await {
+                Ok(Ok(response)) => {
+                    let duration = start.elapsed();
+                    agent.record_success(duration).await;
+
+                    trace!(
+                        correlation_id = %ctx.correlation_id,
+                        agent_id = %agent.id(),
+                        duration_ms = duration.as_millis(),
+                        decision = ?response,
+                        "Agent call succeeded"
+                    );
+
+                    // Merge response into combined decision
+                    combined_decision.merge(response.into());
+
+                    // If decision is to block/redirect/challenge, stop processing
+                    if !combined_decision.is_allow() {
+                        debug!(
+                            correlation_id = %ctx.correlation_id,
+                            agent_id = %agent.id(),
+                            decision = ?combined_decision,
+                            "Agent returned blocking decision, stopping agent chain"
+                        );
+                        break;
+                    }
+                }
+                Ok(Err(e)) => {
+                    agent.record_failure().await;
+                    error!(
+                        agent_id = %agent.id(),
+                        correlation_id = %ctx.correlation_id,
+                        error = %e,
+                        duration_ms = start.elapsed().as_millis(),
+                        filter_failure_mode = ?filter_failure_mode,
+                        "Agent call failed"
+                    );
+
+                    // Use filter's failure mode, not agent's default
+                    if *filter_failure_mode == FailureMode::Closed {
+                        debug!(
+                            correlation_id = %ctx.correlation_id,
+                            agent_id = %agent.id(),
+                            "Blocking request due to agent failure (filter fail-closed mode)"
+                        );
+                        return Ok(AgentDecision::block(503, "Agent unavailable"));
+                    }
+                    // Fail-open: continue to next agent (or proceed without this agent)
+                    debug!(
+                        correlation_id = %ctx.correlation_id,
+                        agent_id = %agent.id(),
+                        "Continuing despite agent failure (filter fail-open mode)"
+                    );
+                }
+                Err(_) => {
+                    agent.record_timeout().await;
+                    warn!(
+                        agent_id = %agent.id(),
+                        correlation_id = %ctx.correlation_id,
+                        timeout_ms = agent.timeout_ms(),
+                        filter_failure_mode = ?filter_failure_mode,
+                        "Agent call timed out"
+                    );
+
+                    // Use filter's failure mode, not agent's default
+                    if *filter_failure_mode == FailureMode::Closed {
+                        debug!(
+                            correlation_id = %ctx.correlation_id,
+                            agent_id = %agent.id(),
+                            "Blocking request due to timeout (filter fail-closed mode)"
+                        );
+                        return Ok(AgentDecision::block(504, "Gateway timeout"));
+                    }
+                    // Fail-open: continue to next agent
+                    debug!(
+                        correlation_id = %ctx.correlation_id,
+                        agent_id = %agent.id(),
+                        "Continuing despite timeout (filter fail-open mode)"
+                    );
+                }
+            }
+        }
+
+        trace!(
+            correlation_id = %ctx.correlation_id,
+            decision = ?combined_decision,
+            agents_processed = relevant_agents.len(),
+            "Agent event processing with failure modes completed"
         );
 
         Ok(combined_decision)
