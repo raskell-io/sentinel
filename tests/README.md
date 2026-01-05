@@ -116,6 +116,38 @@ Tests OWASP CRS-style security protections:
 - SQLMap user agent
 - Nikto user agent
 
+### 4. Inline OpenAPI Validation Tests (`test_inline_openapi.sh`)
+
+Tests API schema validation with inline OpenAPI specifications:
+
+**Valid Request Tests:**
+- All required fields present (email, password, username)
+- Optional fields (age)
+
+**Schema Violation Tests:**
+- Missing required fields
+- Invalid email format
+- Password too short (< 8 chars)
+- Username too short (< 3 chars)
+- Username invalid pattern (special characters)
+- Age below minimum (< 13)
+- Age above maximum (> 120)
+- Additional properties (strict mode)
+
+**Run the test:**
+```bash
+cd tests
+
+# Start mock backend
+python3 fixtures/mock-backend.py &
+
+# Start Sentinel with inline OpenAPI config
+../target/release/sentinel -c test-inline-openapi.kdl &
+
+# Run validation tests
+./test_inline_openapi.sh
+```
+
 ## Integration Test Script
 
 The main integration test script (`integration_test.sh`) provides comprehensive testing:

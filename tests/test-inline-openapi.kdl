@@ -1,0 +1,67 @@
+// Test Configuration: Inline OpenAPI Validation
+//
+// This configuration tests the inline OpenAPI specification feature
+// with schema validation for user creation endpoint.
+
+system {
+    workers 1
+    daemon #false
+}
+
+listeners {
+    listener "http" {
+        address "127.0.0.1:18888"
+        protocol "http"
+    }
+}
+
+upstreams {
+    upstream "backend" {
+        target "127.0.0.1:3001" weight=1
+        load-balancing "round_robin"
+    }
+}
+
+routes {
+    // Test route with inline OpenAPI spec validation
+    route "api-users" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/users"
+        }
+
+        upstream "backend"
+
+        // Inline OpenAPI spec with validation
+        api-schema {
+            validate-requests #true
+            validate-responses #false
+            strict-mode #true
+
+            schema-content "{\"openapi\":\"3.0.0\",\"info\":{\"title\":\"User API Test\",\"version\":\"1.0.0\"},\"paths\":{\"/api/users\":{\"post\":{\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"required\":[\"email\",\"password\",\"username\"],\"properties\":{\"email\":{\"type\":\"string\",\"format\":\"email\"},\"password\":{\"type\":\"string\",\"minLength\":8,\"maxLength\":128},\"username\":{\"type\":\"string\",\"minLength\":3,\"maxLength\":32,\"pattern\":\"^[a-zA-Z0-9_-]+$\"},\"age\":{\"type\":\"integer\",\"minimum\":13,\"maximum\":120}},\"additionalProperties\":false}}}},\"responses\":{\"201\":{\"description\":\"Created\"}}},\"get\":{\"responses\":{\"200\":{\"description\":\"OK\"}}}}}}"
+        }
+
+        policies {
+            buffer-requests #true
+            max-body-size "1MB"
+            timeout-secs 30
+        }
+    }
+
+    // Health check endpoint
+    route "health" {
+        priority 1000
+        matches {
+            path "/health"
+        }
+        builtin-handler "health"
+    }
+}
+
+observability {
+    metrics {
+        enabled #true
+        endpoint "/metrics"
+    }
+}
