@@ -77,6 +77,30 @@ enum Commands {
         #[arg(short = 'c', long = "config")]
         config: Option<String>,
     },
+    /// Validate configuration with connectivity checks
+    Validate {
+        /// Configuration file to validate
+        #[arg(short = 'c', long = "config")]
+        config: Option<String>,
+
+        /// Skip network connectivity checks
+        #[arg(long = "skip-network")]
+        skip_network: bool,
+
+        /// Skip agent connectivity checks
+        #[arg(long = "skip-agents")]
+        skip_agents: bool,
+
+        /// Skip certificate validation
+        #[arg(long = "skip-certs")]
+        skip_certs: bool,
+    },
+    /// Lint configuration for best practices
+    Lint {
+        /// Configuration file to lint
+        #[arg(short = 'c', long = "config")]
+        config: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -93,6 +117,18 @@ fn main() -> Result<()> {
         Some(Commands::Run { config }) => {
             run_server(config.or(cli.config), cli.verbose, cli.daemon, cli.upgrade)
         }
+        Some(Commands::Validate {
+            config,
+            skip_network,
+            skip_agents,
+            skip_certs,
+        }) => validate_config(
+            config.as_deref().or(cli.config.as_deref()),
+            skip_network,
+            skip_agents,
+            skip_certs,
+        ),
+        Some(Commands::Lint { config }) => lint_config(config.as_deref().or(cli.config.as_deref())),
         None => {
             // Default: run the server
             run_server(cli.config, cli.verbose, cli.daemon, cli.upgrade)
@@ -152,6 +188,145 @@ fn test_config(config_path: Option<&str>) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Validate configuration with connectivity checks
+fn validate_config(
+    config_path: Option<&str>,
+    skip_network: bool,
+    skip_agents: bool,
+    skip_certs: bool,
+) -> Result<()> {
+    // Initialize minimal logging
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_level(true)
+        .init();
+
+    // Load configuration
+    let config = match config_path {
+        Some(path) => {
+            info!("Validating configuration file: {}", path);
+            Config::from_file(path).context("Failed to load configuration file")?
+        }
+        None => {
+            info!("Validating embedded default configuration");
+            Config::default_embedded().context("Failed to load embedded configuration")?
+        }
+    };
+
+    // Schema validation (sync)
+    config
+        .validate()
+        .context("Configuration schema validation failed")?;
+
+    println!("✓ Configuration schema valid");
+
+    // Runtime validation (async)
+    let rt = tokio::runtime::Runtime::new()?;
+    let result = rt.block_on(async {
+        use sentinel_config::validate::*;
+
+        let opts = ValidationOpts {
+            skip_network,
+            skip_agents,
+            skip_certs,
+        };
+
+        let mut result = ValidationResult::new();
+
+        // Network validation
+        if !opts.skip_network {
+            println!("Checking upstream connectivity...");
+            result.merge(network::validate_upstreams(&config).await);
+        }
+
+        // Certificate validation
+        if !opts.skip_certs {
+            println!("Validating TLS certificates...");
+            result.merge(certs::validate_certificates(&config).await);
+        }
+
+        // Agent validation
+        if !opts.skip_agents {
+            println!("Checking agent connectivity...");
+            result.merge(agents::validate_agents(&config).await);
+        }
+
+        result
+    });
+
+    // Print results
+    if result.errors.is_empty() {
+        println!("✓ All validation checks passed");
+
+        if !result.warnings.is_empty() {
+            println!("\nWarnings:");
+            for warning in &result.warnings {
+                println!("  ⚠  {}", warning.message);
+            }
+        }
+
+        std::process::exit(0);
+    } else {
+        println!("✗ Validation failed\n");
+        println!("Errors:");
+        for error in &result.errors {
+            println!("  ✗ {}", error.message);
+        }
+
+        if !result.warnings.is_empty() {
+            println!("\nWarnings:");
+            for warning in &result.warnings {
+                println!("  ⚠  {}", warning.message);
+            }
+        }
+
+        std::process::exit(1);
+    }
+}
+
+/// Lint configuration for best practices
+fn lint_config(config_path: Option<&str>) -> Result<()> {
+    // Initialize minimal logging
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_level(true)
+        .init();
+
+    // Load configuration
+    let config = match config_path {
+        Some(path) => {
+            info!("Linting configuration file: {}", path);
+            Config::from_file(path).context("Failed to load configuration file")?
+        }
+        None => {
+            info!("Linting embedded default configuration");
+            Config::default_embedded().context("Failed to load embedded configuration")?
+        }
+    };
+
+    // Schema validation first
+    config
+        .validate()
+        .context("Configuration schema validation failed")?;
+
+    // Lint for best practices
+    let result = sentinel_config::validate::lint::lint_config(&config);
+
+    // Print results
+    if result.warnings.is_empty() {
+        println!("✓ No best practice issues found");
+        std::process::exit(0);
+    } else {
+        println!("⚠  Configuration has {} best practice warnings:\n", result.warnings.len());
+        for warning in &result.warnings {
+            println!("  ⚠  {}", warning.message);
+        }
+
+        // Lint exits with 0 even with warnings (they're recommendations)
+        std::process::exit(0);
+    }
 }
 
 /// Run the proxy server

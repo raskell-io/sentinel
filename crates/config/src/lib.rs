@@ -46,6 +46,7 @@ pub mod resolution;
 pub mod routes;
 pub mod server;
 pub mod upstreams;
+pub mod validate;
 pub mod validation;
 pub mod waf;
 
