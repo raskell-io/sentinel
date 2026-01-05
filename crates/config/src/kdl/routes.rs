@@ -338,20 +338,45 @@ fn parse_api_schema_config_opt(node: &kdl::KdlNode) -> Result<Option<ApiSchemaCo
 
 /// Parse API schema configuration block
 ///
-/// Example KDL:
+/// Example KDL with external file:
 /// ```kdl
 /// api-schema {
 ///     schema-file "/etc/sentinel/schemas/api-v1.yaml"
-///     validate-requests true
-///     validate-responses false
-///     strict-mode false
+///     validate-requests #true
+///     validate-responses #false
+///     strict-mode #false
 /// }
 /// ```
 ///
-/// Or with inline JSON schema:
+/// Example KDL with inline OpenAPI spec:
 /// ```kdl
 /// api-schema {
-///     validate-requests true
+///     validate-requests #true
+///     schema-content r#"
+/// openapi: 3.0.0
+/// info:
+///   title: User API
+///   version: 1.0.0
+/// paths:
+///   /api/users:
+///     post:
+///       requestBody:
+///         content:
+///           application/json:
+///             schema:
+///               type: object
+///               required: [email, password]
+///               properties:
+///                 email: { type: string, format: email }
+///                 password: { type: string, minLength: 8 }
+///     "#
+/// }
+/// ```
+///
+/// Example KDL with inline JSON schema:
+/// ```kdl
+/// api-schema {
+///     validate-requests #true
 ///     request-schema {
 ///         type "object"
 ///         properties {
@@ -369,9 +394,17 @@ fn parse_api_schema_config_opt(node: &kdl::KdlNode) -> Result<Option<ApiSchemaCo
 /// ```
 fn parse_api_schema_config(node: &kdl::KdlNode) -> Result<ApiSchemaConfig> {
     let schema_file = get_string_entry(node, "schema-file").map(PathBuf::from);
+    let schema_content = get_string_entry(node, "schema-content");
     let validate_requests = get_bool_entry(node, "validate-requests").unwrap_or(true);
     let validate_responses = get_bool_entry(node, "validate-responses").unwrap_or(false);
     let strict_mode = get_bool_entry(node, "strict-mode").unwrap_or(false);
+
+    // Validate mutually exclusive options
+    if schema_file.is_some() && schema_content.is_some() {
+        return Err(anyhow::anyhow!(
+            "schema-file and schema-content are mutually exclusive. Use one or the other."
+        ));
+    }
 
     // Parse inline request schema if present
     let request_schema = if let Some(children) = node.children() {
@@ -397,6 +430,7 @@ fn parse_api_schema_config(node: &kdl::KdlNode) -> Result<ApiSchemaConfig> {
 
     trace!(
         has_schema_file = schema_file.is_some(),
+        has_schema_content = schema_content.is_some(),
         has_request_schema = request_schema.is_some(),
         has_response_schema = response_schema.is_some(),
         validate_requests = validate_requests,
@@ -407,6 +441,7 @@ fn parse_api_schema_config(node: &kdl::KdlNode) -> Result<ApiSchemaConfig> {
 
     Ok(ApiSchemaConfig {
         schema_file,
+        schema_content,
         request_schema,
         response_schema,
         validate_requests,

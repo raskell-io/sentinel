@@ -1761,12 +1761,7 @@ mod tests {
 
             upstreams {
                 upstream "api-backend" {
-                    targets {
-                        target {
-                            address "127.0.0.1:3001"
-                            weight 1
-                        }
-                    }
+                    target "127.0.0.1:3001" weight=1
                     load-balancing "round_robin"
                 }
             }
@@ -1821,12 +1816,7 @@ mod tests {
 
             upstreams {
                 upstream "api-backend" {
-                    targets {
-                        target {
-                            address "127.0.0.1:3001"
-                            weight 1
-                        }
-                    }
+                    target "127.0.0.1:3001" weight=1
                     load-balancing "round_robin"
                 }
             }
@@ -1882,5 +1872,103 @@ mod tests {
         assert_eq!(required.len(), 2);
         assert!(required.contains(&serde_json::Value::String("email".to_string())));
         assert!(required.contains(&serde_json::Value::String("password".to_string())));
+    }
+
+    #[test]
+    fn test_parse_api_schema_with_inline_openapi() {
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            upstreams {
+                upstream "api-backend" {
+                    target "127.0.0.1:3001" weight=1
+                    load-balancing "round_robin"
+                }
+            }
+
+            routes {
+                route "api-with-inline-spec" {
+                    matches {
+                        path-prefix "/api"
+                    }
+                    upstream "api-backend"
+
+                    api-schema {
+                        validate-requests #true
+                        schema-content "openapi: 3.0.0\ninfo:\n  title: Test API\n  version: 1.0.0\npaths:\n  /users:\n    post:\n      requestBody:\n        content:\n          application/json:\n            schema:\n              type: object\n              required: [email]\n              properties:\n                email:\n                  type: string\n                  format: email"
+                    }
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).unwrap();
+
+        assert_eq!(config.routes.len(), 1);
+        let route = &config.routes[0];
+        assert_eq!(route.id, "api-with-inline-spec");
+        assert_eq!(route.service_type, crate::routes::ServiceType::Api);
+
+        let api_schema = route.api_schema.as_ref().unwrap();
+        assert!(api_schema.schema_file.is_none());
+        assert!(api_schema.schema_content.is_some());
+        assert_eq!(api_schema.validate_requests, true);
+
+        let content = api_schema.schema_content.as_ref().unwrap();
+        assert!(content.starts_with("openapi: 3.0.0"));
+        assert!(content.contains("title: Test API"));
+        assert!(content.contains("email"));
+    }
+
+    #[test]
+    fn test_api_schema_file_and_content_mutually_exclusive() {
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            upstreams {
+                upstream "api-backend" {
+                    target "127.0.0.1:3001" weight=1
+                    load-balancing "round_robin"
+                }
+            }
+
+            routes {
+                route "invalid-api-route" {
+                    matches {
+                        path-prefix "/api"
+                    }
+                    upstream "api-backend"
+
+                    api-schema {
+                        schema-file "/etc/sentinel/api.yaml"
+                        schema-content "openapi: 3.0.0"
+                        validate-requests #true
+                    }
+                }
+            }
+        "#;
+
+        let result = Config::from_kdl(kdl);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        eprintln!("Error message: {}", error_msg);
+        assert!(error_msg.contains("mutually exclusive") || error_msg.contains("Upstream"));
     }
 }

@@ -1,8 +1,10 @@
 // Example: API Schema Validation Configuration
 //
 // This example demonstrates how to configure JSON Schema validation
-// for API routes in Sentinel. Supports both OpenAPI/Swagger files
-// and inline JSON schema definitions.
+// for API routes in Sentinel. Supports:
+//  - OpenAPI/Swagger files (schema-file)
+//  - Inline OpenAPI specs (schema-content)
+//  - Inline JSON schema definitions (request-schema/response-schema)
 
 // Server Configuration
 server {
@@ -21,12 +23,7 @@ listeners {
 // Upstreams
 upstreams {
     upstream "api-backend" {
-        targets {
-            target {
-                address "127.0.0.1:3001"
-                weight 1
-            }
-        }
+        target "127.0.0.1:3001" weight=1
         load-balancing "round_robin"
         health-check {
             type "http" {
@@ -69,7 +66,101 @@ routes {
         }
     }
 
-    // Example 2: API route with inline JSON Schema for requests
+    // Example 2: API route with inline OpenAPI specification
+    route "api-v2-inline-openapi" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/v2"
+        }
+
+        upstream "api-backend"
+
+        // Inline OpenAPI spec (useful for small APIs or testing)
+        api-schema {
+            validate-requests #true
+            validate-responses #false
+
+            // Embed OpenAPI 3.0 spec as a string
+            // Note: schema-file and schema-content are mutually exclusive
+            schema-content r#"
+openapi: 3.0.0
+info:
+  title: User API
+  version: 2.0.0
+  description: Simple user management API
+paths:
+  /api/v2/users:
+    post:
+      summary: Create a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, username]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User email address
+                password:
+                  type: string
+                  minLength: 8
+                  description: User password (min 8 chars)
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 32
+                  pattern: ^[a-zA-Z0-9_-]+$
+                  description: Username (alphanumeric, dash, underscore)
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  email: { type: string }
+                  username: { type: string }
+    get:
+      summary: List users
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string, format: uuid }
+                    email: { type: string, format: email }
+                    username: { type: string }
+                    created_at: { type: string, format: date-time }
+            "#
+        }
+    }
+
+    // Example 3: API route with inline JSON Schema for requests
     route "user-registration" {
         priority "high"
 

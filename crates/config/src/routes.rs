@@ -468,8 +468,12 @@ fn default_true() -> bool {
 /// API schema validation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiSchemaConfig {
-    /// OpenAPI/Swagger schema file path
+    /// OpenAPI/Swagger schema file path (mutually exclusive with schema_content)
     pub schema_file: Option<PathBuf>,
+
+    /// Inline OpenAPI/Swagger schema content (YAML or JSON string)
+    /// Mutually exclusive with schema_file
+    pub schema_content: Option<String>,
 
     /// JSON Schema for request validation
     pub request_schema: Option<serde_json::Value>,
