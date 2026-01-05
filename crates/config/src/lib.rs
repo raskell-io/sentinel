@@ -78,8 +78,8 @@ pub use resolution::ResourceResolver;
 
 // Observability
 pub use observability::{
-    AccessLogConfig, AuditLogConfig, ErrorLogConfig, LoggingConfig, MetricsConfig,
-    ObservabilityConfig, TracingBackend, TracingConfig,
+    AccessLogConfig, AccessLogFields, AuditLogConfig, ErrorLogConfig, LoggingConfig,
+    MetricsConfig, ObservabilityConfig, TracingBackend, TracingConfig,
 };
 
 // Routes

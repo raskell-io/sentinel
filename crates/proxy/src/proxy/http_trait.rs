@@ -2200,6 +2200,12 @@ impl ProxyHttp for SentinelProxy {
                 instance_id: self.app_state.instance_id.clone(),
                 namespace: ctx.namespace.clone(),
                 service: ctx.service.clone(),
+                // New fields
+                body_bytes_sent: ctx.response_bytes,
+                upstream_addr: ctx.selected_upstream_address.clone(),
+                connection_reused: ctx.connection_reused,
+                rate_limit_hit: status == 429,
+                geo_country: None, // TODO: Add GeoIP support
             };
             self.log_manager.log_access(&access_entry);
         }

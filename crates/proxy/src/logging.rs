@@ -78,6 +78,18 @@ pub struct AccessLogEntry {
     /// Service (for scoped requests)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
+    /// Response body size in bytes (bytes sent to client)
+    pub body_bytes_sent: u64,
+    /// Upstream address that handled the request (IP:port)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_addr: Option<String>,
+    /// Whether the connection to upstream was reused (connection pooling)
+    pub connection_reused: bool,
+    /// Whether the request hit a rate limit (429 response)
+    pub rate_limit_hit: bool,
+    /// GeoIP country code (ISO 3166-1 alpha-2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geo_country: Option<String>,
 }
 
 impl AccessLogEntry {
@@ -528,6 +540,7 @@ impl LogFileWriter {
 pub struct LogManager {
     access_log: Option<Mutex<LogFileWriter>>,
     access_log_format: AccessLogFormat,
+    access_log_config: Option<sentinel_config::AccessLogConfig>,
     error_log: Option<Mutex<LogFileWriter>>,
     audit_log: Option<Mutex<LogFileWriter>>,
     audit_config: Option<AuditLogConfig>,
@@ -580,6 +593,7 @@ impl LogManager {
         Ok(Self {
             access_log,
             access_log_format,
+            access_log_config: config.access_log.clone(),
             error_log,
             audit_log,
             audit_config: config.audit_log.clone(),
@@ -591,6 +605,7 @@ impl LogManager {
         Self {
             access_log: None,
             access_log_format: AccessLogFormat::Json,
+            access_log_config: None,
             error_log: None,
             audit_log: None,
             audit_config: None,
@@ -608,6 +623,25 @@ impl LogManager {
     /// Write an access log entry
     pub fn log_access(&self, entry: &AccessLogEntry) {
         if let Some(ref writer) = self.access_log {
+            // Check sampling if config is available
+            if let Some(ref config) = self.access_log_config {
+                // Determine if we should log this entry
+                let should_log = if config.sample_errors_always && entry.status >= 400 {
+                    // Always log errors (4xx/5xx)
+                    true
+                } else {
+                    // Sample based on sample_rate (0.0-1.0)
+                    // Generate random number and check if it's less than sample_rate
+                    use rand::Rng;
+                    let mut rng = rand::thread_rng();
+                    rng.gen::<f64>() < config.sample_rate
+                };
+
+                if !should_log {
+                    return; // Skip logging this entry
+                }
+            }
+
             let formatted = entry.format(self.access_log_format);
             let mut guard = writer.lock();
             if let Err(e) = guard.write_line(&formatted) {
@@ -730,6 +764,11 @@ mod tests {
             instance_id: "instance-1".to_string(),
             namespace: None,
             service: None,
+            body_bytes_sent: 2048,
+            upstream_addr: Some("10.0.1.5:8080".to_string()),
+            connection_reused: true,
+            rate_limit_hit: false,
+            geo_country: None,
         };
 
         let json = serde_json::to_string(&entry).unwrap();
@@ -759,6 +798,11 @@ mod tests {
             instance_id: "instance-1".to_string(),
             namespace: Some("api".to_string()),
             service: Some("payments".to_string()),
+            body_bytes_sent: 2048,
+            upstream_addr: None,
+            connection_reused: false,
+            rate_limit_hit: false,
+            geo_country: Some("US".to_string()),
         };
 
         let json = serde_json::to_string(&entry).unwrap();
@@ -784,6 +828,9 @@ mod tests {
                 format: "json".to_string(),
                 buffer_size: 8192,
                 include_trace_id: true,
+                sample_rate: 1.0,
+                sample_errors_always: true,
+                fields: sentinel_config::AccessLogFields::default(),
             }),
             error_log: Some(ErrorLogConfig {
                 enabled: true,
@@ -829,6 +876,11 @@ mod tests {
             instance_id: "instance-1".to_string(),
             namespace: None,
             service: None,
+            body_bytes_sent: 2048,
+            upstream_addr: Some("10.0.1.5:8080".to_string()),
+            connection_reused: true,
+            rate_limit_hit: false,
+            geo_country: Some("US".to_string()),
         };
 
         let combined = entry.format(AccessLogFormat::Combined);

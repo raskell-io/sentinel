@@ -110,6 +110,63 @@ impl Default for LoggingConfig {
     }
 }
 
+/// Access log field selection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessLogFields {
+    #[serde(default = "default_true")]
+    pub timestamp: bool,
+    #[serde(default = "default_true")]
+    pub trace_id: bool,
+    #[serde(default = "default_true")]
+    pub method: bool,
+    #[serde(default = "default_true")]
+    pub path: bool,
+    #[serde(default = "default_true")]
+    pub query: bool,
+    #[serde(default = "default_true")]
+    pub status: bool,
+    #[serde(default = "default_true")]
+    pub latency_ms: bool,
+    #[serde(default = "default_true")]
+    pub body_bytes_sent: bool,
+    #[serde(default = "default_true")]
+    pub upstream_addr: bool,
+    #[serde(default = "default_true")]
+    pub connection_reused: bool,
+    #[serde(default = "default_true")]
+    pub rate_limit_hit: bool,
+    #[serde(default = "default_true")]
+    pub geo_country: bool,
+    #[serde(default = "default_true")]
+    pub user_agent: bool,
+    #[serde(default = "default_true")]
+    pub referer: bool,
+    #[serde(default = "default_true")]
+    pub client_ip: bool,
+}
+
+impl Default for AccessLogFields {
+    fn default() -> Self {
+        Self {
+            timestamp: true,
+            trace_id: true,
+            method: true,
+            path: true,
+            query: true,
+            status: true,
+            latency_ms: true,
+            body_bytes_sent: true,
+            upstream_addr: true,
+            connection_reused: true,
+            rate_limit_hit: true,
+            geo_country: true,
+            user_agent: true,
+            referer: true,
+            client_ip: true,
+        }
+    }
+}
+
 /// Access log configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessLogConfig {
@@ -132,6 +189,18 @@ pub struct AccessLogConfig {
     /// Include trace_id in logs
     #[serde(default = "default_true")]
     pub include_trace_id: bool,
+
+    /// Sampling rate (0.0-1.0, 1.0 = log all requests)
+    #[serde(default = "default_sample_rate")]
+    pub sample_rate: f64,
+
+    /// Always log errors (4xx/5xx status codes) regardless of sample_rate
+    #[serde(default = "default_true")]
+    pub sample_errors_always: bool,
+
+    /// Field selection (which fields to include in logs)
+    #[serde(default)]
+    pub fields: AccessLogFields,
 }
 
 impl Default for AccessLogConfig {
@@ -142,6 +211,9 @@ impl Default for AccessLogConfig {
             format: default_access_log_format(),
             buffer_size: default_buffer_size(),
             include_trace_id: true,
+            sample_rate: default_sample_rate(),
+            sample_errors_always: true,
+            fields: AccessLogFields::default(),
         }
     }
 }
@@ -296,6 +368,10 @@ fn default_audit_log_file() -> PathBuf {
 
 fn default_sampling_rate() -> f64 {
     0.01
+}
+
+fn default_sample_rate() -> f64 {
+    1.0 // Log all requests by default (100%)
 }
 
 fn default_service_name() -> String {
