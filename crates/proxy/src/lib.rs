@@ -59,6 +59,7 @@ pub mod geo_filter;
 pub mod grpc_health;
 pub mod health;
 pub mod http_helpers;
+pub mod inference;
 pub mod logging;
 pub mod memory_cache;
 pub mod otel;

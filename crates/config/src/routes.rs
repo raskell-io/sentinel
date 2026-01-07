@@ -69,6 +69,10 @@ pub struct RouteConfig {
     #[serde(default)]
     pub api_schema: Option<ApiSchemaConfig>,
 
+    /// Inference configuration (for service_type = Inference)
+    #[serde(default)]
+    pub inference: Option<InferenceConfig>,
+
     /// Error page configuration
     #[serde(default)]
     pub error_pages: Option<ErrorPageConfig>,
@@ -141,6 +145,8 @@ pub enum ServiceType {
     Static,
     /// Built-in handler (status page, health check, etc.)
     Builtin,
+    /// LLM/AI inference endpoint with token-based rate limiting
+    Inference,
 }
 
 /// Built-in handler types for ServiceType::Builtin routes
@@ -601,4 +607,111 @@ fn default_shadow_timeout_ms() -> u64 {
 
 fn default_shadow_max_body_bytes() -> usize {
     1048576 // 1 MB
+}
+
+// ============================================================================
+// Inference Configuration (for ServiceType::Inference)
+// ============================================================================
+
+/// Inference routing configuration for LLM/AI endpoints
+///
+/// Provides token-based rate limiting, model-aware load balancing,
+/// and multi-provider support for inference traffic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceConfig {
+    /// Inference provider (determines token extraction strategy)
+    #[serde(default)]
+    pub provider: InferenceProvider,
+
+    /// Header containing model name (optional, provider-specific default)
+    pub model_header: Option<String>,
+
+    /// Token-based rate limiting configuration
+    pub rate_limit: Option<TokenRateLimit>,
+
+    /// Inference-aware routing configuration
+    pub routing: Option<InferenceRouting>,
+}
+
+impl Default for InferenceConfig {
+    fn default() -> Self {
+        Self {
+            provider: InferenceProvider::default(),
+            model_header: None,
+            rate_limit: None,
+            routing: None,
+        }
+    }
+}
+
+/// Inference provider type (determines token counting strategy)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceProvider {
+    /// Generic provider (uses x-tokens-used header or estimation)
+    #[default]
+    Generic,
+    /// OpenAI API (uses x-ratelimit-remaining-tokens header)
+    OpenAi,
+    /// Anthropic API (uses anthropic-ratelimit-tokens-remaining header)
+    Anthropic,
+}
+
+/// Token-based rate limiting configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenRateLimit {
+    /// Maximum tokens per minute
+    pub tokens_per_minute: u64,
+
+    /// Maximum requests per minute (optional, dual tracking)
+    pub requests_per_minute: Option<u64>,
+
+    /// Burst tokens allowed above rate
+    #[serde(default = "default_burst_tokens")]
+    pub burst_tokens: u64,
+
+    /// Token estimation method (fallback when headers unavailable)
+    #[serde(default)]
+    pub estimation_method: TokenEstimation,
+}
+
+fn default_burst_tokens() -> u64 {
+    10000
+}
+
+/// Token estimation method for request sizing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenEstimation {
+    /// Character count / 4 (fast, rough estimate)
+    #[default]
+    Chars,
+    /// Word count * 1.3 (slightly more accurate)
+    Words,
+    /// Actual tiktoken encoding (accurate but slower, feature-gated)
+    Tiktoken,
+}
+
+/// Inference-aware routing configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceRouting {
+    /// Load balancing strategy for inference traffic
+    #[serde(default)]
+    pub strategy: InferenceRoutingStrategy,
+
+    /// Header to read queue depth from upstream (optional)
+    pub queue_depth_header: Option<String>,
+}
+
+/// Inference-specific load balancing strategies
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceRoutingStrategy {
+    /// Route to upstream with least tokens queued (default)
+    #[default]
+    LeastTokensQueued,
+    /// Standard round-robin
+    RoundRobin,
+    /// Route to upstream with lowest observed latency
+    LeastLatency,
 }

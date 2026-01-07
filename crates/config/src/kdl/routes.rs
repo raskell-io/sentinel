@@ -38,6 +38,9 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                 // Parse api-schema
                 let api_schema = parse_api_schema_config_opt(child)?;
 
+                // Parse inference config
+                let inference = parse_inference_config_opt(child)?;
+
                 // Parse filters
                 let filters = parse_route_filter_refs(child)?;
 
@@ -68,6 +71,8 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     ServiceType::Builtin
                 } else if api_schema.is_some() {
                     ServiceType::Api
+                } else if inference.is_some() {
+                    ServiceType::Inference
                 } else {
                     ServiceType::Web
                 };
@@ -101,6 +106,7 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     retry_policy: None,
                     static_files,
                     api_schema,
+                    inference,
                     error_pages: None,
                     websocket: get_bool_entry(child, "websocket").unwrap_or(false),
                     websocket_inspection: get_bool_entry(child, "websocket-inspection")
@@ -532,5 +538,143 @@ fn parse_shadow_config(node: &kdl::KdlNode) -> Result<ShadowConfig> {
         timeout_ms,
         buffer_body,
         max_body_bytes,
+    })
+}
+
+/// Parse optional inference configuration from a route
+fn parse_inference_config_opt(node: &kdl::KdlNode) -> Result<Option<InferenceConfig>> {
+    if let Some(route_children) = node.children() {
+        if let Some(inference_node) = route_children.get("inference") {
+            return Ok(Some(parse_inference_config(inference_node)?));
+        }
+    }
+    Ok(None)
+}
+
+/// Parse inference configuration block
+///
+/// Example KDL:
+/// ```kdl
+/// inference {
+///     provider "openai"
+///     model-header "x-model"
+///
+///     rate-limit {
+///         tokens-per-minute 100000
+///         requests-per-minute 500
+///         burst-tokens 10000
+///         estimation-method "chars"
+///     }
+///
+///     routing {
+///         strategy "least-tokens-queued"
+///         queue-depth-header "x-queue-depth"
+///     }
+/// }
+/// ```
+fn parse_inference_config(node: &kdl::KdlNode) -> Result<InferenceConfig> {
+    // Parse provider
+    let provider = match get_string_entry(node, "provider").as_deref() {
+        Some("openai") | Some("open-ai") | Some("open_ai") => InferenceProvider::OpenAi,
+        Some("anthropic") => InferenceProvider::Anthropic,
+        Some("generic") | None => InferenceProvider::Generic,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown inference provider '{}'. Valid providers: openai, anthropic, generic",
+                other
+            ));
+        }
+    };
+
+    let model_header = get_string_entry(node, "model-header");
+
+    // Parse rate-limit sub-block
+    let rate_limit = if let Some(children) = node.children() {
+        if let Some(rl_node) = children.get("rate-limit") {
+            Some(parse_token_rate_limit(rl_node)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Parse routing sub-block
+    let routing = if let Some(children) = node.children() {
+        if let Some(routing_node) = children.get("routing") {
+            Some(parse_inference_routing(routing_node)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    trace!(
+        provider = ?provider,
+        has_rate_limit = rate_limit.is_some(),
+        has_routing = routing.is_some(),
+        "Parsed inference configuration"
+    );
+
+    Ok(InferenceConfig {
+        provider,
+        model_header,
+        rate_limit,
+        routing,
+    })
+}
+
+/// Parse token rate limit configuration
+fn parse_token_rate_limit(node: &kdl::KdlNode) -> Result<TokenRateLimit> {
+    let tokens_per_minute = get_int_entry(node, "tokens-per-minute")
+        .ok_or_else(|| anyhow::anyhow!("Token rate limit requires 'tokens-per-minute'"))?
+        as u64;
+
+    let requests_per_minute = get_int_entry(node, "requests-per-minute").map(|v| v as u64);
+
+    let burst_tokens = get_int_entry(node, "burst-tokens").unwrap_or(10000) as u64;
+
+    let estimation_method = match get_string_entry(node, "estimation-method").as_deref() {
+        Some("chars") | Some("characters") | None => TokenEstimation::Chars,
+        Some("words") => TokenEstimation::Words,
+        Some("tiktoken") => TokenEstimation::Tiktoken,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown token estimation method '{}'. Valid methods: chars, words, tiktoken",
+                other
+            ));
+        }
+    };
+
+    Ok(TokenRateLimit {
+        tokens_per_minute,
+        requests_per_minute,
+        burst_tokens,
+        estimation_method,
+    })
+}
+
+/// Parse inference routing configuration
+fn parse_inference_routing(node: &kdl::KdlNode) -> Result<InferenceRouting> {
+    let strategy = match get_string_entry(node, "strategy").as_deref() {
+        Some("least-tokens-queued") | Some("least_tokens_queued") | None => {
+            InferenceRoutingStrategy::LeastTokensQueued
+        }
+        Some("round-robin") | Some("round_robin") => InferenceRoutingStrategy::RoundRobin,
+        Some("least-latency") | Some("least_latency") => InferenceRoutingStrategy::LeastLatency,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown inference routing strategy '{}'. Valid strategies: least-tokens-queued, round-robin, least-latency",
+                other
+            ));
+        }
+    };
+
+    let queue_depth_header = get_string_entry(node, "queue-depth-header");
+
+    Ok(InferenceRouting {
+        strategy,
+        queue_depth_header,
     })
 }

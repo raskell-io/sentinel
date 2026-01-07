@@ -121,7 +121,7 @@ impl ErrorHandler {
 
         // Fall back to service type default
         match self.service_type {
-            ServiceType::Api | ServiceType::Builtin => ErrorFormat::Json,
+            ServiceType::Api | ServiceType::Builtin | ServiceType::Inference => ErrorFormat::Json,
             ServiceType::Web | ServiceType::Static => ErrorFormat::Html,
         }
     }

@@ -46,6 +46,7 @@ pub mod resolution;
 pub mod routes;
 pub mod server;
 pub mod upstreams;
+#[cfg(feature = "validation")]
 pub mod validate;
 pub mod validation;
 pub mod waf;
@@ -86,8 +87,9 @@ pub use observability::{
 // Routes
 pub use routes::{
     ApiSchemaConfig, BuiltinHandler, CacheBackend, CacheStorageConfig, ErrorFormat, ErrorPage,
-    ErrorPageConfig, FailureMode, HeaderModifications, MatchCondition, RateLimitPolicy,
-    RouteCacheConfig, RouteConfig, RoutePolicies, ServiceType, StaticFileConfig,
+    ErrorPageConfig, FailureMode, HeaderModifications, InferenceConfig, InferenceProvider,
+    InferenceRouting, InferenceRoutingStrategy, MatchCondition, RateLimitPolicy, RouteCacheConfig,
+    RouteConfig, RoutePolicies, ServiceType, StaticFileConfig, TokenEstimation, TokenRateLimit,
 };
 
 // Server
@@ -643,6 +645,7 @@ impl Config {
                 retry_policy: None,
                 static_files: None,
                 api_schema: None,
+                inference: None,
                 error_pages: None,
                 websocket: false,
                 websocket_inspection: false,
