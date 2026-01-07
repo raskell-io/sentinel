@@ -155,6 +155,18 @@ pub struct RequestContext {
     pub(crate) otel_span: Option<crate::otel::RequestSpan>,
     /// W3C trace context parsed from incoming request
     pub(crate) trace_context: Option<crate::otel::TraceContext>,
+
+    // === Inference Rate Limiting ===
+    /// Whether inference rate limiting is enabled for this route
+    pub(crate) inference_rate_limit_enabled: bool,
+    /// Estimated tokens for this request (used for rate limiting)
+    pub(crate) inference_estimated_tokens: u64,
+    /// Rate limit key used (client IP, API key, etc.)
+    pub(crate) inference_rate_limit_key: Option<String>,
+    /// Model name detected from request
+    pub(crate) inference_model: Option<String>,
+    /// Actual tokens from response (filled in after response)
+    pub(crate) inference_actual_tokens: Option<u64>,
 }
 
 impl RequestContext {
@@ -209,6 +221,11 @@ impl RequestContext {
             response_body_inspection_agents: Vec::new(),
             otel_span: None,
             trace_context: None,
+            inference_rate_limit_enabled: false,
+            inference_estimated_tokens: 0,
+            inference_rate_limit_key: None,
+            inference_model: None,
+            inference_actual_tokens: None,
         }
     }
 

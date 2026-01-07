@@ -332,6 +332,8 @@ mod tests {
             error_pages: None,
             websocket: false,
             websocket_inspection: false,
+            inference: None,
+            shadow: None,
         }
     }
 

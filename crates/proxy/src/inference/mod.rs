@@ -23,13 +23,15 @@
 //! }
 //! ```
 
+mod manager;
 mod providers;
 mod rate_limit;
 mod tokens;
 
+pub use manager::{InferenceCheckResult, InferenceRateLimitManager, InferenceRouteStats};
 pub use providers::{create_provider, InferenceProviderAdapter};
 pub use rate_limit::{TokenRateLimitResult, TokenRateLimiter};
-pub use tokens::{TokenCounter, TokenEstimate};
+pub use tokens::{TokenCounter, TokenEstimate, TokenSource};
 
 use sentinel_config::{InferenceConfig, InferenceProvider};
 

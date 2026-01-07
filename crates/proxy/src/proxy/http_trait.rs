@@ -600,6 +600,100 @@ impl ProxyHttp for SentinelProxy {
             }
         }
 
+        // Inference rate limiting (token-based, for LLM/AI routes)
+        // This runs after regular rate limiting and checks service type
+        if let Some(route_id) = ctx.route_id.as_deref() {
+            if let Some(ref route_config) = ctx.route_config {
+                if route_config.service_type == sentinel_config::ServiceType::Inference
+                    && self.inference_rate_limit_manager.has_route(route_id)
+                {
+                    // For inference rate limiting, we need access to the request body
+                    // to estimate tokens. We'll use buffered body if available.
+                    let headers = &session.req_header().headers;
+
+                    // Try to get buffered body, or use empty (will estimate from headers only)
+                    let body = ctx.body_buffer.as_slice();
+
+                    // Use client IP as the rate limit key (could be enhanced to use API key header)
+                    let rate_limit_key = &ctx.client_ip;
+
+                    if let Some(check_result) = self.inference_rate_limit_manager.check(
+                        route_id,
+                        rate_limit_key,
+                        headers,
+                        body,
+                    ) {
+                        // Store inference rate limiting context for recording actual tokens later
+                        ctx.inference_rate_limit_enabled = true;
+                        ctx.inference_estimated_tokens = check_result.estimated_tokens;
+                        ctx.inference_rate_limit_key = Some(rate_limit_key.to_string());
+                        ctx.inference_model = check_result.model.clone();
+
+                        if !check_result.is_allowed() {
+                            let retry_after_ms = check_result.retry_after_ms();
+                            let retry_after_secs = (retry_after_ms + 999) / 1000; // Round up
+
+                            warn!(
+                                correlation_id = %ctx.trace_id,
+                                route_id = route_id,
+                                client_ip = %ctx.client_ip,
+                                estimated_tokens = check_result.estimated_tokens,
+                                model = ?check_result.model,
+                                retry_after_ms = retry_after_ms,
+                                "Inference rate limit exceeded (tokens)"
+                            );
+                            self.metrics.record_blocked_request("inference_rate_limited");
+
+                            // Audit log the token rate limit
+                            let audit_entry = AuditLogEntry::new(
+                                &ctx.trace_id,
+                                AuditEventType::RateLimitExceeded,
+                                &ctx.method,
+                                &ctx.path,
+                                &ctx.client_ip,
+                            )
+                            .with_route_id(route_id)
+                            .with_status_code(429)
+                            .with_reason(format!(
+                                "Token rate limit exceeded: estimated {} tokens, model={:?}",
+                                check_result.estimated_tokens, check_result.model
+                            ));
+                            self.log_manager.log_audit(&audit_entry);
+
+                            // Send 429 response with appropriate headers
+                            let body = "Token rate limit exceeded";
+                            let reset_at = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                                + retry_after_secs;
+
+                            // Use simplified error write for inference rate limit
+                            crate::http_helpers::write_rate_limit_error(
+                                session,
+                                429,
+                                body,
+                                0, // No request limit
+                                0, // No remaining
+                                reset_at,
+                                retry_after_secs,
+                            )
+                            .await?;
+                            return Ok(true); // Request complete, don't continue
+                        }
+
+                        trace!(
+                            correlation_id = %ctx.trace_id,
+                            route_id = route_id,
+                            estimated_tokens = check_result.estimated_tokens,
+                            model = ?check_result.model,
+                            "Inference rate limit check passed"
+                        );
+                    }
+                }
+            }
+        }
+
         // Geo filtering
         if let Some(route_id) = ctx.route_id.as_deref() {
             if let Some(ref route_config) = ctx.route_config {
@@ -2229,6 +2323,45 @@ impl ProxyHttp for SentinelProxy {
                     status = status,
                     "Reported result to adaptive load balancer"
                 );
+            }
+        }
+
+        // Record actual token usage for inference rate limiting
+        // This adjusts the token bucket based on actual vs estimated tokens
+        if ctx.inference_rate_limit_enabled {
+            if let (Some(route_id), Some(ref rate_limit_key)) =
+                (ctx.route_id.as_deref(), &ctx.inference_rate_limit_key)
+            {
+                // Try to extract actual tokens from response headers
+                let response_headers = session
+                    .response_written()
+                    .map(|r| &r.headers)
+                    .cloned()
+                    .unwrap_or_default();
+
+                // Response body would require buffering, which is expensive
+                // Most LLM APIs provide token counts in headers, so we use those
+                let empty_body: &[u8] = &[];
+
+                if let Some(actual_estimate) = self.inference_rate_limit_manager.record_actual(
+                    route_id,
+                    rate_limit_key,
+                    &response_headers,
+                    empty_body,
+                    ctx.inference_estimated_tokens,
+                ) {
+                    ctx.inference_actual_tokens = Some(actual_estimate.tokens);
+
+                    debug!(
+                        correlation_id = %ctx.trace_id,
+                        route_id = route_id,
+                        estimated_tokens = ctx.inference_estimated_tokens,
+                        actual_tokens = actual_estimate.tokens,
+                        source = ?actual_estimate.source,
+                        model = ?ctx.inference_model,
+                        "Recorded actual inference tokens"
+                    );
+                }
             }
         }
 

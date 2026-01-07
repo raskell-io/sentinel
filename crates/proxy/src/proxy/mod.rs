@@ -34,6 +34,7 @@ use crate::errors::ErrorHandler;
 use crate::geo_filter::{GeoDatabaseWatcher, GeoFilterManager};
 use crate::health::PassiveHealthChecker;
 use crate::http_helpers;
+use crate::inference::InferenceRateLimitManager;
 use crate::logging::{LogManager, SharedLogManager};
 use crate::rate_limit::{RateLimitConfig, RateLimitManager};
 use crate::reload::{
@@ -92,6 +93,8 @@ pub struct SentinelProxy {
     pub(super) cache_manager: Arc<CacheManager>,
     /// GeoIP filter manager
     pub(super) geo_filter_manager: Arc<GeoFilterManager>,
+    /// Inference rate limit manager (token-based rate limiting for LLM/AI routes)
+    pub(super) inference_rate_limit_manager: Arc<InferenceRateLimitManager>,
 }
 
 impl SentinelProxy {
@@ -267,6 +270,10 @@ impl SentinelProxy {
         // Initialize rate limit manager
         let rate_limit_manager = Arc::new(Self::initialize_rate_limiters(&config));
 
+        // Initialize inference rate limit manager (for token-based LLM rate limiting)
+        let inference_rate_limit_manager =
+            Arc::new(Self::initialize_inference_rate_limiters(&config));
+
         // Initialize geo filter manager
         let geo_filter_manager = Arc::new(Self::initialize_geo_filters(&config));
 
@@ -307,6 +314,7 @@ impl SentinelProxy {
             rate_limit_manager,
             cache_manager,
             geo_filter_manager,
+            inference_rate_limit_manager,
         })
     }
 
@@ -620,6 +628,32 @@ impl SentinelProxy {
             info!(
                 route_count = manager.route_count(),
                 "Rate limiting initialized"
+            );
+        }
+
+        manager
+    }
+
+    /// Initialize inference rate limiters from configuration
+    ///
+    /// This creates token-based rate limiters for routes with `service-type "inference"`
+    /// and inference config blocks.
+    fn initialize_inference_rate_limiters(config: &Config) -> InferenceRateLimitManager {
+        let manager = InferenceRateLimitManager::new();
+
+        for route in &config.routes {
+            // Only initialize for inference service type routes with inference config
+            if route.service_type == sentinel_config::ServiceType::Inference {
+                if let Some(ref inference_config) = route.inference {
+                    manager.register_route(&route.id, inference_config);
+                }
+            }
+        }
+
+        if manager.route_count() > 0 {
+            info!(
+                route_count = manager.route_count(),
+                "Inference rate limiting initialized"
             );
         }
 
