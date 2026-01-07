@@ -177,6 +177,9 @@ fn parse_load_balancing(s: &str) -> LoadBalancingAlgorithm {
         "consistent_hash" | "consistenthash" => LoadBalancingAlgorithm::ConsistentHash,
         "power_of_two_choices" | "p2c" => LoadBalancingAlgorithm::PowerOfTwoChoices,
         "adaptive" => LoadBalancingAlgorithm::Adaptive,
+        "least_tokens_queued" | "leasttokensqueued" | "least_tokens" => {
+            LoadBalancingAlgorithm::LeastTokensQueued
+        }
         _ => LoadBalancingAlgorithm::RoundRobin,
     }
 }

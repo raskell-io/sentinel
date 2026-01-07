@@ -142,6 +142,12 @@ pub enum LoadBalancingAlgorithm {
     ConsistentHash,
     PowerOfTwoChoices,
     Adaptive,
+    /// Least tokens queued - for inference/LLM workloads
+    ///
+    /// Selects the upstream with the fewest estimated tokens currently
+    /// being processed. Useful for LLM inference backends where token
+    /// throughput varies significantly between requests.
+    LeastTokensQueued,
 }
 
 /// Health check type

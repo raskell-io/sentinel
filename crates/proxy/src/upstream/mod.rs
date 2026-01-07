@@ -86,12 +86,14 @@ impl UpstreamTarget {
 pub mod adaptive;
 pub mod consistent_hash;
 pub mod health;
+pub mod least_tokens;
 pub mod p2c;
 
 // Re-export commonly used types from sub-modules
 pub use adaptive::{AdaptiveBalancer, AdaptiveConfig};
 pub use consistent_hash::{ConsistentHashBalancer, ConsistentHashConfig};
 pub use health::{ActiveHealthChecker, HealthCheckRunner};
+pub use least_tokens::{LeastTokensQueuedBalancer, LeastTokensQueuedConfig, LeastTokensQueuedTargetStats};
 pub use p2c::{P2cBalancer, P2cConfig};
 
 /// Request context for load balancer decisions
@@ -806,6 +808,10 @@ impl UpstreamPool {
             LoadBalancingAlgorithm::Adaptive => Arc::new(AdaptiveBalancer::new(
                 targets.to_vec(),
                 AdaptiveConfig::default(),
+            )),
+            LoadBalancingAlgorithm::LeastTokensQueued => Arc::new(LeastTokensQueuedBalancer::new(
+                targets.to_vec(),
+                LeastTokensQueuedConfig::default(),
             )),
         };
         Ok(balancer)
