@@ -97,6 +97,22 @@ struct GrpcHealthCheck {
     timeout: Duration,
 }
 
+/// Inference health check implementation for LLM/AI backends.
+///
+/// Probes the models endpoint to verify the inference server is running
+/// and expected models are available. Typically used with OpenAI-compatible
+/// APIs that expose a `/v1/models` endpoint.
+///
+/// The check:
+/// 1. Sends GET request to the configured endpoint (default: `/v1/models`)
+/// 2. Expects HTTP 200 response
+/// 3. Optionally parses response to verify expected models are available
+struct InferenceHealthCheck {
+    endpoint: String,
+    expected_models: Vec<String>,
+    timeout: Duration,
+}
+
 impl ActiveHealthChecker {
     /// Create new active health checker
     pub fn new(config: HealthCheckConfig) -> Self {
@@ -141,6 +157,21 @@ impl ActiveHealthChecker {
                 );
                 Arc::new(GrpcHealthCheck {
                     service: service.clone(),
+                    timeout: Duration::from_secs(config.timeout_secs),
+                })
+            }
+            HealthCheckType::Inference {
+                endpoint,
+                expected_models,
+            } => {
+                trace!(
+                    endpoint = %endpoint,
+                    expected_models = ?expected_models,
+                    "Configuring inference health check"
+                );
+                Arc::new(InferenceHealthCheck {
+                    endpoint: endpoint.clone(),
+                    expected_models: expected_models.clone(),
                     timeout: Duration::from_secs(config.timeout_secs),
                 })
             }
@@ -546,6 +577,101 @@ impl HealthCheckImpl for GrpcHealthCheck {
 
     fn check_type(&self) -> &str {
         "gRPC"
+    }
+}
+
+#[async_trait]
+impl HealthCheckImpl for InferenceHealthCheck {
+    async fn check(&self, target: &str) -> Result<Duration, String> {
+        let start = Instant::now();
+
+        // Parse target address
+        let addr: SocketAddr = target
+            .parse()
+            .map_err(|e| format!("Invalid address: {}", e))?;
+
+        // Connect with timeout
+        let stream = time::timeout(self.timeout, TcpStream::connect(addr))
+            .await
+            .map_err(|_| format!("Connection timeout after {:?}", self.timeout))?
+            .map_err(|e| format!("Connection failed: {}", e))?;
+
+        // Build HTTP request for the models endpoint
+        let request = format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: Sentinel-HealthCheck/1.0\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+            self.endpoint,
+            target
+        );
+
+        // Send request and read response
+        let mut stream = stream;
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to send request: {}", e))?;
+
+        // Read response (larger buffer for JSON response)
+        let mut response = vec![0u8; 8192];
+        let n = stream
+            .read(&mut response)
+            .await
+            .map_err(|e| format!("Failed to read response: {}", e))?;
+
+        if n == 0 {
+            return Err("Empty response".to_string());
+        }
+
+        // Parse status code
+        let response_str = String::from_utf8_lossy(&response[..n]);
+        let status_code = parse_http_status(&response_str)
+            .ok_or_else(|| "Failed to parse HTTP status".to_string())?;
+
+        if status_code != 200 {
+            return Err(format!(
+                "Unexpected status code: {} (expected 200)",
+                status_code
+            ));
+        }
+
+        // If expected models are specified, verify they're in the response
+        if !self.expected_models.is_empty() {
+            // Find the JSON body (after headers)
+            if let Some(body_start) = response_str.find("\r\n\r\n") {
+                let body = &response_str[body_start + 4..];
+
+                // Check if each expected model is mentioned in the response
+                for model in &self.expected_models {
+                    if !body.contains(model) {
+                        return Err(format!(
+                            "Expected model '{}' not found in response",
+                            model
+                        ));
+                    }
+                }
+
+                debug!(
+                    target = %target,
+                    endpoint = %self.endpoint,
+                    expected_models = ?self.expected_models,
+                    "All expected models found in inference health check"
+                );
+            } else {
+                return Err("Could not find response body".to_string());
+            }
+        }
+
+        trace!(
+            target = %target,
+            endpoint = %self.endpoint,
+            response_time_ms = start.elapsed().as_millis(),
+            "Inference health check passed"
+        );
+
+        Ok(start.elapsed())
+    }
+
+    fn check_type(&self) -> &str {
+        "Inference"
     }
 }
 

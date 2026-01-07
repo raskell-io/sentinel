@@ -180,6 +180,39 @@ impl ActiveHealthChecker {
 
                 Box::new(hc)
             }
+            HealthCheckType::Inference {
+                endpoint,
+                expected_models,
+            } => {
+                // Inference health check uses HTTP under the hood
+                // It probes the models endpoint (typically /v1/models)
+                let mut hc = HttpHealthCheck::new("localhost", false);
+                hc.consecutive_success = config.healthy_threshold as usize;
+                hc.consecutive_failure = config.unhealthy_threshold as usize;
+
+                // Set the endpoint path
+                if let Ok(req) =
+                    pingora_http::RequestHeader::build("GET", endpoint.as_bytes(), None)
+                {
+                    hc.req = req;
+                }
+
+                info!(
+                    upstream_id = %upstream_id,
+                    endpoint = %endpoint,
+                    expected_models = ?expected_models,
+                    consecutive_success = hc.consecutive_success,
+                    consecutive_failure = hc.consecutive_failure,
+                    "Created inference health check"
+                );
+
+                // Note: Full model availability checking would require custom implementation
+                // that parses the JSON response. For now, we verify HTTP 200 from the endpoint.
+                // The ActiveHealthChecker in crates/proxy/src/health.rs provides the full
+                // model verification logic.
+
+                Box::new(hc)
+            }
         }
     }
 

@@ -164,6 +164,17 @@ pub enum HealthCheckType {
     Grpc {
         service: String,
     },
+    /// Inference health check for LLM/AI backends
+    ///
+    /// Probes the `/v1/models` endpoint (or custom endpoint) to verify
+    /// the inference server is running and expected models are available.
+    Inference {
+        /// Endpoint to probe (default: "/v1/models")
+        endpoint: String,
+        /// Expected models that must be available (optional)
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        expected_models: Vec<String>,
+    },
 }
 
 /// Retry policy

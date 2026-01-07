@@ -337,6 +337,34 @@ fn parse_health_check(node: &kdl::KdlNode) -> Result<HealthCheck> {
                         .unwrap_or_else(|| "grpc.health.v1.Health".to_string());
                     HealthCheckType::Grpc { service }
                 }
+                "inference" => {
+                    // Parse inference health check options
+                    let endpoint = type_node
+                        .children()
+                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "endpoint"))
+                        .and_then(get_first_arg_string)
+                        .unwrap_or_else(|| "/v1/models".to_string());
+
+                    let expected_models = type_node
+                        .children()
+                        .and_then(|c| {
+                            c.nodes()
+                                .iter()
+                                .find(|n| n.name().value() == "expected-models")
+                        })
+                        .map(|n| {
+                            n.entries()
+                                .iter()
+                                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    HealthCheckType::Inference {
+                        endpoint,
+                        expected_models,
+                    }
+                }
                 _ => HealthCheckType::Tcp,
             }
         })
