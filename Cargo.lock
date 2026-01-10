@@ -4144,7 +4144,7 @@ checksum = "689224d06523904ebcc9b482c6a3f4f7fb396096645c4cd10c0d2ff7371a34d3"
 
 [[package]]
 name = "sentinel-agent-protocol"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4173,7 +4173,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-common"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4195,7 +4195,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-config"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4225,7 +4225,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-echo-agent"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4245,7 +4245,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-proxy"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4327,7 +4327,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-stack"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "chrono",

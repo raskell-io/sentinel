@@ -39,6 +39,7 @@ mod defaults;
 pub mod filters;
 pub mod flatten;
 mod kdl;
+#[cfg(feature = "runtime")]
 pub mod multi_file;
 pub mod namespace;
 pub mod observability;
@@ -66,7 +67,8 @@ pub use defaults::{create_default_config, DEFAULT_CONFIG_KDL};
 // Filters
 pub use filters::*;
 
-// Multi-file
+// Multi-file (runtime only - uses glob which requires std::fs)
+#[cfg(feature = "runtime")]
 pub use multi_file::{ConfigDirectory, MultiFileLoader};
 
 // Namespace

@@ -1,12 +1,12 @@
 [package]
 name = "sentinel-playground-wasm"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-homepage.workspace = true
-rust-version.workspace = true
+version = "0.2.4"
+edition = "2021"
+authors = ["Sentinel Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/raskell-io/sentinel"
+homepage = "https://github.com/raskell-io/sentinel"
+rust-version = "1.85"
 description = "WebAssembly bindings for Sentinel config playground"
 keywords = ["proxy", "wasm", "playground", "configuration"]
 categories = ["wasm", "simulation"]
@@ -16,15 +16,15 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Local crates
-sentinel-sim = { path = "../sim", version = "0.2.3" }
+sentinel-sim = { path = "../sim", version = "0.2.4" }
 
 # WASM bindings
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 
-# Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
+# Serialization (explicit versions for standalone build)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 # Console error handling for debugging
 console_error_panic_hook = { version = "0.1", optional = true }
