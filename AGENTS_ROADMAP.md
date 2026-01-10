@@ -47,36 +47,13 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [Lua](https://sentinel.raskell.io/agents/lua/) | Beta | Lua scripting |
 | [JavaScript](https://sentinel.raskell.io/agents/js/) | Beta | JavaScript scripting (QuickJS) |
 | [WebAssembly](https://sentinel.raskell.io/agents/wasm/) | Beta | High-performance Wasm modules |
+| [Bot Management](https://sentinel.raskell.io/agents/bot-management/) | Beta | Multi-signal bot detection with behavioral analysis |
 
 ---
 
 ## Planned Agents
 
 ### Priority 1: High Value
-
-#### Bot Management
-**Status:** Proposed
-**Complexity:** High
-**Value:** High
-
-Advanced bot detection beyond simple User-Agent blocking.
-
-**Features:**
-- [ ] Device fingerprinting (TLS, HTTP/2, headers)
-- [ ] Behavioral analysis (request timing, patterns)
-- [ ] IP reputation integration
-- [ ] Browser integrity checks
-- [ ] CAPTCHA/challenge integration
-- [ ] Bot score headers for downstream decisions
-- [ ] Allow known good bots (Googlebot, etc.)
-
-**Use Cases:**
-- Credential stuffing prevention
-- Scraping protection
-- Inventory hoarding prevention
-- Account takeover protection
-
----
 
 #### GraphQL Security
 **Status:** Proposed
