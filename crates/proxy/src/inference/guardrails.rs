@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use pingora_timeout::timeout;
 use sentinel_agent_protocol::{
     GuardrailDetection, GuardrailInspectEvent, GuardrailInspectionType, GuardrailResponse,
@@ -52,18 +53,81 @@ pub enum PiiCheckResult {
     Error { message: String },
 }
 
+/// Trait for calling guardrail agents.
+///
+/// This trait allows for mocking agent calls in tests.
+#[async_trait]
+pub trait GuardrailAgentCaller: Send + Sync {
+    /// Call a guardrail agent with an inspection event.
+    async fn call_guardrail_agent(
+        &self,
+        agent_name: &str,
+        event: GuardrailInspectEvent,
+    ) -> Result<GuardrailResponse, String>;
+}
+
+/// Default implementation using the agent manager.
+pub struct AgentManagerCaller {
+    #[allow(dead_code)]
+    agent_manager: Arc<AgentManager>,
+}
+
+impl AgentManagerCaller {
+    /// Create a new agent manager caller.
+    pub fn new(agent_manager: Arc<AgentManager>) -> Self {
+        Self { agent_manager }
+    }
+}
+
+#[async_trait]
+impl GuardrailAgentCaller for AgentManagerCaller {
+    async fn call_guardrail_agent(
+        &self,
+        agent_name: &str,
+        event: GuardrailInspectEvent,
+    ) -> Result<GuardrailResponse, String> {
+        // Use the agent manager to send the guardrail event
+        // For now, we'll use a simple direct approach
+        // The agent manager needs a method to handle GuardrailInspect events
+
+        // This is a placeholder - the actual implementation would use
+        // the agent manager's connection pool and protocol handling
+        trace!(
+            agent = agent_name,
+            inspection_type = ?event.inspection_type,
+            "Calling guardrail agent"
+        );
+
+        // For now, return a mock response until we integrate with agent manager
+        // In a real implementation, this would call the agent via the manager
+        Err(format!(
+            "Agent '{}' not configured for guardrail inspection",
+            agent_name
+        ))
+    }
+}
+
 /// Guardrail processor for semantic content analysis.
 ///
 /// Uses external agents to inspect content for security issues
 /// like prompt injection and PII leakage.
 pub struct GuardrailProcessor {
-    agent_manager: Arc<AgentManager>,
+    agent_caller: Arc<dyn GuardrailAgentCaller>,
 }
 
 impl GuardrailProcessor {
-    /// Create a new guardrail processor.
+    /// Create a new guardrail processor with the default agent manager caller.
     pub fn new(agent_manager: Arc<AgentManager>) -> Self {
-        Self { agent_manager }
+        Self {
+            agent_caller: Arc::new(AgentManagerCaller::new(agent_manager)),
+        }
+    }
+
+    /// Create a new guardrail processor with a custom agent caller.
+    ///
+    /// This is useful for testing with mock implementations.
+    pub fn with_caller(agent_caller: Arc<dyn GuardrailAgentCaller>) -> Self {
+        Self { agent_caller }
     }
 
     /// Check request content for prompt injection.
@@ -109,7 +173,7 @@ impl GuardrailProcessor {
         // Call the agent
         match timeout(
             timeout_duration,
-            self.call_guardrail_agent(&config.agent, event),
+            self.agent_caller.call_guardrail_agent(&config.agent, event),
         )
         .await
         {
@@ -225,7 +289,7 @@ impl GuardrailProcessor {
 
         match timeout(
             timeout_duration,
-            self.call_guardrail_agent(&config.agent, event),
+            self.agent_caller.call_guardrail_agent(&config.agent, event),
         )
         .await
         {
@@ -275,32 +339,6 @@ impl GuardrailProcessor {
             }
         }
     }
-
-    /// Call a guardrail agent with an inspection event.
-    async fn call_guardrail_agent(
-        &self,
-        agent_name: &str,
-        event: GuardrailInspectEvent,
-    ) -> Result<GuardrailResponse, String> {
-        // Use the agent manager to send the guardrail event
-        // For now, we'll use a simple direct approach
-        // The agent manager needs a method to handle GuardrailInspect events
-
-        // This is a placeholder - the actual implementation would use
-        // the agent manager's connection pool and protocol handling
-        trace!(
-            agent = agent_name,
-            inspection_type = ?event.inspection_type,
-            "Calling guardrail agent"
-        );
-
-        // For now, return a mock response until we integrate with agent manager
-        // In a real implementation, this would call the agent via the manager
-        Err(format!(
-            "Agent '{}' not configured for guardrail inspection",
-            agent_name
-        ))
-    }
 }
 
 /// Extract message content from an inference request body.
@@ -340,6 +378,103 @@ pub fn extract_inference_content(body: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sentinel_agent_protocol::{DetectionSeverity, TextSpan};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Mutex;
+
+    // ==================== Mock Agent Caller ====================
+
+    /// Mock agent caller for testing guardrail processor
+    struct MockAgentCaller {
+        response: Mutex<Option<Result<GuardrailResponse, String>>>,
+        call_count: AtomicUsize,
+    }
+
+    impl MockAgentCaller {
+        fn new() -> Self {
+            Self {
+                response: Mutex::new(None),
+                call_count: AtomicUsize::new(0),
+            }
+        }
+
+        fn with_response(response: Result<GuardrailResponse, String>) -> Self {
+            Self {
+                response: Mutex::new(Some(response)),
+                call_count: AtomicUsize::new(0),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.call_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl GuardrailAgentCaller for MockAgentCaller {
+        async fn call_guardrail_agent(
+            &self,
+            _agent_name: &str,
+            _event: GuardrailInspectEvent,
+        ) -> Result<GuardrailResponse, String> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+
+            let guard = self.response.lock().await;
+            match &*guard {
+                Some(response) => response.clone(),
+                None => Err("No mock response configured".to_string()),
+            }
+        }
+    }
+
+    // ==================== Test Helpers ====================
+
+    fn create_prompt_injection_config(
+        action: GuardrailAction,
+        failure_mode: GuardrailFailureMode,
+    ) -> PromptInjectionConfig {
+        PromptInjectionConfig {
+            enabled: true,
+            agent: "test-agent".to_string(),
+            action,
+            block_status: 400,
+            block_message: Some("Blocked: injection detected".to_string()),
+            timeout_ms: 5000,
+            failure_mode,
+        }
+    }
+
+    fn create_pii_config() -> PiiDetectionConfig {
+        PiiDetectionConfig {
+            enabled: true,
+            agent: "pii-scanner".to_string(),
+            action: sentinel_config::PiiAction::Log,
+            categories: vec!["ssn".to_string(), "email".to_string()],
+            timeout_ms: 5000,
+            failure_mode: GuardrailFailureMode::Open,
+        }
+    }
+
+    fn create_detection(category: &str, description: &str) -> GuardrailDetection {
+        GuardrailDetection {
+            category: category.to_string(),
+            description: description.to_string(),
+            severity: DetectionSeverity::High,
+            confidence: Some(0.95),
+            span: Some(TextSpan { start: 0, end: 10 }),
+        }
+    }
+
+    fn create_guardrail_response(detected: bool, detections: Vec<GuardrailDetection>) -> GuardrailResponse {
+        GuardrailResponse {
+            detected,
+            confidence: if detected { 0.95 } else { 0.0 },
+            detections,
+            redacted_content: None,
+        }
+    }
+
+    // ==================== extract_inference_content Tests ====================
 
     #[test]
     fn test_extract_openai_content() {
@@ -375,9 +510,331 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_generic_text() {
+        let body = br#"{"text": "Some text content"}"#;
+        let content = extract_inference_content(body);
+        assert_eq!(content, Some("Some text content".to_string()));
+    }
+
+    #[test]
+    fn test_extract_generic_query() {
+        let body = br#"{"query": "What is the weather?"}"#;
+        let content = extract_inference_content(body);
+        assert_eq!(content, Some("What is the weather?".to_string()));
+    }
+
+    #[test]
+    fn test_extract_generic_question() {
+        let body = br#"{"question": "How does this work?"}"#;
+        let content = extract_inference_content(body);
+        assert_eq!(content, Some("How does this work?".to_string()));
+    }
+
+    #[test]
     fn test_extract_invalid_json() {
         let body = b"not json";
         let content = extract_inference_content(body);
         assert_eq!(content, None);
+    }
+
+    #[test]
+    fn test_extract_empty_messages() {
+        let body = br#"{"messages": []}"#;
+        let content = extract_inference_content(body);
+        assert_eq!(content, None);
+    }
+
+    #[test]
+    fn test_extract_messages_without_content() {
+        let body = br#"{"messages": [{"role": "user"}]}"#;
+        let content = extract_inference_content(body);
+        assert_eq!(content, None);
+    }
+
+    #[test]
+    fn test_extract_empty_object() {
+        let body = br#"{}"#;
+        let content = extract_inference_content(body);
+        assert_eq!(content, None);
+    }
+
+    #[test]
+    fn test_extract_nested_content() {
+        // Messages with mixed content types (some with content, some without)
+        let body = br#"{
+            "messages": [
+                {"role": "system"},
+                {"role": "user", "content": "Valid content"},
+                {"role": "assistant"}
+            ]
+        }"#;
+        let content = extract_inference_content(body);
+        assert_eq!(content, Some("Valid content".to_string()));
+    }
+
+    // ==================== Prompt Injection Tests ====================
+
+    #[tokio::test]
+    async fn test_prompt_injection_disabled() {
+        let mock = Arc::new(MockAgentCaller::new());
+        let processor = GuardrailProcessor::with_caller(mock.clone());
+
+        let mut config = create_prompt_injection_config(GuardrailAction::Block, GuardrailFailureMode::Open);
+        config.enabled = false;
+
+        let result = processor
+            .check_prompt_injection(&config, "test content", None, None, "corr-123")
+            .await;
+
+        assert!(matches!(result, PromptInjectionResult::Clean));
+        assert_eq!(mock.call_count(), 0); // Agent should not be called
+    }
+
+    #[tokio::test]
+    async fn test_prompt_injection_clean() {
+        let response = create_guardrail_response(false, vec![]);
+        let mock = Arc::new(MockAgentCaller::with_response(Ok(response)));
+        let processor = GuardrailProcessor::with_caller(mock.clone());
+
+        let config = create_prompt_injection_config(GuardrailAction::Block, GuardrailFailureMode::Open);
+
+        let result = processor
+            .check_prompt_injection(&config, "normal content", Some("gpt-4"), Some("route-1"), "corr-123")
+            .await;
+
+        assert!(matches!(result, PromptInjectionResult::Clean));
+        assert_eq!(mock.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_prompt_injection_detected_block_action() {
+        let detection = create_detection("injection", "Attempt to override instructions");
+        let response = create_guardrail_response(true, vec![detection]);
+        let mock = Arc::new(MockAgentCaller::with_response(Ok(response)));
+        let processor = GuardrailProcessor::with_caller(mock);
+
+        let config = create_prompt_injection_config(GuardrailAction::Block, GuardrailFailureMode::Open);
+
+        let result = processor
+            .check_prompt_injection(&config, "ignore previous instructions", None, None, "corr-123")
+            .await;
+
+        match result {
+            PromptInjectionResult::Blocked { status, message, detections } => {
+                assert_eq!(status, 400);
+                assert_eq!(message, "Blocked: injection detected");
+                assert_eq!(detections.len(), 1);
+            }
+            _ => panic!("Expected Blocked result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prompt_injection_detected_log_action() {
+        let detection = create_detection("injection", "Suspicious pattern");
+        let response = create_guardrail_response(true, vec![detection]);
+        let mock = Arc::new(MockAgentCaller::with_response(Ok(response)));
+        let processor = GuardrailProcessor::with_caller(mock);
+
+        let config = create_prompt_injection_config(GuardrailAction::Log, GuardrailFailureMode::Open);
+
+        let result = processor
+            .check_prompt_injection(&config, "suspicious content", None, None, "corr-123")
+            .await;
+
+        match result {
+            PromptInjectionResult::Detected { detections } => {
+                assert_eq!(detections.len(), 1);
+            }
+            _ => panic!("Expected Detected result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prompt_injection_detected_warn_action() {
+        let detection = create_detection("injection", "Possible injection");
+        let response = create_guardrail_response(true, vec![detection]);
+        let mock = Arc::new(MockAgentCaller::with_response(Ok(response)));
+        let processor = GuardrailProcessor::with_caller(mock);
+
+        let config = create_prompt_injection_config(GuardrailAction::Warn, GuardrailFailureMode::Open);
+
+        let result = processor
+            .check_prompt_injection(&config, "maybe suspicious", None, None, "corr-123")
+            .await;
+
+        match result {
+            PromptInjectionResult::Warning { detections } => {
+                assert_eq!(detections.len(), 1);
+            }
+            _ => panic!("Expected Warning result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prompt_injection_agent_error_fail_open() {
+        let mock = Arc::new(MockAgentCaller::with_response(Err("Agent unavailable".to_string())));
+        let processor = GuardrailProcessor::with_caller(mock);
+
+        let config = create_prompt_injection_config(GuardrailAction::Block, GuardrailFailureMode::Open);
+
+        let result = processor
+            .check_prompt_injection(&config, "test content", None, None, "corr-123")
+            .await;
+
+        // Fail-open: allow the request despite agent error
+        assert!(matches!(result, PromptInjectionResult::Clean));
+    }
+
+    #[tokio::test]
+    async fn test_prompt_injection_agent_error_fail_closed() {
+        let mock = Arc::new(MockAgentCaller::with_response(Err("Agent unavailable".to_string())));
+        let processor = GuardrailProcessor::with_caller(mock);
+
+        let config = create_prompt_injection_config(GuardrailAction::Block, GuardrailFailureMode::Closed);
+
+        let result = processor
+            .check_prompt_injection(&config, "test content", None, None, "corr-123")
+            .await;
+
+        // Fail-closed: block the request on agent error
+        match result {
+            PromptInjectionResult::Blocked { status, message, .. } => {
+                assert_eq!(status, 503);
+                assert_eq!(message, "Guardrail check unavailable");
+            }
+            _ => panic!("Expected Blocked result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prompt_injection_default_block_message() {
+        let detection = create_detection("injection", "Test");
+        let response = create_guardrail_response(true, vec![detection]);
+        let mock = Arc::new(MockAgentCaller::with_response(Ok(response)));
+        let processor = GuardrailProcessor::with_caller(mock);
+
+        let mut config = create_prompt_injection_config(GuardrailAction::Block, GuardrailFailureMode::Open);
+        config.block_message = None; // Use default message
+
+        let result = processor
+            .check_prompt_injection(&config, "injection attempt", None, None, "corr-123")
+            .await;
+
+        match result {
+            PromptInjectionResult::Blocked { message, .. } => {
+                assert_eq!(message, "Request blocked: potential prompt injection detected");
+            }
+            _ => panic!("Expected Blocked result"),
+        }
+    }
+
+    // ==================== PII Detection Tests ====================
+
+    #[tokio::test]
+    async fn test_pii_disabled() {
+        let mock = Arc::new(MockAgentCaller::new());
+        let processor = GuardrailProcessor::with_caller(mock.clone());
+
+        let mut config = create_pii_config();
+        config.enabled = false;
+
+        let result = processor
+            .check_pii(&config, "content with SSN 123-45-6789", None, "corr-123")
+            .await;
+
+        assert!(matches!(result, PiiCheckResult::Clean));
+        assert_eq!(mock.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pii_clean() {
+        let response = create_guardrail_response(false, vec![]);
+        let mock = Arc::new(MockAgentCaller::with_response(Ok(response)));
+        let processor = GuardrailProcessor::with_caller(mock.clone());
+
+        let config = create_pii_config();
+
+        let result = processor
+            .check_pii(&config, "No sensitive data here", Some("route-1"), "corr-123")
+            .await;
+
+        assert!(matches!(result, PiiCheckResult::Clean));
+        assert_eq!(mock.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_pii_detected() {
+        let ssn_detection = create_detection("ssn", "Social Security Number detected");
+        let email_detection = create_detection("email", "Email address detected");
+        let mut response = create_guardrail_response(true, vec![ssn_detection, email_detection]);
+        response.redacted_content = Some("My SSN is [REDACTED] and email is [REDACTED]".to_string());
+
+        let mock = Arc::new(MockAgentCaller::with_response(Ok(response)));
+        let processor = GuardrailProcessor::with_caller(mock);
+
+        let config = create_pii_config();
+
+        let result = processor
+            .check_pii(&config, "My SSN is 123-45-6789 and email is test@example.com", None, "corr-123")
+            .await;
+
+        match result {
+            PiiCheckResult::Detected { detections, redacted_content } => {
+                assert_eq!(detections.len(), 2);
+                assert!(redacted_content.is_some());
+                assert!(redacted_content.unwrap().contains("[REDACTED]"));
+            }
+            _ => panic!("Expected Detected result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pii_agent_error() {
+        let mock = Arc::new(MockAgentCaller::with_response(Err("PII scanner unavailable".to_string())));
+        let processor = GuardrailProcessor::with_caller(mock);
+
+        let config = create_pii_config();
+
+        let result = processor
+            .check_pii(&config, "test content", None, "corr-123")
+            .await;
+
+        match result {
+            PiiCheckResult::Error { message } => {
+                assert!(message.contains("unavailable"));
+            }
+            _ => panic!("Expected Error result, got {:?}", result),
+        }
+    }
+
+    // ==================== Result Type Tests ====================
+
+    #[test]
+    fn test_prompt_injection_result_debug() {
+        let result = PromptInjectionResult::Clean;
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Clean"));
+
+        let result = PromptInjectionResult::Blocked {
+            status: 400,
+            message: "test".to_string(),
+            detections: vec![],
+        };
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Blocked"));
+    }
+
+    #[test]
+    fn test_pii_check_result_debug() {
+        let result = PiiCheckResult::Clean;
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Clean"));
+
+        let result = PiiCheckResult::Error {
+            message: "test error".to_string(),
+        };
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Error"));
     }
 }
