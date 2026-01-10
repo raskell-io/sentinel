@@ -647,6 +647,9 @@ pub struct InferenceConfig {
 
     /// Model-based upstream routing configuration
     pub model_routing: Option<ModelRoutingConfig>,
+
+    /// Semantic guardrails configuration (prompt injection, PII detection)
+    pub guardrails: Option<GuardrailsConfig>,
 }
 
 
@@ -865,4 +868,134 @@ impl Default for FallbackTriggers {
 
 fn default_max_fallback_attempts() -> u32 {
     3
+}
+
+// ============================================================================
+// Semantic Guardrails Configuration
+// ============================================================================
+
+/// Semantic guardrails configuration for inference routes.
+///
+/// Enables content inspection via external agents for security:
+/// - Prompt injection detection on requests
+/// - PII detection on responses
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GuardrailsConfig {
+    /// Prompt injection detection configuration
+    pub prompt_injection: Option<PromptInjectionConfig>,
+
+    /// PII detection configuration
+    pub pii_detection: Option<PiiDetectionConfig>,
+}
+
+/// Prompt injection detection configuration.
+///
+/// Detects and optionally blocks requests containing prompt injection attempts.
+/// Uses an external agent for content analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptInjectionConfig {
+    /// Enable prompt injection detection
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Name of the agent to use for inspection
+    pub agent: String,
+
+    /// Action to take when injection is detected
+    #[serde(default)]
+    pub action: GuardrailAction,
+
+    /// HTTP status code when blocking (default: 400)
+    #[serde(default = "default_guardrail_block_status")]
+    pub block_status: u16,
+
+    /// Custom message when blocking
+    pub block_message: Option<String>,
+
+    /// Agent timeout in milliseconds (default: 500)
+    #[serde(default = "default_prompt_injection_timeout_ms")]
+    pub timeout_ms: u64,
+
+    /// Behavior when agent times out or fails
+    #[serde(default)]
+    pub failure_mode: GuardrailFailureMode,
+}
+
+/// PII detection configuration.
+///
+/// Detects sensitive data (SSN, credit cards, emails, etc.) in responses.
+/// Uses an external agent for content analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PiiDetectionConfig {
+    /// Enable PII detection
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Name of the agent to use for inspection
+    pub agent: String,
+
+    /// Action to take when PII is detected
+    #[serde(default)]
+    pub action: PiiAction,
+
+    /// PII categories to detect (e.g., "ssn", "credit-card", "email", "phone")
+    #[serde(default)]
+    pub categories: Vec<String>,
+
+    /// Agent timeout in milliseconds (default: 1000)
+    #[serde(default = "default_pii_detection_timeout_ms")]
+    pub timeout_ms: u64,
+
+    /// Behavior when agent times out or fails
+    #[serde(default)]
+    pub failure_mode: GuardrailFailureMode,
+}
+
+/// Action to take when a guardrail detects an issue
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardrailAction {
+    /// Block the request and return an error
+    Block,
+    /// Log the detection but allow the request (default)
+    #[default]
+    Log,
+    /// Allow request but add warning header to response
+    Warn,
+}
+
+/// Action to take when PII is detected in responses
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PiiAction {
+    /// Log the detection only (default)
+    #[default]
+    Log,
+    /// Redact PII in response (non-streaming only)
+    Redact,
+    /// Block response (non-streaming only)
+    Block,
+}
+
+/// Failure mode for guardrail agents (when agent times out or errors)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardrailFailureMode {
+    /// Allow request to proceed on agent failure (fail-open, default)
+    #[default]
+    Open,
+    /// Block request on agent failure (fail-closed)
+    Closed,
+}
+
+fn default_guardrail_block_status() -> u16 {
+    400
+}
+
+fn default_prompt_injection_timeout_ms() -> u64 {
+    500
+}
+
+fn default_pii_detection_timeout_ms() -> u64 {
+    1000
 }

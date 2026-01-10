@@ -242,6 +242,16 @@ pub struct RequestContext {
     pub(crate) model_mapping_applied: Option<(String, String)>,
     /// Whether fallback should be retried after response
     pub(crate) should_retry_with_fallback: bool,
+
+    // === Semantic Guardrails ===
+    /// Whether guardrails are enabled for this route
+    pub(crate) guardrails_enabled: bool,
+    /// Prompt injection detected but allowed (add warning header)
+    pub(crate) guardrail_warning: bool,
+    /// Categories of prompt injection detected (for logging)
+    pub(crate) guardrail_detection_categories: Vec<String>,
+    /// PII categories detected in response (for logging)
+    pub(crate) pii_detection_categories: Vec<String>,
 }
 
 impl RequestContext {
@@ -319,6 +329,10 @@ impl RequestContext {
             original_upstream: None,
             model_mapping_applied: None,
             should_retry_with_fallback: false,
+            guardrails_enabled: false,
+            guardrail_warning: false,
+            guardrail_detection_categories: Vec::new(),
+            pii_detection_categories: Vec::new(),
         }
     }
 

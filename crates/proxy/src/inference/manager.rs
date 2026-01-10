@@ -380,6 +380,7 @@ mod tests {
             cost_attribution: None,
             routing: None,
             model_routing: None,
+            guardrails: None,
         }
     }
 
@@ -421,6 +422,7 @@ mod tests {
             cost_attribution: None,
             routing: None,
             model_routing: None,
+            guardrails: None,
         };
         manager.register_route("no-limit-route", &config);
 
@@ -448,6 +450,7 @@ mod tests {
             cost_attribution: None,
             routing: None,
             model_routing: None,
+            guardrails: None,
         };
         manager.register_route("budget-route", &config);
 

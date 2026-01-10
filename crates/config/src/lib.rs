@@ -88,10 +88,11 @@ pub use observability::{
 pub use routes::{
     ApiSchemaConfig, BuiltinHandler, CacheBackend, CacheStorageConfig, ErrorFormat, ErrorPage,
     ErrorPageConfig, FallbackConfig, FallbackTriggers, FallbackUpstream, FailureMode,
-    HeaderModifications, InferenceConfig, InferenceProvider, InferenceRouting,
-    InferenceRoutingStrategy, MatchCondition, ModelRoutingConfig, ModelUpstreamMapping,
-    RateLimitPolicy, RouteCacheConfig, RouteConfig, RoutePolicies, ServiceType, StaticFileConfig,
-    TokenEstimation, TokenRateLimit,
+    GuardrailAction, GuardrailFailureMode, GuardrailsConfig, HeaderModifications, InferenceConfig,
+    InferenceProvider, InferenceRouting, InferenceRoutingStrategy, MatchCondition,
+    ModelRoutingConfig, ModelUpstreamMapping, PiiAction, PiiDetectionConfig,
+    PromptInjectionConfig, RateLimitPolicy, RouteCacheConfig, RouteConfig, RoutePolicies,
+    ServiceType, StaticFileConfig, TokenEstimation, TokenRateLimit,
 };
 
 // Server

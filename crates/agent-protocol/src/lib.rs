@@ -85,10 +85,12 @@ pub use errors::AgentProtocolError;
 
 // Re-export protocol types
 pub use protocol::{
-    AgentRequest, AgentResponse, AuditMetadata, BodyMutation, ConfigureEvent, Decision, EventType,
-    HeaderOp, RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, RequestMetadata,
-    ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketDecision, WebSocketFrameEvent,
-    WebSocketOpcode, MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
+    AgentRequest, AgentResponse, AuditMetadata, BodyMutation, ConfigureEvent, Decision,
+    DetectionSeverity, EventType, GuardrailDetection, GuardrailInspectEvent,
+    GuardrailInspectionType, GuardrailResponse, HeaderOp, RequestBodyChunkEvent,
+    RequestCompleteEvent, RequestHeadersEvent, RequestMetadata, ResponseBodyChunkEvent,
+    ResponseHeadersEvent, TextSpan, WebSocketDecision, WebSocketFrameEvent, WebSocketOpcode,
+    MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
 };
 
 // Re-export client

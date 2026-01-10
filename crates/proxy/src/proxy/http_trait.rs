@@ -19,7 +19,9 @@ use std::time::Duration;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::cache::{get_cache_eviction, get_cache_lock, get_cache_storage};
-use crate::inference::{is_sse_response, StreamingTokenCounter};
+use crate::inference::{
+    extract_inference_content, is_sse_response, PromptInjectionResult, StreamingTokenCounter,
+};
 use crate::logging::{AccessLogEntry, AuditEventType, AuditLogEntry};
 use crate::rate_limit::HeaderAccessor;
 use crate::routing::RequestInfo;
@@ -941,6 +943,120 @@ impl ProxyHttp for SentinelProxy {
             }
         }
 
+        // Prompt injection guardrail (for inference routes)
+        if let Some(ref route_config) = ctx.route_config {
+            if let Some(ref inference) = route_config.inference {
+                if let Some(ref guardrails) = inference.guardrails {
+                    if let Some(ref pi_config) = guardrails.prompt_injection {
+                        if pi_config.enabled && !ctx.body_buffer.is_empty() {
+                            ctx.guardrails_enabled = true;
+
+                            // Extract content from request body
+                            if let Some(content) = extract_inference_content(&ctx.body_buffer) {
+                                let result = self
+                                    .guardrail_processor
+                                    .check_prompt_injection(
+                                        pi_config,
+                                        &content,
+                                        ctx.inference_model.as_deref(),
+                                        ctx.route_id.as_deref(),
+                                        &ctx.trace_id,
+                                    )
+                                    .await;
+
+                                match result {
+                                    PromptInjectionResult::Blocked {
+                                        status,
+                                        message,
+                                        detections,
+                                    } => {
+                                        warn!(
+                                            correlation_id = %ctx.trace_id,
+                                            route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
+                                            detection_count = detections.len(),
+                                            "Prompt injection detected, blocking request"
+                                        );
+
+                                        self.metrics.record_blocked_request("prompt_injection");
+
+                                        // Store detection categories for logging
+                                        ctx.guardrail_detection_categories = detections
+                                            .iter()
+                                            .map(|d| d.category.clone())
+                                            .collect();
+
+                                        // Audit log the block
+                                        let audit_entry = AuditLogEntry::new(
+                                            &ctx.trace_id,
+                                            AuditEventType::Blocked,
+                                            &ctx.method,
+                                            &ctx.path,
+                                            &ctx.client_ip,
+                                        )
+                                        .with_route_id(
+                                            ctx.route_id.as_deref().unwrap_or("unknown"),
+                                        )
+                                        .with_status_code(status)
+                                        .with_reason("Prompt injection detected".to_string());
+                                        self.log_manager.log_audit(&audit_entry);
+
+                                        // Send error response
+                                        crate::http_helpers::write_json_error(
+                                            session,
+                                            status,
+                                            "prompt_injection_blocked",
+                                            Some(&message),
+                                        )
+                                        .await?;
+                                        return Ok(true);
+                                    }
+                                    PromptInjectionResult::Detected { detections } => {
+                                        // Log but allow
+                                        warn!(
+                                            correlation_id = %ctx.trace_id,
+                                            route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
+                                            detection_count = detections.len(),
+                                            "Prompt injection detected (logged only)"
+                                        );
+                                        ctx.guardrail_detection_categories = detections
+                                            .iter()
+                                            .map(|d| d.category.clone())
+                                            .collect();
+                                    }
+                                    PromptInjectionResult::Warning { detections } => {
+                                        // Set flag for response header
+                                        ctx.guardrail_warning = true;
+                                        ctx.guardrail_detection_categories = detections
+                                            .iter()
+                                            .map(|d| d.category.clone())
+                                            .collect();
+                                        debug!(
+                                            correlation_id = %ctx.trace_id,
+                                            "Prompt injection warning set"
+                                        );
+                                    }
+                                    PromptInjectionResult::Clean => {
+                                        trace!(
+                                            correlation_id = %ctx.trace_id,
+                                            "No prompt injection detected"
+                                        );
+                                    }
+                                    PromptInjectionResult::Error { message } => {
+                                        // Already logged in processor, just trace here
+                                        trace!(
+                                            correlation_id = %ctx.trace_id,
+                                            error = %message,
+                                            "Prompt injection check error (failure mode applied)"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Geo filtering
         if let Some(route_id) = ctx.route_id.as_deref() {
             if let Some(ref route_config) = ctx.route_config {
@@ -1527,6 +1643,11 @@ impl ProxyHttp for SentinelProxy {
         // Add GeoIP country header if geo lookup was performed
         if let Some(ref country_code) = ctx.geo_country_code {
             upstream_response.insert_header("X-GeoIP-Country", country_code)?;
+        }
+
+        // Add guardrail warning header if prompt injection was detected (warn mode)
+        if ctx.guardrail_warning {
+            upstream_response.insert_header("X-Guardrail-Warning", "prompt-injection-detected")?;
         }
 
         // Add fallback routing headers if fallback was used
@@ -2723,6 +2844,76 @@ impl ProxyHttp for SentinelProxy {
                         content_length = result.content_length,
                         "Finalized streaming token count"
                     );
+                }
+
+                // PII detection guardrail (for streaming inference responses)
+                if ctx.inference_streaming_response {
+                    if let Some(ref route_config) = ctx.route_config {
+                        if let Some(ref inference) = route_config.inference {
+                            if let Some(ref guardrails) = inference.guardrails {
+                                if let Some(ref pii_config) = guardrails.pii_detection {
+                                    if pii_config.enabled {
+                                        // Get accumulated content from streaming counter
+                                        if let Some(ref counter) = ctx.inference_streaming_counter {
+                                            let response_content = counter.content();
+                                            if !response_content.is_empty() {
+                                                let pii_result = self
+                                                    .guardrail_processor
+                                                    .check_pii(
+                                                        pii_config,
+                                                        response_content,
+                                                        ctx.route_id.as_deref(),
+                                                        &ctx.trace_id,
+                                                    )
+                                                    .await;
+
+                                                match pii_result {
+                                                    crate::inference::PiiCheckResult::Detected {
+                                                        detections,
+                                                        redacted_content: _,
+                                                    } => {
+                                                        warn!(
+                                                            correlation_id = %ctx.trace_id,
+                                                            route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
+                                                            detection_count = detections.len(),
+                                                            "PII detected in inference response"
+                                                        );
+
+                                                        // Store detection categories for logging
+                                                        ctx.pii_detection_categories = detections
+                                                            .iter()
+                                                            .map(|d| d.category.clone())
+                                                            .collect();
+
+                                                        // Record metrics for each category
+                                                        for detection in &detections {
+                                                            self.metrics.record_pii_detected(
+                                                                ctx.route_id.as_deref().unwrap_or("unknown"),
+                                                                &detection.category,
+                                                            );
+                                                        }
+                                                    }
+                                                    crate::inference::PiiCheckResult::Clean => {
+                                                        trace!(
+                                                            correlation_id = %ctx.trace_id,
+                                                            "No PII detected in response"
+                                                        );
+                                                    }
+                                                    crate::inference::PiiCheckResult::Error { message } => {
+                                                        debug!(
+                                                            correlation_id = %ctx.trace_id,
+                                                            error = %message,
+                                                            "PII detection check failed"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Response body would require buffering, which is expensive

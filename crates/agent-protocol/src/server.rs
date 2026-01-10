@@ -18,10 +18,10 @@ use crate::grpc::{
     self, agent_processor_server::AgentProcessor, agent_processor_server::AgentProcessorServer,
 };
 use crate::protocol::{
-    AgentRequest, AgentResponse, AuditMetadata, ConfigureEvent, Decision, EventType, HeaderOp,
-    RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, RequestMetadata,
-    ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketDecision, WebSocketFrameEvent,
-    MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
+    AgentRequest, AgentResponse, AuditMetadata, ConfigureEvent, Decision, EventType,
+    GuardrailInspectEvent, HeaderOp, RequestBodyChunkEvent, RequestCompleteEvent,
+    RequestHeadersEvent, RequestMetadata, ResponseBodyChunkEvent, ResponseHeadersEvent,
+    WebSocketDecision, WebSocketFrameEvent, MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
 };
 
 /// Agent server for testing and reference implementations
@@ -81,6 +81,16 @@ pub trait AgentHandler: Send + Sync {
     /// `AgentResponse::websocket_close(code, reason)` to close the connection.
     async fn on_websocket_frame(&self, _event: WebSocketFrameEvent) -> AgentResponse {
         AgentResponse::websocket_allow()
+    }
+
+    /// Handle a guardrail inspection event
+    ///
+    /// Called for semantic content analysis (prompt injection detection, PII detection).
+    /// Return `AgentResponse::default_allow()` if no issues detected.
+    /// The guardrail-specific response data should be returned via a separate mechanism
+    /// (the caller will interpret the response based on context).
+    async fn on_guardrail_inspect(&self, _event: GuardrailInspectEvent) -> AgentResponse {
+        AgentResponse::default_allow()
     }
 }
 
@@ -288,6 +298,17 @@ impl AgentServer {
                         "Processing websocket_frame event"
                     );
                     handler.on_websocket_frame(event).await
+                }
+                EventType::GuardrailInspect => {
+                    let event: GuardrailInspectEvent = serde_json::from_value(request.payload)
+                        .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))?;
+                    trace!(
+                        correlation_id = %event.correlation_id,
+                        inspection_type = ?event.inspection_type,
+                        content_len = event.content.len(),
+                        "Processing guardrail_inspect event"
+                    );
+                    handler.on_guardrail_inspect(event).await
                 }
             };
 

@@ -30,6 +30,8 @@ pub enum EventType {
     RequestComplete,
     /// WebSocket frame received (after upgrade)
     WebSocketFrame,
+    /// Guardrail content inspection (prompt injection, PII detection)
+    GuardrailInspect,
 }
 
 /// Agent decision
@@ -594,4 +596,171 @@ pub struct AuditMetadata {
     /// Custom metadata
     #[serde(default)]
     pub custom: HashMap<String, serde_json::Value>,
+}
+
+// ============================================================================
+// Guardrail Inspection Types
+// ============================================================================
+
+/// Type of guardrail inspection to perform
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardrailInspectionType {
+    /// Prompt injection detection (analyze request content)
+    PromptInjection,
+    /// PII detection (analyze response content)
+    PiiDetection,
+}
+
+/// Guardrail inspection event
+///
+/// Sent to guardrail agents for semantic content analysis.
+/// Used for prompt injection detection on requests and PII detection on responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardrailInspectEvent {
+    /// Correlation ID for request tracing
+    pub correlation_id: String,
+    /// Type of inspection to perform
+    pub inspection_type: GuardrailInspectionType,
+    /// Content to inspect (request body or response content)
+    pub content: String,
+    /// Model name if available (for context)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// PII categories to check (for PII detection)
+    /// e.g., ["ssn", "credit_card", "email", "phone"]
+    #[serde(default)]
+    pub categories: Vec<String>,
+    /// Route ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_id: Option<String>,
+    /// Additional metadata for context
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// Guardrail inspection response from agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardrailResponse {
+    /// Whether any issues were detected
+    pub detected: bool,
+    /// Confidence score (0.0 - 1.0)
+    #[serde(default)]
+    pub confidence: f64,
+    /// List of detections found
+    #[serde(default)]
+    pub detections: Vec<GuardrailDetection>,
+    /// Redacted content (for PII, if requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted_content: Option<String>,
+}
+
+impl Default for GuardrailResponse {
+    fn default() -> Self {
+        Self {
+            detected: false,
+            confidence: 0.0,
+            detections: Vec::new(),
+            redacted_content: None,
+        }
+    }
+}
+
+impl GuardrailResponse {
+    /// Create a response indicating nothing detected
+    pub fn clean() -> Self {
+        Self::default()
+    }
+
+    /// Create a response with a detection
+    pub fn with_detection(detection: GuardrailDetection) -> Self {
+        Self {
+            detected: true,
+            confidence: detection.confidence.unwrap_or(1.0),
+            detections: vec![detection],
+            redacted_content: None,
+        }
+    }
+
+    /// Add a detection to the response
+    pub fn add_detection(&mut self, detection: GuardrailDetection) {
+        self.detected = true;
+        if let Some(conf) = detection.confidence {
+            self.confidence = self.confidence.max(conf);
+        }
+        self.detections.push(detection);
+    }
+}
+
+/// A single guardrail detection (prompt injection attempt, PII instance, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardrailDetection {
+    /// Category of detection (e.g., "prompt_injection", "ssn", "credit_card")
+    pub category: String,
+    /// Human-readable description of what was detected
+    pub description: String,
+    /// Severity level
+    #[serde(default)]
+    pub severity: DetectionSeverity,
+    /// Confidence score for this detection (0.0 - 1.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    /// Location in content where detection occurred
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<TextSpan>,
+}
+
+impl GuardrailDetection {
+    /// Create a new detection
+    pub fn new(category: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            category: category.into(),
+            description: description.into(),
+            severity: DetectionSeverity::Medium,
+            confidence: None,
+            span: None,
+        }
+    }
+
+    /// Set severity
+    pub fn with_severity(mut self, severity: DetectionSeverity) -> Self {
+        self.severity = severity;
+        self
+    }
+
+    /// Set confidence
+    pub fn with_confidence(mut self, confidence: f64) -> Self {
+        self.confidence = Some(confidence);
+        self
+    }
+
+    /// Set span
+    pub fn with_span(mut self, start: usize, end: usize) -> Self {
+        self.span = Some(TextSpan { start, end });
+        self
+    }
+}
+
+/// Text span indicating location in content
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextSpan {
+    /// Start position (byte offset)
+    pub start: usize,
+    /// End position (byte offset, exclusive)
+    pub end: usize,
+}
+
+/// Severity level for guardrail detections
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DetectionSeverity {
+    /// Low severity (informational)
+    Low,
+    /// Medium severity (default)
+    #[default]
+    Medium,
+    /// High severity (should likely block)
+    High,
+    /// Critical severity (must block)
+    Critical,
 }

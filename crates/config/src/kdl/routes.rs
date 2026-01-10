@@ -974,6 +974,9 @@ fn parse_inference_config(node: &kdl::KdlNode) -> Result<InferenceConfig> {
     // Parse model-routing block if present
     let model_routing = parse_model_routing_config_opt(node)?;
 
+    // Parse guardrails block if present
+    let guardrails = parse_guardrails_config_opt(node)?;
+
     Ok(InferenceConfig {
         provider,
         model_header,
@@ -982,6 +985,7 @@ fn parse_inference_config(node: &kdl::KdlNode) -> Result<InferenceConfig> {
         cost_attribution,
         routing,
         model_routing,
+        guardrails,
     })
 }
 
@@ -1202,4 +1206,200 @@ fn parse_model_pricing_list(node: &kdl::KdlNode) -> Result<Vec<ModelPricing>> {
     }
 
     Ok(pricing)
+}
+
+// ============================================================================
+// Guardrails Configuration Parsing
+// ============================================================================
+
+/// Parse optional guardrails configuration from an inference block.
+///
+/// Example KDL:
+/// ```kdl
+/// guardrails {
+///     prompt-injection {
+///         enabled true
+///         agent "prompt-guard"
+///         action "block"
+///         block-status 400
+///         block-message "Request blocked: potential prompt injection detected"
+///         timeout-ms 500
+///         failure-mode "open"
+///     }
+///
+///     pii-detection {
+///         enabled true
+///         agent "pii-scanner"
+///         action "log"
+///         categories "ssn" "credit-card" "email" "phone"
+///         timeout-ms 1000
+///         failure-mode "open"
+///     }
+/// }
+/// ```
+fn parse_guardrails_config_opt(node: &kdl::KdlNode) -> Result<Option<GuardrailsConfig>> {
+    if let Some(children) = node.children() {
+        if let Some(guardrails_node) = children.get("guardrails") {
+            return Ok(Some(parse_guardrails_config(guardrails_node)?));
+        }
+    }
+    Ok(None)
+}
+
+/// Parse guardrails configuration block.
+fn parse_guardrails_config(node: &kdl::KdlNode) -> Result<GuardrailsConfig> {
+    // Parse prompt-injection sub-block
+    let prompt_injection = if let Some(children) = node.children() {
+        if let Some(pi_node) = children.get("prompt-injection") {
+            Some(parse_prompt_injection_config(pi_node)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Parse pii-detection sub-block
+    let pii_detection = if let Some(children) = node.children() {
+        if let Some(pii_node) = children.get("pii-detection") {
+            Some(parse_pii_detection_config(pii_node)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    trace!(
+        has_prompt_injection = prompt_injection.is_some(),
+        has_pii_detection = pii_detection.is_some(),
+        "Parsed guardrails configuration"
+    );
+
+    Ok(GuardrailsConfig {
+        prompt_injection,
+        pii_detection,
+    })
+}
+
+/// Parse prompt injection detection configuration.
+fn parse_prompt_injection_config(node: &kdl::KdlNode) -> Result<PromptInjectionConfig> {
+    let enabled = get_bool_entry(node, "enabled").unwrap_or(false);
+
+    let agent = get_string_entry(node, "agent")
+        .ok_or_else(|| anyhow::anyhow!("Prompt injection config requires 'agent' field"))?;
+
+    let action = match get_string_entry(node, "action").as_deref() {
+        Some("block") => GuardrailAction::Block,
+        Some("log") | None => GuardrailAction::Log,
+        Some("warn") => GuardrailAction::Warn,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown guardrail action '{}'. Valid actions: block, log, warn",
+                other
+            ));
+        }
+    };
+
+    let block_status = get_int_entry(node, "block-status").unwrap_or(400) as u16;
+    let block_message = get_string_entry(node, "block-message");
+    let timeout_ms = get_int_entry(node, "timeout-ms").unwrap_or(500) as u64;
+
+    let failure_mode = match get_string_entry(node, "failure-mode").as_deref() {
+        Some("open") | None => GuardrailFailureMode::Open,
+        Some("closed") => GuardrailFailureMode::Closed,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown failure mode '{}'. Valid modes: open, closed",
+                other
+            ));
+        }
+    };
+
+    trace!(
+        enabled = enabled,
+        agent = %agent,
+        action = ?action,
+        block_status = block_status,
+        timeout_ms = timeout_ms,
+        failure_mode = ?failure_mode,
+        "Parsed prompt injection configuration"
+    );
+
+    Ok(PromptInjectionConfig {
+        enabled,
+        agent,
+        action,
+        block_status,
+        block_message,
+        timeout_ms,
+        failure_mode,
+    })
+}
+
+/// Parse PII detection configuration.
+fn parse_pii_detection_config(node: &kdl::KdlNode) -> Result<PiiDetectionConfig> {
+    let enabled = get_bool_entry(node, "enabled").unwrap_or(false);
+
+    let agent = get_string_entry(node, "agent")
+        .ok_or_else(|| anyhow::anyhow!("PII detection config requires 'agent' field"))?;
+
+    let action = match get_string_entry(node, "action").as_deref() {
+        Some("log") | None => PiiAction::Log,
+        Some("redact") => PiiAction::Redact,
+        Some("block") => PiiAction::Block,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown PII action '{}'. Valid actions: log, redact, block",
+                other
+            ));
+        }
+    };
+
+    // Parse categories as string arguments
+    let categories = if let Some(children) = node.children() {
+        if let Some(cat_node) = children.get("categories") {
+            cat_node
+                .entries()
+                .iter()
+                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let timeout_ms = get_int_entry(node, "timeout-ms").unwrap_or(1000) as u64;
+
+    let failure_mode = match get_string_entry(node, "failure-mode").as_deref() {
+        Some("open") | None => GuardrailFailureMode::Open,
+        Some("closed") => GuardrailFailureMode::Closed,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown failure mode '{}'. Valid modes: open, closed",
+                other
+            ));
+        }
+    };
+
+    trace!(
+        enabled = enabled,
+        agent = %agent,
+        action = ?action,
+        categories = ?categories,
+        timeout_ms = timeout_ms,
+        failure_mode = ?failure_mode,
+        "Parsed PII detection configuration"
+    );
+
+    Ok(PiiDetectionConfig {
+        enabled,
+        agent,
+        action,
+        categories,
+        timeout_ms,
+        failure_mode,
+    })
 }

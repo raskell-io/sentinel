@@ -107,6 +107,8 @@ pub struct SentinelProxy {
     pub(super) inference_rate_limit_manager: Arc<InferenceRateLimitManager>,
     /// Warmth tracker for cold model detection on inference routes
     pub(super) warmth_tracker: Arc<crate::health::WarmthTracker>,
+    /// Guardrail processor for semantic inspection (prompt injection, PII detection)
+    pub(super) guardrail_processor: Arc<crate::inference::GuardrailProcessor>,
 }
 
 impl SentinelProxy {
@@ -289,6 +291,10 @@ impl SentinelProxy {
         // Initialize warmth tracker for cold model detection
         let warmth_tracker = Arc::new(crate::health::WarmthTracker::with_defaults());
 
+        // Initialize guardrail processor for semantic inspection
+        let guardrail_processor =
+            Arc::new(crate::inference::GuardrailProcessor::new(agent_manager.clone()));
+
         // Initialize geo filter manager
         let geo_filter_manager = Arc::new(Self::initialize_geo_filters(&config));
 
@@ -341,6 +347,7 @@ impl SentinelProxy {
             geo_filter_manager,
             inference_rate_limit_manager,
             warmth_tracker,
+            guardrail_processor,
         })
     }
 

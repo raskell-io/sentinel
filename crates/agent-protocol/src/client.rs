@@ -255,6 +255,11 @@ impl AgentClient {
             EventType::ResponseBodyChunk => grpc::EventType::ResponseBodyChunk,
             EventType::RequestComplete => grpc::EventType::RequestComplete,
             EventType::WebSocketFrame => grpc::EventType::WebsocketFrame,
+            EventType::GuardrailInspect => {
+                return Err(AgentProtocolError::Serialization(
+                    "GuardrailInspect events are not yet supported via gRPC".to_string(),
+                ))
+            }
         };
 
         let event = match event_type {
@@ -341,6 +346,11 @@ impl AgentClient {
                     route_id: event.route_id,
                     client_ip: event.client_ip,
                 })
+            }
+            EventType::GuardrailInspect => {
+                return Err(AgentProtocolError::InvalidMessage(
+                    "GuardrailInspect events are not yet supported via gRPC".to_string()
+                ));
             }
         };
 

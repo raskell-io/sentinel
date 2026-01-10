@@ -108,6 +108,8 @@ pub struct RequestMetrics {
     shadow_requests_total: IntCounterVec,
     shadow_errors_total: IntCounterVec,
     shadow_latency_seconds: HistogramVec,
+    /// Guardrail PII detection metrics
+    pii_detected_total: IntCounterVec,
 }
 
 impl RequestMetrics {
@@ -340,6 +342,13 @@ impl RequestMetrics {
         )
         .context("Failed to register shadow_latency_seconds metric")?;
 
+        let pii_detected_total = register_int_counter_vec!(
+            "sentinel_pii_detected_total",
+            "Total PII detections in inference responses",
+            &["route", "category"]
+        )
+        .context("Failed to register pii_detected_total metric")?;
+
         Ok(Self {
             request_duration,
             request_count,
@@ -368,6 +377,7 @@ impl RequestMetrics {
             shadow_requests_total,
             shadow_errors_total,
             shadow_latency_seconds,
+            pii_detected_total,
         })
     }
 
@@ -429,6 +439,13 @@ impl RequestMetrics {
     /// Record a blocked request
     pub fn record_blocked_request(&self, reason: &str) {
         self.blocked_requests.with_label_values(&[reason]).inc();
+    }
+
+    /// Record PII detection in inference response
+    pub fn record_pii_detected(&self, route: &str, category: &str) {
+        self.pii_detected_total
+            .with_label_values(&[route, category])
+            .inc();
     }
 
     /// Record request body size

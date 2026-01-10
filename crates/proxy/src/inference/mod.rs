@@ -40,6 +40,7 @@
 
 mod budget;
 mod cost;
+mod guardrails;
 mod manager;
 mod metrics;
 mod providers;
@@ -50,6 +51,9 @@ mod tokens;
 
 pub use budget::TokenBudgetTracker;
 pub use cost::CostCalculator;
+pub use guardrails::{
+    extract_inference_content, GuardrailProcessor, PiiCheckResult, PromptInjectionResult,
+};
 pub use manager::{InferenceCheckResult, InferenceRateLimitManager, InferenceRouteStats};
 pub use metrics::InferenceMetrics;
 pub use providers::{create_provider, InferenceProviderAdapter};
