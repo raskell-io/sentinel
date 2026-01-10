@@ -195,6 +195,8 @@ fn parse_load_balancing(s: &str) -> LoadBalancingAlgorithm {
         "least_tokens_queued" | "leasttokensqueued" | "least_tokens" => {
             LoadBalancingAlgorithm::LeastTokensQueued
         }
+        "maglev" => LoadBalancingAlgorithm::Maglev,
+        "locality_aware" | "localityaware" | "locality" => LoadBalancingAlgorithm::LocalityAware,
         _ => LoadBalancingAlgorithm::RoundRobin,
     }
 }

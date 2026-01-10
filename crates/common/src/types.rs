@@ -148,6 +148,18 @@ pub enum LoadBalancingAlgorithm {
     /// being processed. Useful for LLM inference backends where token
     /// throughput varies significantly between requests.
     LeastTokensQueued,
+    /// Maglev consistent hashing - Google's load balancing algorithm
+    ///
+    /// Provides minimal disruption when backend servers are added/removed,
+    /// with better load distribution than traditional consistent hashing.
+    /// Uses a permutation-based lookup table for O(1) selection.
+    Maglev,
+    /// Locality-aware load balancing
+    ///
+    /// Prefers targets in the same zone/region as the proxy, falling back
+    /// to other zones when local targets are unhealthy or overloaded.
+    /// Useful for multi-region deployments to minimize latency.
+    LocalityAware,
 }
 
 /// Health check type

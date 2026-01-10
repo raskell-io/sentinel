@@ -88,6 +88,8 @@ pub mod consistent_hash;
 pub mod health;
 pub mod inference_health;
 pub mod least_tokens;
+pub mod locality;
+pub mod maglev;
 pub mod p2c;
 
 // Re-export commonly used types from sub-modules
@@ -96,6 +98,8 @@ pub use consistent_hash::{ConsistentHashBalancer, ConsistentHashConfig};
 pub use health::{ActiveHealthChecker, HealthCheckRunner};
 pub use inference_health::InferenceHealthCheck;
 pub use least_tokens::{LeastTokensQueuedBalancer, LeastTokensQueuedConfig, LeastTokensQueuedTargetStats};
+pub use locality::{LocalityAwareBalancer, LocalityAwareConfig};
+pub use maglev::{MaglevBalancer, MaglevConfig};
 pub use p2c::{P2cBalancer, P2cConfig};
 
 /// Request context for load balancer decisions
@@ -347,6 +351,95 @@ impl LoadBalancer for RoundRobinBalancer {
             target = %address,
             healthy = healthy,
             algorithm = "round_robin",
+            "Updating target health status"
+        );
+        self.health_status
+            .write()
+            .await
+            .insert(address.to_string(), healthy);
+    }
+
+    async fn healthy_targets(&self) -> Vec<String> {
+        self.health_status
+            .read()
+            .await
+            .iter()
+            .filter_map(|(addr, &healthy)| if healthy { Some(addr.clone()) } else { None })
+            .collect()
+    }
+}
+
+/// Random load balancer - true random selection among healthy targets
+struct RandomBalancer {
+    targets: Vec<UpstreamTarget>,
+    health_status: Arc<RwLock<HashMap<String, bool>>>,
+}
+
+impl RandomBalancer {
+    fn new(targets: Vec<UpstreamTarget>) -> Self {
+        let mut health_status = HashMap::new();
+        for target in &targets {
+            health_status.insert(target.full_address(), true);
+        }
+
+        Self {
+            targets,
+            health_status: Arc::new(RwLock::new(health_status)),
+        }
+    }
+}
+
+#[async_trait]
+impl LoadBalancer for RandomBalancer {
+    async fn select(&self, _context: Option<&RequestContext>) -> SentinelResult<TargetSelection> {
+        use rand::seq::SliceRandom;
+
+        trace!(
+            total_targets = self.targets.len(),
+            algorithm = "random",
+            "Selecting upstream target"
+        );
+
+        let health = self.health_status.read().await;
+        let healthy_targets: Vec<_> = self
+            .targets
+            .iter()
+            .filter(|t| *health.get(&t.full_address()).unwrap_or(&true))
+            .collect();
+
+        if healthy_targets.is_empty() {
+            warn!(
+                total_targets = self.targets.len(),
+                algorithm = "random",
+                "No healthy upstream targets available"
+            );
+            return Err(SentinelError::NoHealthyUpstream);
+        }
+
+        let mut rng = rand::thread_rng();
+        let target = healthy_targets
+            .choose(&mut rng)
+            .ok_or(SentinelError::NoHealthyUpstream)?;
+
+        trace!(
+            selected_target = %target.full_address(),
+            healthy_count = healthy_targets.len(),
+            algorithm = "random",
+            "Selected target via random selection"
+        );
+
+        Ok(TargetSelection {
+            address: target.full_address(),
+            weight: target.weight,
+            metadata: HashMap::new(),
+        })
+    }
+
+    async fn report_health(&self, address: &str, healthy: bool) {
+        trace!(
+            target = %address,
+            healthy = healthy,
+            algorithm = "random",
             "Updating target health status"
         );
         self.health_status
@@ -799,7 +892,9 @@ impl UpstreamPool {
                 targets: targets.to_vec(),
                 health_status: Arc::new(RwLock::new(HashMap::new())),
             }),
-            LoadBalancingAlgorithm::Random => Arc::new(RoundRobinBalancer::new(targets.to_vec())),
+            LoadBalancingAlgorithm::Random => {
+                Arc::new(RandomBalancer::new(targets.to_vec()))
+            }
             LoadBalancingAlgorithm::ConsistentHash => Arc::new(ConsistentHashBalancer::new(
                 targets.to_vec(),
                 ConsistentHashConfig::default(),
@@ -814,6 +909,14 @@ impl UpstreamPool {
             LoadBalancingAlgorithm::LeastTokensQueued => Arc::new(LeastTokensQueuedBalancer::new(
                 targets.to_vec(),
                 LeastTokensQueuedConfig::default(),
+            )),
+            LoadBalancingAlgorithm::Maglev => Arc::new(MaglevBalancer::new(
+                targets.to_vec(),
+                MaglevConfig::default(),
+            )),
+            LoadBalancingAlgorithm::LocalityAware => Arc::new(LocalityAwareBalancer::new(
+                targets.to_vec(),
+                LocalityAwareConfig::default(),
             )),
         };
         Ok(balancer)
