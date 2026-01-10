@@ -145,6 +145,7 @@ mod tests {
 
         let config = ApiSchemaConfig {
             schema_file: None,
+            schema_content: None,
             request_schema: Some(schema),
             response_schema: None,
             validate_requests: true,
@@ -410,6 +411,7 @@ mod tests {
 
         let config = ApiSchemaConfig {
             schema_file: None,
+            schema_content: None,
             request_schema: Some(schema),
             response_schema: None,
             validate_requests: true,

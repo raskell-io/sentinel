@@ -121,18 +121,10 @@ impl ValidationResult {
 
 /// Validation options
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ValidationOpts {
     pub skip_network: bool,
     pub skip_agents: bool,
     pub skip_certs: bool,
 }
 
-impl Default for ValidationOpts {
-    fn default() -> Self {
-        Self {
-            skip_network: false,
-            skip_agents: false,
-            skip_certs: false,
-        }
-    }
-}

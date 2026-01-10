@@ -96,19 +96,71 @@ pub fn lint_config(config: &Config) -> ValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ListenerConfig, RouteConfig, UpstreamConfig, UpstreamTarget};
+    use crate::{
+        ConnectionPoolConfig, HttpVersionConfig, ListenerConfig, MatchCondition,
+        RoutePolicies, RouteConfig, ServiceType, UpstreamConfig, UpstreamTarget, UpstreamTimeouts,
+    };
+    use sentinel_common::types::{LoadBalancingAlgorithm, Priority};
     use std::collections::HashMap;
+
+    fn test_route_config() -> RouteConfig {
+        RouteConfig {
+            id: "test".to_string(),
+            priority: Priority::Normal,
+            matches: vec![MatchCondition::PathPrefix("/".to_string())],
+            upstream: None,
+            service_type: ServiceType::Web,
+            policies: RoutePolicies::default(),
+            filters: vec![],
+            builtin_handler: None,
+            waf_enabled: false,
+            circuit_breaker: None,
+            retry_policy: None,
+            static_files: None,
+            api_schema: None,
+            error_pages: None,
+            websocket: false,
+            websocket_inspection: false,
+            inference: None,
+            shadow: None,
+        }
+    }
+
+    fn test_upstream_config() -> UpstreamConfig {
+        UpstreamConfig {
+            id: "test".to_string(),
+            targets: vec![UpstreamTarget {
+                address: "127.0.0.1:8080".to_string(),
+                weight: 1,
+                max_requests: None,
+                metadata: HashMap::new(),
+            }],
+            load_balancing: LoadBalancingAlgorithm::RoundRobin,
+            health_check: None,
+            connection_pool: ConnectionPoolConfig::default(),
+            timeouts: UpstreamTimeouts::default(),
+            tls: None,
+            http_version: HttpVersionConfig::default(),
+        }
+    }
+
+    fn test_listener_config(address: &str) -> ListenerConfig {
+        ListenerConfig {
+            id: "test".to_string(),
+            address: address.to_string(),
+            protocol: crate::ListenerProtocol::Http,
+            tls: None,
+            default_route: None,
+            request_timeout_secs: 60,
+            keepalive_timeout_secs: 75,
+            max_concurrent_streams: 100,
+        }
+    }
 
     #[test]
     fn test_lint_missing_retry_policy() {
-        let config = Config {
-            routes: vec![RouteConfig {
-                id: "test".to_string(),
-                retry_policy: None,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let mut config = Config::default_for_testing();
+        config.routes = vec![test_route_config()];
 
         let result = lint_config(&config);
 
@@ -120,23 +172,8 @@ mod tests {
 
     #[test]
     fn test_lint_missing_health_check() {
-        let mut upstreams = HashMap::new();
-        upstreams.insert(
-            "test".to_string(),
-            UpstreamConfig {
-                targets: vec![UpstreamTarget {
-                    address: "127.0.0.1:8080".to_string(),
-                    weight: 1,
-                }],
-                health_check: None,
-                ..Default::default()
-            },
-        );
-
-        let config = Config {
-            upstreams,
-            ..Default::default()
-        };
+        let mut config = Config::default_for_testing();
+        config.upstreams.insert("test".to_string(), test_upstream_config());
 
         let result = lint_config(&config);
 
@@ -148,14 +185,8 @@ mod tests {
 
     #[test]
     fn test_lint_http_on_port_80() {
-        let config = Config {
-            listeners: vec![ListenerConfig {
-                address: "0.0.0.0:80".to_string(),
-                tls: None,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let mut config = Config::default_for_testing();
+        config.listeners = vec![test_listener_config("0.0.0.0:80")];
 
         let result = lint_config(&config);
 

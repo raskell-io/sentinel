@@ -49,7 +49,7 @@ pub async fn validate_upstreams(config: &Config) -> ValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{UpstreamConfig, UpstreamTarget};
+    use crate::{ConnectionPoolConfig, HttpVersionConfig, UpstreamConfig, UpstreamTarget, UpstreamTimeouts};
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -58,18 +58,24 @@ mod tests {
         upstreams.insert(
             "test".to_string(),
             UpstreamConfig {
+                id: "test".to_string(),
                 targets: vec![UpstreamTarget {
                     address: "192.0.2.1:9999".to_string(), // TEST-NET-1 (unreachable)
                     weight: 1,
+                    max_requests: None,
+                    metadata: std::collections::HashMap::new(),
                 }],
-                ..Default::default()
+                load_balancing: sentinel_common::types::LoadBalancingAlgorithm::RoundRobin,
+                health_check: None,
+                connection_pool: ConnectionPoolConfig::default(),
+                timeouts: UpstreamTimeouts::default(),
+                tls: None,
+                http_version: HttpVersionConfig::default(),
             },
         );
 
-        let config = Config {
-            upstreams,
-            ..Default::default()
-        };
+        let mut config = Config::default_for_testing();
+        config.upstreams = upstreams;
 
         let result = validate_upstreams(&config).await;
 

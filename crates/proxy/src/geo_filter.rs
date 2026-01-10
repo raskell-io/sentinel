@@ -569,7 +569,7 @@ impl GeoDatabaseWatcher {
         for (filter_id, path) in db_paths {
             path_map
                 .entry(path)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(filter_id);
         }
 

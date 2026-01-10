@@ -631,7 +631,7 @@ impl ProxyHttp for SentinelProxy {
 
                         if !check_result.is_allowed() {
                             let retry_after_ms = check_result.retry_after_ms();
-                            let retry_after_secs = (retry_after_ms + 999) / 1000; // Round up
+                            let retry_after_secs = retry_after_ms.div_ceil(1000);
 
                             warn!(
                                 correlation_id = %ctx.trace_id,

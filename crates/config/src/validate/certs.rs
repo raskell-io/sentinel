@@ -113,22 +113,41 @@ fn load_and_validate_cert(cert_path: &Path) -> Result<Option<ValidationWarning>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ListenerConfig, TlsConfig};
+    use crate::{ListenerConfig, ListenerProtocol, TlsConfig};
+    use sentinel_common::types::TlsVersion;
+
+    fn test_tls_config() -> TlsConfig {
+        TlsConfig {
+            cert_file: "/nonexistent/cert.pem".into(),
+            key_file: "/nonexistent/key.pem".into(),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: TlsVersion::Tls12,
+            max_version: None,
+            cipher_suites: vec![],
+            client_auth: false,
+            ocsp_stapling: false,
+            session_resumption: false,
+        }
+    }
+
+    fn test_listener_config() -> ListenerConfig {
+        ListenerConfig {
+            id: "test".to_string(),
+            address: "0.0.0.0:443".to_string(),
+            protocol: ListenerProtocol::Https,
+            tls: Some(test_tls_config()),
+            default_route: None,
+            request_timeout_secs: 60,
+            keepalive_timeout_secs: 75,
+            max_concurrent_streams: 100,
+        }
+    }
 
     #[tokio::test]
     async fn test_validate_missing_certificate() {
-        let config = Config {
-            listeners: vec![ListenerConfig {
-                address: "0.0.0.0:443".to_string(),
-                tls: Some(TlsConfig {
-                    cert_file: "/nonexistent/cert.pem".into(),
-                    key_file: "/nonexistent/key.pem".into(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let mut config = Config::default_for_testing();
+        config.listeners = vec![test_listener_config()];
 
         let result = validate_certificates(&config).await;
 

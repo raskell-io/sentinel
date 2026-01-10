@@ -38,18 +38,36 @@ pub async fn validate_agents(config: &Config) -> ValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RouteConfig;
+    use crate::{MatchCondition, RoutePolicies, RouteConfig, ServiceType};
+    use sentinel_common::types::Priority;
+
+    fn test_route_with_filter(filter: &str) -> RouteConfig {
+        RouteConfig {
+            id: "test".to_string(),
+            priority: Priority::Normal,
+            matches: vec![MatchCondition::PathPrefix("/".to_string())],
+            upstream: None,
+            service_type: ServiceType::Web,
+            policies: RoutePolicies::default(),
+            filters: vec![filter.to_string()],
+            builtin_handler: None,
+            waf_enabled: false,
+            circuit_breaker: None,
+            retry_policy: None,
+            static_files: None,
+            api_schema: None,
+            error_pages: None,
+            websocket: false,
+            websocket_inspection: false,
+            inference: None,
+            shadow: None,
+        }
+    }
 
     #[tokio::test]
     async fn test_validate_missing_filter() {
-        let config = Config {
-            routes: vec![RouteConfig {
-                id: "test".to_string(),
-                filters: vec!["nonexistent-filter".to_string()],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let mut config = Config::default_for_testing();
+        config.routes = vec![test_route_with_filter("nonexistent-filter")];
 
         let result = validate_agents(&config).await;
 

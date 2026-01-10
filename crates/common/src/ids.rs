@@ -44,8 +44,10 @@ use uuid::Uuid;
 /// The resolution order follows "most specific wins": Service → Namespace → Global.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Scope {
     /// Global scope - visible everywhere in the configuration
+    #[default]
     Global,
     /// Namespace scope - visible within the namespace and its services
     Namespace(String),
@@ -110,11 +112,6 @@ impl Scope {
     }
 }
 
-impl Default for Scope {
-    fn default() -> Self {
-        Scope::Global
-    }
-}
 
 impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -9,7 +9,7 @@ SENTINEL_CONFIG = "config/sentinel.kdl"
 SENTINEL_WORKERS = "0"
 
 [tools]
-rust = "1.85.0"
+rust = "1.92.0"
 mdbook = "0.5.2"
 # These cargo tools are not recognized by mise yet, commenting out to avoid warnings
 # cargo-audit = "latest"
