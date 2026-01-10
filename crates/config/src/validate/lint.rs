@@ -123,6 +123,7 @@ mod tests {
             websocket_inspection: false,
             inference: None,
             shadow: None,
+            fallback: None,
         }
     }
 

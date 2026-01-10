@@ -1971,4 +1971,367 @@ mod tests {
         eprintln!("Error message: {}", error_msg);
         assert!(error_msg.contains("mutually exclusive") || error_msg.contains("Upstream"));
     }
+
+    #[test]
+    fn test_parse_fallback_config() {
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            upstreams {
+                upstream "openai-primary" {
+                    target "api.openai.com:443" weight=1
+                    load-balancing "round_robin"
+                }
+                upstream "anthropic-fallback" {
+                    target "api.anthropic.com:443" weight=1
+                    load-balancing "round_robin"
+                }
+                upstream "local-gpu" {
+                    target "localhost:8000" weight=1
+                    load-balancing "round_robin"
+                }
+            }
+
+            routes {
+                route "inference-api" {
+                    matches {
+                        path-prefix "/v1/chat/completions"
+                    }
+                    upstream "openai-primary"
+                    service-type "inference"
+
+                    inference {
+                        provider "openai"
+                    }
+
+                    fallback {
+                        max-attempts 2
+
+                        triggers {
+                            on-health-failure #true
+                            on-budget-exhausted #true
+                            on-latency-threshold-ms 5000
+                            on-error-codes 429 500 502 503 504
+                            on-connection-error #true
+                        }
+
+                        fallback-upstream "anthropic-fallback" {
+                            provider "anthropic"
+                            skip-if-unhealthy #true
+
+                            model-mapping {
+                                "gpt-4" "claude-3-opus"
+                                "gpt-4o" "claude-3-5-sonnet"
+                                "gpt-3.5-turbo" "claude-3-haiku"
+                            }
+                        }
+
+                        fallback-upstream "local-gpu" {
+                            provider "generic"
+                            skip-if-unhealthy #true
+
+                            model-mapping {
+                                "gpt-4*" "llama-3-70b"
+                                "gpt-3.5*" "llama-3-8b"
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).expect("Failed to parse KDL with fallback");
+
+        // Find the inference route
+        let route = config
+            .routes
+            .iter()
+            .find(|r| r.id == "inference-api")
+            .expect("Route not found");
+
+        assert!(route.fallback.is_some());
+        let fallback = route.fallback.as_ref().unwrap();
+
+        // Check max_attempts
+        assert_eq!(fallback.max_attempts, 2);
+
+        // Check triggers
+        assert!(fallback.triggers.on_health_failure);
+        assert!(fallback.triggers.on_budget_exhausted);
+        assert_eq!(fallback.triggers.on_latency_threshold_ms, Some(5000));
+        assert_eq!(fallback.triggers.on_error_codes, vec![429, 500, 502, 503, 504]);
+        assert!(fallback.triggers.on_connection_error);
+
+        // Check fallback upstreams
+        assert_eq!(fallback.upstreams.len(), 2);
+
+        let anthropic = &fallback.upstreams[0];
+        assert_eq!(anthropic.upstream, "anthropic-fallback");
+        assert!(matches!(
+            anthropic.provider,
+            crate::InferenceProvider::Anthropic
+        ));
+        assert!(anthropic.skip_if_unhealthy);
+        assert_eq!(anthropic.model_mapping.get("gpt-4"), Some(&"claude-3-opus".to_string()));
+        assert_eq!(anthropic.model_mapping.get("gpt-4o"), Some(&"claude-3-5-sonnet".to_string()));
+        assert_eq!(anthropic.model_mapping.get("gpt-3.5-turbo"), Some(&"claude-3-haiku".to_string()));
+
+        let local = &fallback.upstreams[1];
+        assert_eq!(local.upstream, "local-gpu");
+        assert!(matches!(
+            local.provider,
+            crate::InferenceProvider::Generic
+        ));
+        assert!(local.skip_if_unhealthy);
+        assert_eq!(local.model_mapping.get("gpt-4*"), Some(&"llama-3-70b".to_string()));
+        assert_eq!(local.model_mapping.get("gpt-3.5*"), Some(&"llama-3-8b".to_string()));
+    }
+
+    #[test]
+    fn test_parse_fallback_config_minimal() {
+        // Test minimal fallback configuration with defaults
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            upstreams {
+                upstream "primary" {
+                    target "127.0.0.1:8001" weight=1
+                }
+                upstream "fallback" {
+                    target "127.0.0.1:8002" weight=1
+                }
+            }
+
+            routes {
+                route "api" {
+                    matches {
+                        path-prefix "/api"
+                    }
+                    upstream "primary"
+
+                    fallback {
+                        fallback-upstream "fallback" {
+                            // Using defaults
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).expect("Failed to parse minimal fallback KDL");
+
+        let route = config
+            .routes
+            .iter()
+            .find(|r| r.id == "api")
+            .expect("Route not found");
+
+        assert!(route.fallback.is_some());
+        let fallback = route.fallback.as_ref().unwrap();
+
+        // Check defaults
+        assert_eq!(fallback.max_attempts, 3); // default
+        assert!(fallback.triggers.on_health_failure); // default true
+        assert!(!fallback.triggers.on_budget_exhausted); // default false
+        assert!(fallback.triggers.on_connection_error); // default true
+        assert!(fallback.triggers.on_error_codes.is_empty()); // default empty
+
+        // Check fallback upstream
+        assert_eq!(fallback.upstreams.len(), 1);
+        let fb_upstream = &fallback.upstreams[0];
+        assert_eq!(fb_upstream.upstream, "fallback");
+        assert!(!fb_upstream.skip_if_unhealthy); // default false
+        assert!(fb_upstream.model_mapping.is_empty()); // default empty
+    }
+
+    #[test]
+    fn test_parse_model_routing_config() {
+        // Test model-based routing configuration
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            upstreams {
+                upstream "openai-gpt4" {
+                    target "api.openai.com:443"
+                }
+                upstream "openai-primary" {
+                    target "api.openai.com:443"
+                }
+                upstream "anthropic-backend" {
+                    target "api.anthropic.com:443"
+                }
+                upstream "local-gpu" {
+                    target "localhost:8000"
+                }
+            }
+
+            routes {
+                route "inference-api" {
+                    matches {
+                        path-prefix "/v1/chat/completions"
+                    }
+                    upstream "openai-primary"
+
+                    inference {
+                        provider "openai"
+
+                        model-routing {
+                            default-upstream "openai-primary"
+
+                            model "gpt-4" upstream="openai-gpt4" provider="openai"
+                            model "gpt-4*" upstream="openai-primary" provider="openai"
+                            model "claude-*" upstream="anthropic-backend" provider="anthropic"
+                            model "llama-*" upstream="local-gpu" provider="generic"
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).expect("Failed to parse model routing KDL");
+
+        let route = config
+            .routes
+            .iter()
+            .find(|r| r.id == "inference-api")
+            .expect("Route not found");
+
+        // Check inference config exists
+        let inference = route.inference.as_ref().expect("Inference config not found");
+        assert_eq!(inference.provider, crate::InferenceProvider::OpenAi);
+
+        // Check model routing config
+        let model_routing = inference
+            .model_routing
+            .as_ref()
+            .expect("Model routing config not found");
+
+        assert_eq!(
+            model_routing.default_upstream,
+            Some("openai-primary".to_string())
+        );
+        assert_eq!(model_routing.mappings.len(), 4);
+
+        // Check first mapping (gpt-4 exact)
+        let mapping = &model_routing.mappings[0];
+        assert_eq!(mapping.model_pattern, "gpt-4");
+        assert_eq!(mapping.upstream, "openai-gpt4");
+        assert_eq!(mapping.provider, Some(crate::InferenceProvider::OpenAi));
+
+        // Check glob pattern mapping (claude-*)
+        let claude_mapping = model_routing
+            .mappings
+            .iter()
+            .find(|m| m.model_pattern == "claude-*")
+            .expect("Claude mapping not found");
+        assert_eq!(claude_mapping.upstream, "anthropic-backend");
+        assert_eq!(
+            claude_mapping.provider,
+            Some(crate::InferenceProvider::Anthropic)
+        );
+
+        // Check local GPU mapping
+        let local_mapping = model_routing
+            .mappings
+            .iter()
+            .find(|m| m.model_pattern == "llama-*")
+            .expect("Local mapping not found");
+        assert_eq!(local_mapping.upstream, "local-gpu");
+        assert_eq!(
+            local_mapping.provider,
+            Some(crate::InferenceProvider::Generic)
+        );
+    }
+
+    #[test]
+    fn test_parse_model_routing_minimal() {
+        // Test minimal model routing without provider override
+        let kdl = r#"
+            server {
+                worker-threads 4
+            }
+
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+
+            upstreams {
+                upstream "default-backend" {
+                    target "localhost:8000"
+                }
+                upstream "fast-backend" {
+                    target "localhost:8001"
+                }
+            }
+
+            routes {
+                route "inference" {
+                    matches {
+                        path-prefix "/inference"
+                    }
+                    upstream "default-backend"
+
+                    inference {
+                        model-routing {
+                            model "fast-model" upstream="fast-backend"
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let config = Config::from_kdl(kdl).expect("Failed to parse minimal model routing KDL");
+
+        let route = config
+            .routes
+            .iter()
+            .find(|r| r.id == "inference")
+            .expect("Route not found");
+
+        let inference = route.inference.as_ref().expect("Inference config not found");
+        let model_routing = inference
+            .model_routing
+            .as_ref()
+            .expect("Model routing config not found");
+
+        // No default upstream specified
+        assert!(model_routing.default_upstream.is_none());
+
+        // Single mapping without provider
+        assert_eq!(model_routing.mappings.len(), 1);
+        let mapping = &model_routing.mappings[0];
+        assert_eq!(mapping.model_pattern, "fast-model");
+        assert_eq!(mapping.upstream, "fast-backend");
+        assert!(mapping.provider.is_none()); // No provider override
+    }
 }

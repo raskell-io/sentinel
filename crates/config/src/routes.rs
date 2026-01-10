@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use validator::Validate;
 
+use sentinel_common::budget::{CostAttributionConfig, TokenBudgetConfig};
 use sentinel_common::types::{ByteSize, CircuitBreakerConfig, Priority, RetryPolicy};
 
 use crate::filters::RateLimitKey;
@@ -95,6 +96,11 @@ pub struct RouteConfig {
     /// Mirrors requests to a shadow upstream for safe canary testing
     #[serde(default)]
     pub shadow: Option<ShadowConfig>,
+
+    /// Fallback routing configuration
+    /// Enables automatic failover to alternative upstreams on failure
+    #[serde(default)]
+    pub fallback: Option<FallbackConfig>,
 }
 
 // ============================================================================
@@ -627,11 +633,20 @@ pub struct InferenceConfig {
     /// Header containing model name (optional, provider-specific default)
     pub model_header: Option<String>,
 
-    /// Token-based rate limiting configuration
+    /// Token-based rate limiting configuration (per-minute)
     pub rate_limit: Option<TokenRateLimit>,
+
+    /// Token budget configuration (per-period cumulative tracking)
+    pub budget: Option<TokenBudgetConfig>,
+
+    /// Cost attribution configuration (per-model pricing)
+    pub cost_attribution: Option<CostAttributionConfig>,
 
     /// Inference-aware routing configuration
     pub routing: Option<InferenceRouting>,
+
+    /// Model-based upstream routing configuration
+    pub model_routing: Option<ModelRoutingConfig>,
 }
 
 
@@ -646,6 +661,17 @@ pub enum InferenceProvider {
     OpenAi,
     /// Anthropic API (uses anthropic-ratelimit-tokens-remaining header)
     Anthropic,
+}
+
+impl InferenceProvider {
+    /// Returns the string label for this provider (for metrics and logging).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Generic => "generic",
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+        }
+    }
 }
 
 /// Token-based rate limiting configuration
@@ -705,4 +731,138 @@ pub enum InferenceRoutingStrategy {
     RoundRobin,
     /// Route to upstream with lowest observed latency
     LeastLatency,
+}
+
+// ============================================================================
+// Model-Based Routing Configuration
+// ============================================================================
+
+/// Model-based routing configuration for inference requests.
+///
+/// Routes requests to different upstreams based on the model name in the request.
+/// Supports glob patterns for flexible model matching (e.g., `gpt-4*`, `claude-*`).
+///
+/// # Example KDL Configuration
+/// ```kdl
+/// model-routing {
+///     model "gpt-4" upstream="openai-primary"
+///     model "gpt-4*" upstream="openai-primary"
+///     model "claude-*" upstream="anthropic-backend" provider="anthropic"
+///     default-upstream "openai-primary"
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelRoutingConfig {
+    /// Ordered list of model-to-upstream mappings (first match wins).
+    /// Supports exact matches and glob patterns with `*` wildcard.
+    #[serde(default)]
+    pub mappings: Vec<ModelUpstreamMapping>,
+
+    /// Default upstream when no mapping matches (overrides route's upstream).
+    /// If not set, falls back to the route's configured upstream.
+    pub default_upstream: Option<String>,
+}
+
+/// A single model-to-upstream mapping.
+///
+/// Maps a model name (or pattern) to a specific upstream pool.
+/// Optionally overrides the inference provider for cross-provider routing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelUpstreamMapping {
+    /// Model name pattern. Can be:
+    /// - Exact match: `"gpt-4"`, `"claude-3-opus"`
+    /// - Glob pattern: `"gpt-4*"`, `"claude-*"`, `"*-turbo"`
+    pub model_pattern: String,
+
+    /// Target upstream pool for requests matching this model.
+    pub upstream: String,
+
+    /// Optional provider override for cross-provider routing.
+    /// When set, the inference provider will be switched for token
+    /// extraction and rate limiting purposes.
+    pub provider: Option<InferenceProvider>,
+}
+
+// ============================================================================
+// Fallback Routing Configuration
+// ============================================================================
+
+/// Fallback routing configuration for automatic failover
+///
+/// Enables requests to automatically fail over to alternative upstreams
+/// when the primary upstream is unhealthy, exhausted, or returns errors.
+/// Supports cross-provider failback with model mapping.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FallbackConfig {
+    /// Ordered list of fallback upstreams (tried in order)
+    #[serde(default)]
+    pub upstreams: Vec<FallbackUpstream>,
+
+    /// Triggers that activate fallback behavior
+    #[serde(default)]
+    pub triggers: FallbackTriggers,
+
+    /// Maximum number of fallback attempts before giving up
+    #[serde(default = "default_max_fallback_attempts")]
+    pub max_attempts: u32,
+}
+
+/// A single fallback upstream with optional model mapping
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FallbackUpstream {
+    /// Upstream pool ID to fallback to
+    pub upstream: String,
+
+    /// Provider type for this upstream (for correct token extraction)
+    #[serde(default)]
+    pub provider: InferenceProvider,
+
+    /// Model mapping from primary model to this provider's equivalent
+    /// Key: original model name (or pattern with * wildcard), Value: replacement model name
+    #[serde(default)]
+    pub model_mapping: HashMap<String, String>,
+
+    /// Skip this fallback if its health check reports unhealthy
+    #[serde(default)]
+    pub skip_if_unhealthy: bool,
+}
+
+/// Triggers that activate fallback routing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FallbackTriggers {
+    /// Trigger on health check failure of primary upstream
+    #[serde(default = "default_true")]
+    pub on_health_failure: bool,
+
+    /// Trigger when token budget is exhausted
+    #[serde(default)]
+    pub on_budget_exhausted: bool,
+
+    /// Trigger when latency exceeds threshold (milliseconds)
+    #[serde(default)]
+    pub on_latency_threshold_ms: Option<u64>,
+
+    /// Trigger on specific HTTP error codes from upstream
+    #[serde(default)]
+    pub on_error_codes: Vec<u16>,
+
+    /// Trigger on connection errors (refused, timeout, etc.)
+    #[serde(default = "default_true")]
+    pub on_connection_error: bool,
+}
+
+impl Default for FallbackTriggers {
+    fn default() -> Self {
+        Self {
+            on_health_failure: true,
+            on_budget_exhausted: false,
+            on_latency_threshold_ms: None,
+            on_error_codes: Vec::new(),
+            on_connection_error: true,
+        }
+    }
+}
+
+fn default_max_fallback_attempts() -> u32 {
+    3
 }

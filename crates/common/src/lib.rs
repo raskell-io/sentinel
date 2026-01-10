@@ -13,6 +13,7 @@
 //! - [`circuit_breaker`]: Circuit breaker state machine
 //! - [`registry`]: Generic type-safe registry abstraction
 
+pub mod budget;
 pub mod circuit_breaker;
 pub mod errors;
 pub mod ids;
@@ -61,3 +62,9 @@ pub use scoped_registry::ScopedRegistry;
 
 // Re-export scoped metrics
 pub use scoped_metrics::{ScopedMetrics, ScopeLabels};
+
+// Re-export budget types
+pub use budget::{
+    BudgetAlert, BudgetCheckResult, BudgetPeriod, CostAttributionConfig, CostResult,
+    ModelPricing, TenantBudgetStatus, TokenBudgetConfig,
+};

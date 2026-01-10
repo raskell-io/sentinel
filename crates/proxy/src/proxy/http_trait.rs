@@ -19,11 +19,16 @@ use std::time::Duration;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::cache::{get_cache_eviction, get_cache_lock, get_cache_storage};
+use crate::inference::{is_sse_response, StreamingTokenCounter};
 use crate::logging::{AccessLogEntry, AuditEventType, AuditLogEntry};
 use crate::rate_limit::HeaderAccessor;
 use crate::routing::RequestInfo;
 
-use super::context::RequestContext;
+use super::context::{FallbackReason, RequestContext};
+use super::fallback::FallbackEvaluator;
+use super::fallback_metrics::get_fallback_metrics;
+use super::model_routing;
+use super::model_routing_metrics::get_model_routing_metrics;
 use super::SentinelProxy;
 
 /// Helper type for rate limiting when we don't need header access
@@ -319,28 +324,175 @@ impl ProxyHttp for SentinelProxy {
             }
         }
 
-        // Regular route with upstream
-        if let Some(ref upstream) = route_match.config.upstream {
-            ctx.upstream = Some(upstream.clone());
-            trace!(
-                correlation_id = %ctx.trace_id,
-                route_id = %route_match.route_id,
-                upstream = %upstream,
-                "Upstream configured for route"
+        // === Model-based routing (for inference routes) ===
+        // Check if model routing is configured and select upstream based on model
+        let mut model_routing_applied = false;
+        if let Some(ref inference) = route_match.config.inference {
+            if let Some(ref model_routing) = inference.model_routing {
+                // Try to extract model from headers (fast path - no body parsing needed)
+                let model = model_routing::extract_model_from_headers(&req_header.headers);
+
+                if let Some(ref model_name) = model {
+                    // Find upstream for this model
+                    if let Some(routing_result) =
+                        model_routing::find_upstream_for_model(model_routing, model_name)
+                    {
+                        debug!(
+                            correlation_id = %ctx.trace_id,
+                            route_id = %route_match.route_id,
+                            model = %model_name,
+                            upstream = %routing_result.upstream,
+                            is_default = routing_result.is_default,
+                            provider_override = ?routing_result.provider,
+                            "Model-based routing selected upstream"
+                        );
+
+                        ctx.record_model_routing(
+                            &routing_result.upstream,
+                            Some(model_name.clone()),
+                            routing_result.provider,
+                        );
+                        model_routing_applied = true;
+
+                        // Record metrics
+                        if let Some(metrics) = get_model_routing_metrics() {
+                            metrics.record_model_routed(
+                                route_match.route_id.as_str(),
+                                model_name,
+                                &routing_result.upstream,
+                            );
+                            if routing_result.is_default {
+                                metrics.record_default_upstream(route_match.route_id.as_str());
+                            }
+                            if let Some(provider) = routing_result.provider {
+                                metrics.record_provider_override(
+                                    route_match.route_id.as_str(),
+                                    &routing_result.upstream,
+                                    provider.as_str(),
+                                );
+                            }
+                        }
+                    }
+                } else if let Some(ref default_upstream) = model_routing.default_upstream {
+                    // No model in headers, use default upstream
+                    debug!(
+                        correlation_id = %ctx.trace_id,
+                        route_id = %route_match.route_id,
+                        upstream = %default_upstream,
+                        "Model-based routing using default upstream (no model header)"
+                    );
+                    ctx.record_model_routing(default_upstream, None, None);
+                    model_routing_applied = true;
+
+                    // Record metrics for no model header case
+                    if let Some(metrics) = get_model_routing_metrics() {
+                        metrics.record_no_model_header(route_match.route_id.as_str());
+                    }
+                }
+            }
+        }
+
+        // Regular route with upstream (if model routing didn't set it)
+        if !model_routing_applied {
+            if let Some(ref upstream) = route_match.config.upstream {
+                ctx.upstream = Some(upstream.clone());
+                trace!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = %route_match.route_id,
+                    upstream = %upstream,
+                    "Upstream configured for route"
+                );
+            } else {
+                error!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = %route_match.route_id,
+                    "Route has no upstream configured"
+                );
+                return Err(Error::explain(
+                    ErrorType::InternalError,
+                    format!(
+                        "Route '{}' has no upstream configured",
+                        route_match.route_id
+                    ),
+                ));
+            }
+        }
+
+        // === Fallback routing evaluation (pre-request) ===
+        // Check if fallback should be triggered due to health or budget conditions
+        if let Some(ref fallback_config) = route_match.config.fallback {
+            let upstream_name = ctx.upstream.as_ref().unwrap();
+
+            // Check if primary upstream is healthy
+            let is_healthy = if let Some(pool) = self.upstream_pools.get(upstream_name).await {
+                pool.has_healthy_targets().await
+            } else {
+                false // Pool not found, treat as unhealthy
+            };
+
+            // Check if budget is exhausted (for inference routes)
+            let is_budget_exhausted = ctx.inference_budget_exhausted;
+
+            // Get model name for model mapping (inference routes)
+            let current_model = ctx.inference_model.as_deref();
+
+            // Create fallback evaluator
+            let evaluator = FallbackEvaluator::new(
+                fallback_config,
+                ctx.tried_upstreams(),
+                ctx.fallback_attempt,
             );
-        } else {
-            error!(
-                correlation_id = %ctx.trace_id,
-                route_id = %route_match.route_id,
-                "Route has no upstream configured"
-            );
-            return Err(Error::explain(
-                ErrorType::InternalError,
-                format!(
-                    "Route '{}' has no upstream configured",
-                    route_match.route_id
-                ),
-            ));
+
+            // Evaluate pre-request fallback conditions
+            if let Some(decision) = evaluator.should_fallback_before_request(
+                upstream_name,
+                is_healthy,
+                is_budget_exhausted,
+                current_model,
+            ) {
+                info!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = %route_match.route_id,
+                    from_upstream = %upstream_name,
+                    to_upstream = %decision.next_upstream,
+                    reason = %decision.reason,
+                    fallback_attempt = ctx.fallback_attempt + 1,
+                    "Triggering fallback routing"
+                );
+
+                // Record fallback metrics
+                if let Some(metrics) = get_fallback_metrics() {
+                    metrics.record_fallback_attempt(
+                        route_match.route_id.as_str(),
+                        upstream_name,
+                        &decision.next_upstream,
+                        &decision.reason,
+                    );
+                }
+
+                // Record fallback in context
+                ctx.record_fallback(decision.reason, &decision.next_upstream);
+
+                // Apply model mapping if present
+                if let Some((original, mapped)) = decision.model_mapping {
+                    // Record model mapping metrics
+                    if let Some(metrics) = get_fallback_metrics() {
+                        metrics.record_model_mapping(
+                            route_match.route_id.as_str(),
+                            &original,
+                            &mapped,
+                        );
+                    }
+
+                    ctx.record_model_mapping(original, mapped);
+                    trace!(
+                        correlation_id = %ctx.trace_id,
+                        original_model = ?ctx.model_mapping_applied().map(|m| &m.0),
+                        mapped_model = ?ctx.model_mapping_applied().map(|m| &m.1),
+                        "Applied model mapping for fallback"
+                    );
+                }
+            }
         }
 
         debug!(
@@ -473,6 +625,13 @@ impl ProxyHttp for SentinelProxy {
             last_error = ?last_error,
             "All upstream selection attempts failed"
         );
+
+        // Record exhausted metric if fallback was used but all upstreams failed
+        if ctx.used_fallback() {
+            if let Some(metrics) = get_fallback_metrics() {
+                metrics.record_fallback_exhausted(ctx.route_id.as_deref().unwrap_or("unknown"));
+            }
+        }
 
         Err(Error::explain(
             ErrorType::InternalError,
@@ -689,6 +848,94 @@ impl ProxyHttp for SentinelProxy {
                             model = ?check_result.model,
                             "Inference rate limit check passed"
                         );
+
+                        // Check budget tracking (cumulative per-period limits)
+                        if self.inference_rate_limit_manager.has_budget(route_id) {
+                            ctx.inference_budget_enabled = true;
+
+                            if let Some(budget_result) = self.inference_rate_limit_manager.check_budget(
+                                route_id,
+                                rate_limit_key,
+                                check_result.estimated_tokens,
+                            ) {
+                                if !budget_result.is_allowed() {
+                                    let retry_after_secs = budget_result.retry_after_secs();
+
+                                    warn!(
+                                        correlation_id = %ctx.trace_id,
+                                        route_id = route_id,
+                                        client_ip = %ctx.client_ip,
+                                        estimated_tokens = check_result.estimated_tokens,
+                                        retry_after_secs = retry_after_secs,
+                                        "Token budget exhausted"
+                                    );
+
+                                    ctx.inference_budget_exhausted = true;
+                                    self.metrics.record_blocked_request("budget_exhausted");
+
+                                    // Audit log the budget exhaustion
+                                    let audit_entry = AuditLogEntry::new(
+                                        &ctx.trace_id,
+                                        AuditEventType::RateLimitExceeded,
+                                        &ctx.method,
+                                        &ctx.path,
+                                        &ctx.client_ip,
+                                    )
+                                    .with_route_id(route_id)
+                                    .with_status_code(429)
+                                    .with_reason("Token budget exhausted".to_string());
+                                    self.log_manager.log_audit(&audit_entry);
+
+                                    // Send 429 response with budget headers
+                                    let body = "Token budget exhausted";
+                                    let reset_at = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs()
+                                        + retry_after_secs;
+
+                                    crate::http_helpers::write_rate_limit_error(
+                                        session,
+                                        429,
+                                        body,
+                                        0,
+                                        0,
+                                        reset_at,
+                                        retry_after_secs,
+                                    )
+                                    .await?;
+                                    return Ok(true);
+                                }
+
+                                // Capture budget status for response headers
+                                let remaining = match &budget_result {
+                                    sentinel_common::budget::BudgetCheckResult::Allowed { remaining } => *remaining as i64,
+                                    sentinel_common::budget::BudgetCheckResult::Soft { remaining, .. } => *remaining,
+                                    _ => 0,
+                                };
+                                ctx.inference_budget_remaining = Some(remaining);
+
+                                // Get period reset time from budget status
+                                if let Some(status) = self.inference_rate_limit_manager.budget_status(
+                                    route_id,
+                                    rate_limit_key,
+                                ) {
+                                    ctx.inference_budget_period_reset = Some(status.period_end);
+                                }
+
+                                trace!(
+                                    correlation_id = %ctx.trace_id,
+                                    route_id = route_id,
+                                    budget_remaining = remaining,
+                                    "Token budget check passed"
+                                );
+                            }
+                        }
+
+                        // Check if cost attribution is enabled
+                        if self.inference_rate_limit_manager.has_cost_attribution(route_id) {
+                            ctx.inference_cost_enabled = true;
+                        }
                     }
                 }
             }
@@ -1263,9 +1510,97 @@ impl ProxyHttp for SentinelProxy {
             upstream_response.insert_header("X-RateLimit-Reset", rate_info.reset_at.to_string())?;
         }
 
+        // Add token budget headers if budget tracking was enabled
+        if ctx.inference_budget_enabled {
+            if let Some(remaining) = ctx.inference_budget_remaining {
+                upstream_response.insert_header("X-Budget-Remaining", remaining.to_string())?;
+            }
+            if let Some(period_reset) = ctx.inference_budget_period_reset {
+                // Format as ISO 8601 timestamp
+                let reset_datetime = chrono::DateTime::from_timestamp(period_reset as i64, 0)
+                    .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                    .unwrap_or_else(|| period_reset.to_string());
+                upstream_response.insert_header("X-Budget-Period-Reset", reset_datetime)?;
+            }
+        }
+
         // Add GeoIP country header if geo lookup was performed
         if let Some(ref country_code) = ctx.geo_country_code {
             upstream_response.insert_header("X-GeoIP-Country", country_code)?;
+        }
+
+        // Add fallback routing headers if fallback was used
+        if ctx.used_fallback() {
+            upstream_response.insert_header("X-Fallback-Used", "true")?;
+
+            if let Some(ref upstream) = ctx.upstream {
+                upstream_response.insert_header("X-Fallback-Upstream", upstream)?;
+            }
+
+            if let Some(ref reason) = ctx.fallback_reason {
+                upstream_response.insert_header("X-Fallback-Reason", reason.to_string())?;
+            }
+
+            if let Some(ref original) = ctx.original_upstream {
+                upstream_response.insert_header("X-Original-Upstream", original)?;
+            }
+
+            if let Some(ref mapping) = ctx.model_mapping_applied {
+                upstream_response.insert_header(
+                    "X-Model-Mapping",
+                    format!("{} -> {}", mapping.0, mapping.1),
+                )?;
+            }
+
+            trace!(
+                correlation_id = %ctx.trace_id,
+                fallback_attempt = ctx.fallback_attempt,
+                fallback_upstream = ctx.upstream.as_deref().unwrap_or("unknown"),
+                original_upstream = ctx.original_upstream.as_deref().unwrap_or("unknown"),
+                "Added fallback response headers"
+            );
+
+            // Record fallback success metrics for successful responses (2xx/3xx)
+            if status < 400 {
+                if let Some(metrics) = get_fallback_metrics() {
+                    metrics.record_fallback_success(
+                        ctx.route_id.as_deref().unwrap_or("unknown"),
+                        ctx.upstream.as_deref().unwrap_or("unknown"),
+                    );
+                }
+            }
+        }
+
+        // Initialize streaming token counter for SSE responses on inference routes
+        if ctx.inference_rate_limit_enabled {
+            // Check if this is an SSE response
+            let content_type = upstream_response
+                .headers
+                .get("content-type")
+                .and_then(|ct| ct.to_str().ok());
+
+            if is_sse_response(content_type) {
+                // Get provider from route config
+                let provider = ctx
+                    .route_config
+                    .as_ref()
+                    .and_then(|r| r.inference.as_ref())
+                    .map(|i| i.provider.clone())
+                    .unwrap_or_default();
+
+                ctx.inference_streaming_response = true;
+                ctx.inference_streaming_counter = Some(StreamingTokenCounter::new(
+                    provider,
+                    ctx.inference_model.clone(),
+                ));
+
+                trace!(
+                    correlation_id = %ctx.trace_id,
+                    content_type = ?content_type,
+                    model = ?ctx.inference_model,
+                    "Initialized streaming token counter for SSE response"
+                );
+            }
         }
 
         // Generate custom error pages for error responses
@@ -1561,6 +1896,22 @@ impl ProxyHttp for SentinelProxy {
                 end_of_stream = end_of_stream,
                 "Processing response body chunk"
             );
+
+            // Process SSE chunks for streaming token counting
+            if let Some(ref mut counter) = ctx.inference_streaming_counter {
+                let result = counter.process_chunk(chunk);
+
+                if result.content.is_some() || result.is_done {
+                    trace!(
+                        correlation_id = %ctx.trace_id,
+                        has_content = result.content.is_some(),
+                        is_done = result.is_done,
+                        chunks_processed = counter.chunks_processed(),
+                        accumulated_content_len = counter.content().len(),
+                        "Processed SSE chunk for token counting"
+                    );
+                }
+            }
 
             // Response body inspection (buffered mode only)
             // Note: Streaming mode for response bodies is not currently supported
@@ -2353,8 +2704,30 @@ impl ProxyHttp for SentinelProxy {
                     .cloned()
                     .unwrap_or_default();
 
+                // For streaming responses, finalize the streaming token counter
+                let streaming_result = if ctx.inference_streaming_response {
+                    ctx.inference_streaming_counter
+                        .as_ref()
+                        .map(|counter| counter.finalize())
+                } else {
+                    None
+                };
+
+                // Log streaming token count info
+                if let Some(ref result) = streaming_result {
+                    debug!(
+                        correlation_id = %ctx.trace_id,
+                        output_tokens = result.output_tokens,
+                        input_tokens = ?result.input_tokens,
+                        source = ?result.source,
+                        content_length = result.content_length,
+                        "Finalized streaming token count"
+                    );
+                }
+
                 // Response body would require buffering, which is expensive
-                // Most LLM APIs provide token counts in headers, so we use those
+                // For non-streaming, most LLM APIs provide token counts in headers
+                // For streaming, we use the accumulated SSE content
                 let empty_body: &[u8] = &[];
 
                 if let Some(actual_estimate) = self.inference_rate_limit_manager.record_actual(
@@ -2364,17 +2737,104 @@ impl ProxyHttp for SentinelProxy {
                     empty_body,
                     ctx.inference_estimated_tokens,
                 ) {
-                    ctx.inference_actual_tokens = Some(actual_estimate.tokens);
+                    // Use streaming result if available and header extraction failed
+                    let (actual_tokens, source_info) = if let Some(ref streaming) = streaming_result {
+                        // Prefer API-provided counts from streaming, otherwise use tiktoken count
+                        if streaming.total_tokens.is_some() {
+                            (streaming.total_tokens.unwrap(), "streaming_api")
+                        } else if actual_estimate.source == crate::inference::TokenSource::Estimated {
+                            // Header extraction failed, use streaming tiktoken count
+                            // Estimate total by adding input estimate + output from streaming
+                            let total = ctx.inference_input_tokens + streaming.output_tokens;
+                            (total, "streaming_tiktoken")
+                        } else {
+                            (actual_estimate.tokens, "headers")
+                        }
+                    } else {
+                        (actual_estimate.tokens, "headers")
+                    };
+
+                    ctx.inference_actual_tokens = Some(actual_tokens);
 
                     debug!(
                         correlation_id = %ctx.trace_id,
                         route_id = route_id,
                         estimated_tokens = ctx.inference_estimated_tokens,
-                        actual_tokens = actual_estimate.tokens,
-                        source = ?actual_estimate.source,
+                        actual_tokens = actual_tokens,
+                        source = source_info,
+                        streaming_response = ctx.inference_streaming_response,
                         model = ?ctx.inference_model,
                         "Recorded actual inference tokens"
                     );
+
+                    // Record budget usage with actual tokens (if budget tracking enabled)
+                    if ctx.inference_budget_enabled {
+                        let alerts = self.inference_rate_limit_manager.record_budget(
+                            route_id,
+                            rate_limit_key,
+                            actual_tokens,
+                        );
+
+                        // Log any budget alerts that fired
+                        for alert in alerts.iter() {
+                            warn!(
+                                correlation_id = %ctx.trace_id,
+                                route_id = route_id,
+                                tenant = %alert.tenant,
+                                threshold_pct = alert.threshold * 100.0,
+                                tokens_used = alert.tokens_used,
+                                tokens_limit = alert.tokens_limit,
+                                "Token budget alert threshold crossed"
+                            );
+                        }
+
+                        // Update context with remaining budget
+                        if let Some(status) = self.inference_rate_limit_manager.budget_status(
+                            route_id,
+                            rate_limit_key,
+                        ) {
+                            ctx.inference_budget_remaining = Some(status.tokens_remaining as i64);
+                        }
+                    }
+
+                    // Calculate cost if cost attribution is enabled
+                    if ctx.inference_cost_enabled {
+                        if let Some(model) = ctx.inference_model.as_deref() {
+                            // Use streaming result for more accurate input/output split if available
+                            let (input_tokens, output_tokens) = if let Some(ref streaming) = streaming_result {
+                                // Streaming gives us accurate output tokens
+                                let input = streaming.input_tokens.unwrap_or(ctx.inference_input_tokens);
+                                let output = streaming.output_tokens;
+                                (input, output)
+                            } else {
+                                // Fallback: estimate output from total - input
+                                let input = ctx.inference_input_tokens;
+                                let output = actual_tokens.saturating_sub(input);
+                                (input, output)
+                            };
+                            ctx.inference_output_tokens = output_tokens;
+
+                            if let Some(cost_result) = self.inference_rate_limit_manager.calculate_cost(
+                                route_id,
+                                model,
+                                input_tokens,
+                                output_tokens,
+                            ) {
+                                ctx.inference_request_cost = Some(cost_result.total_cost);
+
+                                trace!(
+                                    correlation_id = %ctx.trace_id,
+                                    route_id = route_id,
+                                    model = model,
+                                    input_tokens = input_tokens,
+                                    output_tokens = output_tokens,
+                                    total_cost = cost_result.total_cost,
+                                    currency = %cost_result.currency,
+                                    "Calculated inference request cost"
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }

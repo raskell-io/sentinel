@@ -5,9 +5,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::trace;
 
+use sentinel_common::budget::{BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig};
+
 use crate::routes::*;
 
-use super::helpers::{get_bool_entry, get_first_arg_string, get_int_entry, get_string_entry};
+use super::helpers::{get_bool_entry, get_first_arg_string, get_float_entry, get_int_entry, get_string_entry};
 
 /// Parse routes configuration block
 pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
@@ -112,6 +114,7 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     websocket_inspection: get_bool_entry(child, "websocket-inspection")
                         .unwrap_or(false),
                     shadow,
+                    fallback: parse_fallback_config_opt(child)?,
                 });
             }
         }
@@ -541,6 +544,333 @@ fn parse_shadow_config(node: &kdl::KdlNode) -> Result<ShadowConfig> {
     })
 }
 
+/// Parse optional fallback configuration from a route
+fn parse_fallback_config_opt(node: &kdl::KdlNode) -> Result<Option<FallbackConfig>> {
+    if let Some(route_children) = node.children() {
+        if let Some(fallback_node) = route_children.get("fallback") {
+            return Ok(Some(parse_fallback_config(fallback_node)?));
+        }
+    }
+    Ok(None)
+}
+
+/// Parse fallback configuration block
+///
+/// Example KDL:
+/// ```kdl
+/// fallback {
+///     max-attempts 2
+///
+///     triggers {
+///         on-health-failure true
+///         on-budget-exhausted true
+///         on-latency-threshold-ms 5000
+///         on-error-codes 429 500 502 503 504
+///         on-connection-error true
+///     }
+///
+///     fallback-upstream "anthropic-fallback" {
+///         provider "anthropic"
+///         skip-if-unhealthy true
+///
+///         model-mapping {
+///             "gpt-4" "claude-3-opus"
+///             "gpt-4o" "claude-3-5-sonnet"
+///         }
+///     }
+/// }
+/// ```
+fn parse_fallback_config(node: &kdl::KdlNode) -> Result<FallbackConfig> {
+    let max_attempts = get_int_entry(node, "max-attempts").unwrap_or(3) as u32;
+
+    // Parse triggers
+    let triggers = if let Some(children) = node.children() {
+        if let Some(triggers_node) = children.get("triggers") {
+            parse_fallback_triggers(triggers_node)?
+        } else {
+            FallbackTriggers::default()
+        }
+    } else {
+        FallbackTriggers::default()
+    };
+
+    // Parse fallback upstreams
+    let upstreams = parse_fallback_upstreams(node)?;
+
+    trace!(
+        max_attempts = max_attempts,
+        upstream_count = upstreams.len(),
+        on_health_failure = triggers.on_health_failure,
+        on_connection_error = triggers.on_connection_error,
+        "Parsed fallback configuration"
+    );
+
+    Ok(FallbackConfig {
+        upstreams,
+        triggers,
+        max_attempts,
+    })
+}
+
+/// Parse fallback triggers block
+fn parse_fallback_triggers(node: &kdl::KdlNode) -> Result<FallbackTriggers> {
+    let on_health_failure = get_bool_entry(node, "on-health-failure").unwrap_or(true);
+    let on_budget_exhausted = get_bool_entry(node, "on-budget-exhausted").unwrap_or(false);
+    let on_latency_threshold_ms = get_int_entry(node, "on-latency-threshold-ms").map(|v| v as u64);
+    let on_connection_error = get_bool_entry(node, "on-connection-error").unwrap_or(true);
+
+    // Parse error codes (integer arguments)
+    let on_error_codes = if let Some(children) = node.children() {
+        if let Some(codes_node) = children.get("on-error-codes") {
+            codes_node
+                .entries()
+                .iter()
+                .filter_map(|e| e.value().as_integer().map(|v| v as u16))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        // Also check for inline arguments
+        node.children()
+            .and_then(|c| c.get("on-error-codes"))
+            .map(|n| {
+                n.entries()
+                    .iter()
+                    .filter_map(|e| e.value().as_integer().map(|v| v as u16))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    Ok(FallbackTriggers {
+        on_health_failure,
+        on_budget_exhausted,
+        on_latency_threshold_ms,
+        on_error_codes,
+        on_connection_error,
+    })
+}
+
+/// Parse fallback upstreams from fallback block
+fn parse_fallback_upstreams(node: &kdl::KdlNode) -> Result<Vec<FallbackUpstream>> {
+    let mut upstreams = Vec::new();
+
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == "fallback-upstream" {
+                let upstream_id = get_first_arg_string(child).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "fallback-upstream requires an upstream ID, e.g., fallback-upstream \"anthropic\" {{ ... }}"
+                    )
+                })?;
+
+                let provider = parse_inference_provider(child);
+                let skip_if_unhealthy = get_bool_entry(child, "skip-if-unhealthy").unwrap_or(false);
+                let model_mapping = parse_model_mapping(child)?;
+
+                trace!(
+                    upstream = %upstream_id,
+                    provider = ?provider,
+                    skip_if_unhealthy = skip_if_unhealthy,
+                    model_mapping_count = model_mapping.len(),
+                    "Parsed fallback upstream"
+                );
+
+                upstreams.push(FallbackUpstream {
+                    upstream: upstream_id,
+                    provider,
+                    model_mapping,
+                    skip_if_unhealthy,
+                });
+            }
+        }
+    }
+
+    Ok(upstreams)
+}
+
+/// Parse model mapping block
+///
+/// Example KDL:
+/// ```kdl
+/// model-mapping {
+///     "gpt-4" "claude-3-opus"
+///     "gpt-4o" "claude-3-5-sonnet"
+/// }
+/// ```
+fn parse_model_mapping(node: &kdl::KdlNode) -> Result<HashMap<String, String>> {
+    let mut mapping = HashMap::new();
+
+    if let Some(children) = node.children() {
+        if let Some(mapping_node) = children.get("model-mapping") {
+            if let Some(mapping_children) = mapping_node.children() {
+                for entry_node in mapping_children.nodes() {
+                    // Each node is like: "gpt-4" "claude-3-opus"
+                    let entries: Vec<_> = entry_node
+                        .entries()
+                        .iter()
+                        .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                        .collect();
+
+                    // The node name is the source model, first entry is target
+                    let source = entry_node.name().value().to_string();
+                    if let Some(target) = entries.first() {
+                        mapping.insert(source, target.clone());
+                    }
+                }
+            }
+
+            // Also handle inline format: model-mapping { "gpt-4" "claude-3-opus" }
+            // where entries are pairs
+            let entries: Vec<_> = mapping_node
+                .entries()
+                .iter()
+                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                .collect();
+
+            // Process pairs
+            for chunk in entries.chunks(2) {
+                if chunk.len() == 2 {
+                    mapping.insert(chunk[0].clone(), chunk[1].clone());
+                }
+            }
+        }
+    }
+
+    Ok(mapping)
+}
+
+/// Parse inference provider from node
+fn parse_inference_provider(node: &kdl::KdlNode) -> InferenceProvider {
+    match get_string_entry(node, "provider").as_deref() {
+        Some("openai") => InferenceProvider::OpenAi,
+        Some("anthropic") => InferenceProvider::Anthropic,
+        _ => InferenceProvider::Generic,
+    }
+}
+
+/// Parse optional model routing configuration from an inference block.
+///
+/// Example KDL:
+/// ```kdl
+/// model-routing {
+///     model "gpt-4" upstream="openai-primary"
+///     model "gpt-4*" upstream="openai-primary"
+///     model "claude-*" upstream="anthropic-backend" provider="anthropic"
+///     default-upstream "openai-primary"
+/// }
+/// ```
+fn parse_model_routing_config_opt(node: &kdl::KdlNode) -> Result<Option<ModelRoutingConfig>> {
+    if let Some(children) = node.children() {
+        if let Some(routing_node) = children.get("model-routing") {
+            return Ok(Some(parse_model_routing_config(routing_node)?));
+        }
+    }
+    Ok(None)
+}
+
+/// Parse model routing configuration block.
+fn parse_model_routing_config(node: &kdl::KdlNode) -> Result<ModelRoutingConfig> {
+    let mut mappings = Vec::new();
+    let mut default_upstream = None;
+
+    // Get default-upstream if present (as entry or child)
+    if let Some(def) = get_string_entry(node, "default-upstream") {
+        default_upstream = Some(def);
+    }
+
+    // Parse children
+    if let Some(children) = node.children() {
+        // Check for default-upstream as a child node
+        if let Some(def_node) = children.get("default-upstream") {
+            if let Some(first_entry) = def_node.entries().first() {
+                if let Some(val) = first_entry.value().as_string() {
+                    default_upstream = Some(val.to_string());
+                }
+            }
+        }
+
+        // Parse model entries
+        for model_node in children.nodes() {
+            if model_node.name().value() == "model" {
+                if let Some(mapping) = parse_model_upstream_mapping(model_node)? {
+                    mappings.push(mapping);
+                }
+            }
+        }
+    }
+
+    tracing::trace!(
+        mappings_count = mappings.len(),
+        default_upstream = ?default_upstream,
+        "Parsed model routing configuration"
+    );
+
+    Ok(ModelRoutingConfig {
+        mappings,
+        default_upstream,
+    })
+}
+
+/// Parse a single model-to-upstream mapping entry.
+///
+/// Example KDL:
+/// ```kdl
+/// model "gpt-4" upstream="openai-primary"
+/// model "claude-*" upstream="anthropic-backend" provider="anthropic"
+/// ```
+fn parse_model_upstream_mapping(node: &kdl::KdlNode) -> Result<Option<ModelUpstreamMapping>> {
+    // Get the model pattern from the first positional entry (no name)
+    let model_pattern = node
+        .entries()
+        .iter()
+        .find(|e| e.name().is_none())
+        .and_then(|e| e.value().as_string())
+        .map(|s| s.to_string());
+
+    let model_pattern = match model_pattern {
+        Some(p) => p,
+        None => return Ok(None), // No model pattern specified
+    };
+
+    // Get upstream from inline entry (e.g., upstream="openai-primary")
+    let upstream = node
+        .entries()
+        .iter()
+        .find(|e| e.name().map(|n| n.value()) == Some("upstream"))
+        .and_then(|e| e.value().as_string())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("Model mapping requires 'upstream' attribute"))?;
+
+    // Get optional provider override from inline entry
+    let provider_str = node
+        .entries()
+        .iter()
+        .find(|e| e.name().map(|n| n.value()) == Some("provider"))
+        .and_then(|e| e.value().as_string());
+
+    let provider = match provider_str {
+        Some("openai") => Some(InferenceProvider::OpenAi),
+        Some("anthropic") => Some(InferenceProvider::Anthropic),
+        Some("generic") => Some(InferenceProvider::Generic),
+        Some(_) | None => None,
+    };
+
+    tracing::trace!(
+        model_pattern = %model_pattern,
+        upstream = %upstream,
+        provider = ?provider,
+        "Parsed model upstream mapping"
+    );
+
+    Ok(Some(ModelUpstreamMapping {
+        model_pattern,
+        upstream,
+        provider,
+    }))
+}
+
 /// Parse optional inference configuration from a route
 fn parse_inference_config_opt(node: &kdl::KdlNode) -> Result<Option<InferenceConfig>> {
     if let Some(route_children) = node.children() {
@@ -610,18 +940,48 @@ fn parse_inference_config(node: &kdl::KdlNode) -> Result<InferenceConfig> {
         None
     };
 
+    // Parse budget sub-block
+    let budget = if let Some(children) = node.children() {
+        if let Some(budget_node) = children.get("budget") {
+            Some(parse_token_budget(budget_node)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Parse cost-attribution sub-block
+    let cost_attribution = if let Some(children) = node.children() {
+        if let Some(cost_node) = children.get("cost-attribution") {
+            Some(parse_cost_attribution(cost_node)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     trace!(
         provider = ?provider,
         has_rate_limit = rate_limit.is_some(),
         has_routing = routing.is_some(),
+        has_budget = budget.is_some(),
+        has_cost = cost_attribution.is_some(),
         "Parsed inference configuration"
     );
+
+    // Parse model-routing block if present
+    let model_routing = parse_model_routing_config_opt(node)?;
 
     Ok(InferenceConfig {
         provider,
         model_header,
         rate_limit,
+        budget,
+        cost_attribution,
         routing,
+        model_routing,
     })
 }
 
@@ -677,4 +1037,169 @@ fn parse_inference_routing(node: &kdl::KdlNode) -> Result<InferenceRouting> {
         strategy,
         queue_depth_header,
     })
+}
+
+/// Parse token budget configuration
+///
+/// KDL format:
+/// ```kdl
+/// budget {
+///     period "daily"
+///     limit 1000000
+///     alert-thresholds 0.80 0.90 0.95
+///     enforce true
+///     rollover false
+///     burst-allowance 0.10
+/// }
+/// ```
+fn parse_token_budget(node: &kdl::KdlNode) -> Result<TokenBudgetConfig> {
+    let period = match get_string_entry(node, "period").as_deref() {
+        Some("hourly") => BudgetPeriod::Hourly,
+        Some("daily") | None => BudgetPeriod::Daily,
+        Some("monthly") => BudgetPeriod::Monthly,
+        Some(other) => {
+            // Try to parse as custom seconds
+            if let Ok(seconds) = other.parse::<u64>() {
+                BudgetPeriod::Custom { seconds }
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Unknown budget period '{}'. Valid periods: hourly, daily, monthly, or a number of seconds",
+                    other
+                ));
+            }
+        }
+    };
+
+    let limit = get_int_entry(node, "limit")
+        .ok_or_else(|| anyhow::anyhow!("Token budget requires 'limit'"))? as u64;
+
+    // Parse alert-thresholds as a list of floats from arguments
+    let alert_thresholds = if let Some(children) = node.children() {
+        if let Some(threshold_node) = children.get("alert-thresholds") {
+            threshold_node
+                .entries()
+                .iter()
+                .filter_map(|e| {
+                    e.value()
+                        .as_float()
+                        .or_else(|| e.value().as_integer().map(|i| i as f64))
+                })
+                .collect()
+        } else {
+            vec![0.80, 0.90, 0.95]
+        }
+    } else {
+        vec![0.80, 0.90, 0.95]
+    };
+
+    let enforce = get_bool_entry(node, "enforce").unwrap_or(true);
+    let rollover = get_bool_entry(node, "rollover").unwrap_or(false);
+    let burst_allowance = get_float_entry(node, "burst-allowance");
+
+    trace!(
+        period = ?period,
+        limit = limit,
+        alert_thresholds = ?alert_thresholds,
+        enforce = enforce,
+        rollover = rollover,
+        burst_allowance = ?burst_allowance,
+        "Parsed token budget configuration"
+    );
+
+    Ok(TokenBudgetConfig {
+        period,
+        limit,
+        alert_thresholds,
+        enforce,
+        rollover,
+        burst_allowance,
+    })
+}
+
+/// Parse cost attribution configuration
+///
+/// KDL format:
+/// ```kdl
+/// cost-attribution {
+///     enabled true
+///     default-input-cost 1.0
+///     default-output-cost 2.0
+///     currency "USD"
+///
+///     pricing {
+///         model "gpt-4*" {
+///             input-cost-per-million 30.0
+///             output-cost-per-million 60.0
+///         }
+///         model "gpt-3.5*" {
+///             input-cost-per-million 0.5
+///             output-cost-per-million 1.5
+///         }
+///     }
+/// }
+/// ```
+fn parse_cost_attribution(node: &kdl::KdlNode) -> Result<CostAttributionConfig> {
+    let enabled = get_bool_entry(node, "enabled").unwrap_or(true);
+    let default_input_cost = get_float_entry(node, "default-input-cost").unwrap_or(1.0);
+    let default_output_cost = get_float_entry(node, "default-output-cost").unwrap_or(2.0);
+    let currency = get_string_entry(node, "currency").unwrap_or_else(|| "USD".to_string());
+
+    // Parse pricing sub-block
+    let pricing = if let Some(children) = node.children() {
+        if let Some(pricing_node) = children.get("pricing") {
+            parse_model_pricing_list(pricing_node)?
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    trace!(
+        enabled = enabled,
+        default_input_cost = default_input_cost,
+        default_output_cost = default_output_cost,
+        currency = %currency,
+        pricing_rules = pricing.len(),
+        "Parsed cost attribution configuration"
+    );
+
+    Ok(CostAttributionConfig {
+        enabled,
+        pricing,
+        default_input_cost,
+        default_output_cost,
+        currency,
+    })
+}
+
+/// Parse model pricing list
+fn parse_model_pricing_list(node: &kdl::KdlNode) -> Result<Vec<ModelPricing>> {
+    let mut pricing = Vec::new();
+
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == "model" {
+                let pattern = get_first_arg_string(child)
+                    .ok_or_else(|| anyhow::anyhow!("Model pricing requires a pattern argument"))?;
+
+                let input_cost = get_float_entry(child, "input-cost-per-million")
+                    .ok_or_else(|| anyhow::anyhow!("Model pricing requires 'input-cost-per-million'"))?;
+
+                let output_cost = get_float_entry(child, "output-cost-per-million")
+                    .ok_or_else(|| anyhow::anyhow!("Model pricing requires 'output-cost-per-million'"))?;
+
+                let currency = get_string_entry(child, "currency");
+
+                pricing.push(ModelPricing {
+                    model_pattern: pattern,
+                    input_cost_per_million: input_cost,
+                    output_cost_per_million: output_cost,
+                    currency,
+                });
+            }
+        }
+    }
+
+    Ok(pricing)
 }

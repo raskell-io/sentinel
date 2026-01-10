@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 
 use crate::grpc_health::GrpcHealthCheck;
+use crate::upstream::inference_health::InferenceHealthCheck;
 
 use sentinel_common::types::HealthCheckType;
 use sentinel_config::{HealthCheck as HealthCheckConfig, UpstreamConfig};
@@ -183,34 +184,27 @@ impl ActiveHealthChecker {
             HealthCheckType::Inference {
                 endpoint,
                 expected_models,
-                readiness,
+                readiness: _,
             } => {
-                // Inference health check uses HTTP under the hood
-                // It probes the models endpoint (typically /v1/models)
-                let mut hc = HttpHealthCheck::new("localhost", false);
+                // Inference health check that verifies expected models are available
+                let timeout = Duration::from_secs(config.timeout_secs);
+                let mut hc = InferenceHealthCheck::new(
+                    endpoint.clone(),
+                    expected_models.clone(),
+                    timeout,
+                );
                 hc.consecutive_success = config.healthy_threshold as usize;
                 hc.consecutive_failure = config.unhealthy_threshold as usize;
-
-                // Set the endpoint path
-                if let Ok(req) =
-                    pingora_http::RequestHeader::build("GET", endpoint.as_bytes(), None)
-                {
-                    hc.req = req;
-                }
 
                 info!(
                     upstream_id = %upstream_id,
                     endpoint = %endpoint,
                     expected_models = ?expected_models,
-                    has_readiness = readiness.is_some(),
+                    timeout_secs = config.timeout_secs,
                     consecutive_success = hc.consecutive_success,
                     consecutive_failure = hc.consecutive_failure,
-                    "Created inference health check"
+                    "Created inference health check with model verification"
                 );
-
-                // Note: Full model availability checking including readiness probes
-                // is implemented in the ActiveHealthChecker in crates/proxy/src/health.rs.
-                // This Pingora-based health check provides basic HTTP 200 verification.
 
                 Box::new(hc)
             }

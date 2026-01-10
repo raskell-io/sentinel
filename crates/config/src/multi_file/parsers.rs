@@ -174,6 +174,7 @@ pub(super) fn parse_route(node: &KdlNode) -> Result<RouteConfig> {
         websocket: get_bool_entry(node, "websocket").unwrap_or(false),
         websocket_inspection: get_bool_entry(node, "websocket-inspection").unwrap_or(false),
         shadow: None,
+        fallback: None,
     })
 }
 

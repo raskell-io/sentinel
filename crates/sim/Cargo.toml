@@ -1,0 +1,38 @@
+[package]
+name = "sentinel-sim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Configuration simulation engine for Sentinel reverse proxy (WASM-compatible)"
+keywords = ["proxy", "reverse-proxy", "simulation", "wasm", "routing"]
+categories = ["simulation", "wasm", "network-programming"]
+
+[dependencies]
+# Local crates (WASM-compatible - disable runtime features)
+sentinel-config = { path = "../config", version = "0.2.3", default-features = false }
+sentinel-common = { path = "../common", version = "0.2.3", default-features = false }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Regex for path matching
+regex = "1.11"
+
+# Error handling
+thiserror = { workspace = true }
+
+# Hashing for consistent hash simulation
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true }
+
+[features]
+default = []
+# No optional features - always WASM-compatible

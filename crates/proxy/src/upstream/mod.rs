@@ -86,6 +86,7 @@ impl UpstreamTarget {
 pub mod adaptive;
 pub mod consistent_hash;
 pub mod health;
+pub mod inference_health;
 pub mod least_tokens;
 pub mod p2c;
 
@@ -93,6 +94,7 @@ pub mod p2c;
 pub use adaptive::{AdaptiveBalancer, AdaptiveConfig};
 pub use consistent_hash::{ConsistentHashBalancer, ConsistentHashConfig};
 pub use health::{ActiveHealthChecker, HealthCheckRunner};
+pub use inference_health::InferenceHealthCheck;
 pub use least_tokens::{LeastTokensQueuedBalancer, LeastTokensQueuedConfig, LeastTokensQueuedTargetStats};
 pub use p2c::{P2cBalancer, P2cConfig};
 
@@ -1187,6 +1189,14 @@ impl UpstreamPool {
             read_timeout_secs: self.pool_config.read_timeout.as_secs(),
             write_timeout_secs: self.pool_config.write_timeout.as_secs(),
         }
+    }
+
+    /// Check if the pool has any healthy targets.
+    ///
+    /// Returns true if at least one target is healthy, false if all targets are unhealthy.
+    pub async fn has_healthy_targets(&self) -> bool {
+        let healthy = self.load_balancer.healthy_targets().await;
+        !healthy.is_empty()
     }
 
     /// Shutdown the pool

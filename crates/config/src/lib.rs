@@ -87,9 +87,11 @@ pub use observability::{
 // Routes
 pub use routes::{
     ApiSchemaConfig, BuiltinHandler, CacheBackend, CacheStorageConfig, ErrorFormat, ErrorPage,
-    ErrorPageConfig, FailureMode, HeaderModifications, InferenceConfig, InferenceProvider,
-    InferenceRouting, InferenceRoutingStrategy, MatchCondition, RateLimitPolicy, RouteCacheConfig,
-    RouteConfig, RoutePolicies, ServiceType, StaticFileConfig, TokenEstimation, TokenRateLimit,
+    ErrorPageConfig, FallbackConfig, FallbackTriggers, FallbackUpstream, FailureMode,
+    HeaderModifications, InferenceConfig, InferenceProvider, InferenceRouting,
+    InferenceRoutingStrategy, MatchCondition, ModelRoutingConfig, ModelUpstreamMapping,
+    RateLimitPolicy, RouteCacheConfig, RouteConfig, RoutePolicies, ServiceType, StaticFileConfig,
+    TokenEstimation, TokenRateLimit,
 };
 
 // Server
@@ -97,6 +99,11 @@ pub use server::{ListenerConfig, ListenerProtocol, ServerConfig, SniCertificate,
 
 // Re-export TraceIdFormat from common for convenience
 pub use sentinel_common::TraceIdFormat;
+
+// Re-export budget types from common for convenience
+pub use sentinel_common::budget::{
+    BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig,
+};
 
 // Upstreams
 pub use upstreams::{
@@ -650,6 +657,7 @@ impl Config {
                 websocket: false,
                 websocket_inspection: false,
                 shadow: None,
+                fallback: None,
             }],
             upstreams,
             filters: HashMap::new(),

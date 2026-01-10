@@ -200,6 +200,7 @@ pub fn create_default_config() -> Config {
                 websocket: false,
                 websocket_inspection: false,
                 shadow: None,
+                fallback: None,
             },
             RouteConfig {
                 id: "health".to_string(),
@@ -224,6 +225,7 @@ pub fn create_default_config() -> Config {
                 websocket: false,
                 websocket_inspection: false,
                 shadow: None,
+                fallback: None,
             },
             RouteConfig {
                 id: "metrics".to_string(),
@@ -244,6 +246,7 @@ pub fn create_default_config() -> Config {
                 websocket: false,
                 websocket_inspection: false,
                 shadow: None,
+                fallback: None,
             },
             RouteConfig {
                 id: "config".to_string(),
@@ -267,6 +270,7 @@ pub fn create_default_config() -> Config {
                 websocket: false,
                 websocket_inspection: false,
                 shadow: None,
+                fallback: None,
             },
             RouteConfig {
                 id: "upstreams".to_string(),
@@ -290,6 +294,7 @@ pub fn create_default_config() -> Config {
                 websocket: false,
                 websocket_inspection: false,
                 shadow: None,
+                fallback: None,
             },
             RouteConfig {
                 id: "cache-stats".to_string(),
@@ -313,6 +318,7 @@ pub fn create_default_config() -> Config {
                 websocket: false,
                 websocket_inspection: false,
                 shadow: None,
+                fallback: None,
             },
             RouteConfig {
                 id: "cache-purge".to_string(),
@@ -336,6 +342,7 @@ pub fn create_default_config() -> Config {
                 websocket: false,
                 websocket_inspection: false,
                 shadow: None,
+                fallback: None,
             },
         ],
         upstreams: HashMap::new(),

@@ -2,6 +2,8 @@
 //!
 //! This module provides:
 //! - Token-based rate limiting (tokens/minute instead of requests/second)
+//! - Token budget tracking (cumulative usage per period)
+//! - Cost attribution (per-model pricing)
 //! - Multi-provider token counting (OpenAI, Anthropic, generic)
 //! - Model-aware load balancing (LeastTokensQueued strategy)
 //!
@@ -15,6 +17,19 @@
 //!             tokens-per-minute 100000
 //!             burst-tokens 10000
 //!         }
+//!         budget {
+//!             period "daily"
+//!             limit 1000000
+//!             enforce true
+//!         }
+//!         cost-attribution {
+//!             pricing {
+//!                 model "gpt-4*" {
+//!                     input-cost-per-million 30.0
+//!                     output-cost-per-million 60.0
+//!                 }
+//!             }
+//!         }
 //!         routing {
 //!             strategy "least-tokens-queued"
 //!         }
@@ -23,14 +38,24 @@
 //! }
 //! ```
 
+mod budget;
+mod cost;
 mod manager;
+mod metrics;
 mod providers;
 mod rate_limit;
+mod streaming;
+mod tiktoken;
 mod tokens;
 
+pub use budget::TokenBudgetTracker;
+pub use cost::CostCalculator;
 pub use manager::{InferenceCheckResult, InferenceRateLimitManager, InferenceRouteStats};
+pub use metrics::InferenceMetrics;
 pub use providers::{create_provider, InferenceProviderAdapter};
 pub use rate_limit::{TokenRateLimitResult, TokenRateLimiter};
+pub use streaming::{is_sse_response, StreamingTokenCounter, StreamingTokenResult, TokenCountSource};
+pub use tiktoken::{tiktoken_manager, TiktokenEncoding, TiktokenManager};
 pub use tokens::{TokenCounter, TokenEstimate, TokenSource};
 
 use sentinel_config::{InferenceConfig, InferenceProvider};

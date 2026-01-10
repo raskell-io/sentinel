@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel Playground WASM Test</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        h1 { color: #00d9ff; }
+        h2 { color: #ff6b6b; margin-top: 30px; }
+        .section {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            background: #0f0f23;
+            color: #ccc;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 10px;
+            resize: vertical;
+        }
+        button {
+            background: #00d9ff;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 5px 5px 5px 0;
+        }
+        button:hover { background: #00b8d9; }
+        pre {
+            background: #0f0f23;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.loading { background: #1e3a5f; }
+        .status.ready { background: #166534; }
+        .status.failed { background: #991b1b; }
+    </style>
+</head>
+<body>
+    <h1>Sentinel Playground WASM Test</h1>
+
+    <div id="status" class="status loading">Loading WASM module...</div>
+
+    <h2>1. Validate Configuration</h2>
+    <div class="section">
+        <textarea id="config">// Sentinel Basic Configuration Example
+system {
+    worker-threads 0
+    max-connections 10000
+    graceful-shutdown-timeout-secs 30
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 60
+    }
+}
+
+routes {
+    route "api" {
+        priority "high"
+        matches {
+            path-prefix "/api"
+        }
+        upstream "backend"
+        policies {
+            timeout-secs 30
+            failure-mode "open"
+        }
+    }
+    route "static" {
+        priority "medium"
+        matches {
+            path-prefix "/static"
+        }
+        upstream "backend"
+    }
+    route "default" {
+        priority "low"
+        matches {
+            path-prefix "/"
+        }
+        upstream "backend"
+    }
+}
+
+upstreams {
+    upstream "backend" {
+        targets {
+            target {
+                address "127.0.0.1:8081"
+                weight 1
+            }
+            target {
+                address "127.0.0.1:8082"
+                weight 2
+            }
+        }
+        load-balancing "round_robin"
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+            timeout-secs 5
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-header-count 100
+    max-body-size-bytes 10485760
+}</textarea>
+        <br>
+        <button onclick="runValidate()">Validate Config</button>
+        <pre id="validate-result">Click "Validate Config" to test</pre>
+    </div>
+
+    <h2>2. Simulate Request</h2>
+    <div class="section">
+        <p>
+            <label>Method: <select id="method">
+                <option>GET</option>
+                <option>POST</option>
+                <option>PUT</option>
+                <option>DELETE</option>
+            </select></label>
+            <label>Host: <input type="text" id="host" value="example.com" style="width: 150px"></label>
+            <label>Path: <input type="text" id="path" value="/api/users" style="width: 200px"></label>
+        </p>
+        <button onclick="runSimulate()">Simulate Request</button>
+        <button onclick="runSimulateNoMatch()">Simulate /unknown (no match)</button>
+        <pre id="simulate-result">Click "Simulate Request" to test</pre>
+    </div>
+
+    <h2>3. Get Normalized Config</h2>
+    <div class="section">
+        <button onclick="runNormalized()">Get Normalized Config</button>
+        <pre id="normalized-result">Click to see config with defaults applied</pre>
+    </div>
+
+    <h2>4. Module Info</h2>
+    <div class="section">
+        <pre id="info">Loading...</pre>
+    </div>
+
+    <script type="module">
+        import init, {
+            validate,
+            simulate,
+            get_normalized_config,
+            create_sample_request,
+            get_version,
+            init_panic_hook
+        } from './pkg/sentinel_playground_wasm.js';
+
+        let wasmReady = false;
+
+        async function initWasm() {
+            try {
+                await init();
+                init_panic_hook();
+                wasmReady = true;
+
+                document.getElementById('status').className = 'status ready';
+                document.getElementById('status').textContent = '✓ WASM module loaded successfully!';
+
+                // Show module info
+                const version = get_version();
+                document.getElementById('info').textContent = `Version: ${version}\nStatus: Ready`;
+
+                // Make functions globally available
+                window.runValidate = runValidate;
+                window.runSimulate = runSimulate;
+                window.runSimulateNoMatch = runSimulateNoMatch;
+                window.runNormalized = runNormalized;
+
+            } catch (e) {
+                document.getElementById('status').className = 'status failed';
+                document.getElementById('status').textContent = '✗ Failed to load WASM: ' + e.message;
+                document.getElementById('info').textContent = 'Error: ' + e.stack;
+            }
+        }
+
+        function runValidate() {
+            if (!wasmReady) return;
+            const config = document.getElementById('config').value;
+            try {
+                const result = validate(config);
+                const el = document.getElementById('validate-result');
+                el.textContent = JSON.stringify(result, null, 2);
+                el.className = result.valid ? 'success' : 'error';
+            } catch (e) {
+                document.getElementById('validate-result').textContent = 'Error: ' + e.message;
+                document.getElementById('validate-result').className = 'error';
+            }
+        }
+
+        function runSimulate() {
+            if (!wasmReady) return;
+            const config = document.getElementById('config').value;
+            const method = document.getElementById('method').value;
+            const host = document.getElementById('host').value;
+            const path = document.getElementById('path').value;
+
+            const request = create_sample_request(method, host, path);
+
+            try {
+                const result = simulate(config, JSON.stringify(request));
+                document.getElementById('simulate-result').textContent = JSON.stringify(result, null, 2);
+                document.getElementById('simulate-result').className = result.matched_route ? 'success' : '';
+            } catch (e) {
+                document.getElementById('simulate-result').textContent = 'Error: ' + e.message;
+                document.getElementById('simulate-result').className = 'error';
+            }
+        }
+
+        function runSimulateNoMatch() {
+            if (!wasmReady) return;
+            const config = document.getElementById('config').value;
+            const request = create_sample_request('GET', 'example.com', '/unknown/path');
+
+            try {
+                const result = simulate(config, JSON.stringify(request));
+                document.getElementById('simulate-result').textContent = JSON.stringify(result, null, 2);
+            } catch (e) {
+                document.getElementById('simulate-result').textContent = 'Error: ' + e.message;
+                document.getElementById('simulate-result').className = 'error';
+            }
+        }
+
+        function runNormalized() {
+            if (!wasmReady) return;
+            const config = document.getElementById('config').value;
+            try {
+                const result = get_normalized_config(config);
+                document.getElementById('normalized-result').textContent = JSON.stringify(result, null, 2);
+            } catch (e) {
+                document.getElementById('normalized-result').textContent = 'Error: ' + e.message;
+                document.getElementById('normalized-result').className = 'error';
+            }
+        }
+
+        initWasm();
+    </script>
+</body>
+</html>

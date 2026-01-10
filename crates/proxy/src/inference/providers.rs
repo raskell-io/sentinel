@@ -10,8 +10,7 @@ use serde_json::Value;
 use sentinel_config::{InferenceProvider, TokenEstimation};
 use tracing::trace;
 
-#[cfg(feature = "tiktoken")]
-use tiktoken_rs::cl100k_base;
+use super::tiktoken::tiktoken_manager;
 
 /// Trait for provider-specific token extraction and estimation
 pub trait InferenceProviderAdapter: Send + Sync {
@@ -256,6 +255,11 @@ impl InferenceProviderAdapter for GenericProvider {
 
 /// Estimate tokens from body content using the specified method
 fn estimate_tokens(body: &[u8], method: TokenEstimation) -> u64 {
+    estimate_tokens_with_model(body, method, None)
+}
+
+/// Estimate tokens from body content using the specified method, with optional model hint
+fn estimate_tokens_with_model(body: &[u8], method: TokenEstimation, model: Option<&str>) -> u64 {
     match method {
         TokenEstimation::Chars => {
             // Simple: ~4 characters per token
@@ -269,34 +273,32 @@ fn estimate_tokens(body: &[u8], method: TokenEstimation) -> u64 {
             ((word_count as f64 * 1.3).ceil() as u64).max(1)
         }
         TokenEstimation::Tiktoken => {
-            estimate_tokens_tiktoken(body)
+            estimate_tokens_tiktoken(body, model)
         }
     }
 }
 
-/// Estimate tokens using tiktoken (cl100k_base encoding, used by GPT-4/GPT-3.5-turbo)
-#[cfg(feature = "tiktoken")]
-fn estimate_tokens_tiktoken(body: &[u8]) -> u64 {
-    let text = String::from_utf8_lossy(body);
-    match cl100k_base() {
-        Ok(bpe) => {
-            let tokens = bpe.encode_with_special_tokens(&text);
-            trace!(token_count = tokens.len(), "Tiktoken token count");
-            tokens.len() as u64
-        }
-        Err(e) => {
-            trace!(error = %e, "Failed to initialize tiktoken, falling back to char estimation");
-            (text.chars().count() / 4).max(1) as u64
-        }
-    }
-}
+/// Estimate tokens using tiktoken with model-specific encoding
+///
+/// Uses the global TiktokenManager which:
+/// - Caches BPE instances for reuse
+/// - Selects the correct encoding based on model name
+/// - Parses chat completion requests to extract just the message content
+fn estimate_tokens_tiktoken(body: &[u8], model: Option<&str>) -> u64 {
+    let manager = tiktoken_manager();
 
-/// Fallback when tiktoken feature is not enabled
-#[cfg(not(feature = "tiktoken"))]
-fn estimate_tokens_tiktoken(body: &[u8]) -> u64 {
-    // Fall back to character-based estimation
-    let char_count = String::from_utf8_lossy(body).chars().count();
-    (char_count / 4).max(1) as u64
+    // Use the chat request parser for accurate counting
+    // This extracts message content and handles JSON structure
+    let tokens = manager.count_chat_request(body, model);
+
+    trace!(
+        token_count = tokens,
+        model = ?model,
+        tiktoken_available = manager.is_available(),
+        "Tiktoken token count"
+    );
+
+    tokens
 }
 
 #[cfg(test)]
@@ -346,7 +348,20 @@ mod tests {
     fn test_tiktoken_accurate_count() {
         // "Hello world" is typically 2 tokens with cl100k_base
         let body = b"Hello world";
-        let estimate = estimate_tokens_tiktoken(body);
+        let estimate = estimate_tokens_tiktoken(body, Some("gpt-4"));
         assert_eq!(estimate, 2);
+    }
+
+    #[test]
+    fn test_tiktoken_chat_request() {
+        let body = br#"{
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": "Hello!"}
+            ]
+        }"#;
+        let estimate = estimate_tokens_tiktoken(body, None);
+        // Should count message content plus overhead
+        assert!(estimate > 0);
     }
 }

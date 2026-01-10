@@ -1,0 +1,43 @@
+[package]
+name = "sentinel-playground-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "WebAssembly bindings for Sentinel config playground"
+keywords = ["proxy", "wasm", "playground", "configuration"]
+categories = ["wasm", "simulation"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Local crates
+sentinel-sim = { path = "../sim", version = "0.2.3" }
+
+# WASM bindings
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Console error handling for debugging
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"      # Optimize for size
+lto = true           # Link-time optimization
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false     # Disable wasm-opt due to bulk memory issues

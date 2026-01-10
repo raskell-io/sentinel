@@ -8,10 +8,20 @@
 //! - `http_trait`: ProxyHttp trait implementation for Pingora
 
 mod context;
+mod fallback;
+mod fallback_metrics;
 mod handlers;
 mod http_trait;
+mod model_routing;
+mod model_routing_metrics;
 
-pub use context::RequestContext;
+pub use context::{FallbackReason, RequestContext};
+pub use fallback::{FallbackDecision, FallbackEvaluator};
+pub use fallback_metrics::{get_fallback_metrics, init_fallback_metrics, FallbackMetrics};
+pub use model_routing::{extract_model_from_headers, find_upstream_for_model, ModelRoutingResult};
+pub use model_routing_metrics::{
+    get_model_routing_metrics, init_model_routing_metrics, ModelRoutingMetrics,
+};
 
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
@@ -296,6 +306,16 @@ impl SentinelProxy {
 
         // Initialize cache manager
         let cache_manager = Arc::new(Self::initialize_cache_manager(&config));
+
+        // Initialize fallback metrics (best-effort, log warning if fails)
+        if let Err(e) = init_fallback_metrics() {
+            warn!("Failed to initialize fallback metrics: {}", e);
+        }
+
+        // Initialize model routing metrics (best-effort, log warning if fails)
+        if let Err(e) = init_model_routing_metrics() {
+            warn!("Failed to initialize model routing metrics: {}", e);
+        }
 
         Ok(Self {
             config_manager,

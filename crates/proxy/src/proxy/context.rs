@@ -8,7 +8,38 @@ use std::time::Instant;
 
 use sentinel_config::{BodyStreamingMode, Config, RouteConfig, ServiceType};
 
+use crate::inference::StreamingTokenCounter;
 use crate::websocket::WebSocketHandler;
+
+/// Reason why fallback routing was triggered
+#[derive(Debug, Clone)]
+pub enum FallbackReason {
+    /// Primary upstream health check failed
+    HealthCheckFailed,
+    /// Token budget exhausted for the request
+    BudgetExhausted,
+    /// Response latency exceeded threshold
+    LatencyThreshold { observed_ms: u64, threshold_ms: u64 },
+    /// Upstream returned an error code that triggers fallback
+    ErrorCode(u16),
+    /// Connection to upstream failed
+    ConnectionError(String),
+}
+
+impl std::fmt::Display for FallbackReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FallbackReason::HealthCheckFailed => write!(f, "health_check_failed"),
+            FallbackReason::BudgetExhausted => write!(f, "budget_exhausted"),
+            FallbackReason::LatencyThreshold {
+                observed_ms,
+                threshold_ms,
+            } => write!(f, "latency_threshold_{}ms_exceeded_{}ms", observed_ms, threshold_ms),
+            FallbackReason::ErrorCode(code) => write!(f, "error_code_{}", code),
+            FallbackReason::ConnectionError(msg) => write!(f, "connection_error_{}", msg),
+        }
+    }
+}
 
 /// Rate limit header information for response headers
 #[derive(Debug, Clone)]
@@ -165,8 +196,52 @@ pub struct RequestContext {
     pub(crate) inference_rate_limit_key: Option<String>,
     /// Model name detected from request
     pub(crate) inference_model: Option<String>,
+    /// Provider override from model-based routing (for cross-provider routing)
+    pub(crate) inference_provider_override: Option<sentinel_config::InferenceProvider>,
+    /// Whether model-based routing was used to select the upstream
+    pub(crate) model_routing_used: bool,
     /// Actual tokens from response (filled in after response)
     pub(crate) inference_actual_tokens: Option<u64>,
+
+    // === Token Budget Tracking ===
+    /// Whether budget tracking is enabled for this route
+    pub(crate) inference_budget_enabled: bool,
+    /// Budget remaining after this request (set after response)
+    pub(crate) inference_budget_remaining: Option<i64>,
+    /// Period reset timestamp (Unix seconds)
+    pub(crate) inference_budget_period_reset: Option<u64>,
+    /// Whether budget was exhausted (429 sent)
+    pub(crate) inference_budget_exhausted: bool,
+
+    // === Cost Attribution ===
+    /// Whether cost attribution is enabled for this route
+    pub(crate) inference_cost_enabled: bool,
+    /// Calculated cost for this request (set after response)
+    pub(crate) inference_request_cost: Option<f64>,
+    /// Input tokens for cost calculation
+    pub(crate) inference_input_tokens: u64,
+    /// Output tokens for cost calculation
+    pub(crate) inference_output_tokens: u64,
+
+    // === Streaming Token Counting ===
+    /// Whether this is a streaming (SSE) response
+    pub(crate) inference_streaming_response: bool,
+    /// Streaming token counter for SSE responses
+    pub(crate) inference_streaming_counter: Option<StreamingTokenCounter>,
+
+    // === Fallback Routing ===
+    /// Current fallback attempt number (0 = primary, 1+ = fallback)
+    pub(crate) fallback_attempt: u32,
+    /// List of upstream IDs that have been tried
+    pub(crate) tried_upstreams: Vec<String>,
+    /// Reason for triggering fallback (if fallback was used)
+    pub(crate) fallback_reason: Option<FallbackReason>,
+    /// Original upstream ID before fallback (primary)
+    pub(crate) original_upstream: Option<String>,
+    /// Model mapping applied: (original_model, mapped_model)
+    pub(crate) model_mapping_applied: Option<(String, String)>,
+    /// Whether fallback should be retried after response
+    pub(crate) should_retry_with_fallback: bool,
 }
 
 impl RequestContext {
@@ -225,7 +300,25 @@ impl RequestContext {
             inference_estimated_tokens: 0,
             inference_rate_limit_key: None,
             inference_model: None,
+            inference_provider_override: None,
+            model_routing_used: false,
             inference_actual_tokens: None,
+            inference_budget_enabled: false,
+            inference_budget_remaining: None,
+            inference_budget_period_reset: None,
+            inference_budget_exhausted: false,
+            inference_cost_enabled: false,
+            inference_request_cost: None,
+            inference_input_tokens: 0,
+            inference_output_tokens: 0,
+            inference_streaming_response: false,
+            inference_streaming_counter: None,
+            fallback_attempt: 0,
+            tried_upstreams: Vec::new(),
+            fallback_reason: None,
+            original_upstream: None,
+            model_mapping_applied: None,
+            should_retry_with_fallback: false,
         }
     }
 
@@ -408,6 +501,97 @@ impl RequestContext {
     pub fn set_response_bytes(&mut self, bytes: u64) {
         self.response_bytes = bytes;
     }
+
+    // === Fallback accessors ===
+
+    /// Get the current fallback attempt number (0 = primary).
+    #[inline]
+    pub fn fallback_attempt(&self) -> u32 {
+        self.fallback_attempt
+    }
+
+    /// Get the list of upstreams that have been tried.
+    #[inline]
+    pub fn tried_upstreams(&self) -> &[String] {
+        &self.tried_upstreams
+    }
+
+    /// Get the fallback reason, if fallback was triggered.
+    #[inline]
+    pub fn fallback_reason(&self) -> Option<&FallbackReason> {
+        self.fallback_reason.as_ref()
+    }
+
+    /// Get the original upstream ID (before fallback).
+    #[inline]
+    pub fn original_upstream(&self) -> Option<&str> {
+        self.original_upstream.as_deref()
+    }
+
+    /// Get the model mapping that was applied: (original, mapped).
+    #[inline]
+    pub fn model_mapping_applied(&self) -> Option<&(String, String)> {
+        self.model_mapping_applied.as_ref()
+    }
+
+    /// Check if fallback was used for this request.
+    #[inline]
+    pub fn used_fallback(&self) -> bool {
+        self.fallback_attempt > 0
+    }
+
+    /// Record that a fallback attempt is being made.
+    #[inline]
+    pub fn record_fallback(&mut self, reason: FallbackReason, new_upstream: &str) {
+        if self.fallback_attempt == 0 {
+            // First fallback - save original upstream
+            self.original_upstream = self.upstream.clone();
+        }
+        self.fallback_attempt += 1;
+        self.fallback_reason = Some(reason);
+        if let Some(current) = &self.upstream {
+            self.tried_upstreams.push(current.clone());
+        }
+        self.upstream = Some(new_upstream.to_string());
+    }
+
+    /// Record model mapping applied during fallback.
+    #[inline]
+    pub fn record_model_mapping(&mut self, original: String, mapped: String) {
+        self.model_mapping_applied = Some((original, mapped));
+    }
+
+    // === Model Routing accessors ===
+
+    /// Check if model-based routing was used to select the upstream.
+    #[inline]
+    pub fn used_model_routing(&self) -> bool {
+        self.model_routing_used
+    }
+
+    /// Get the provider override from model-based routing (if any).
+    #[inline]
+    pub fn inference_provider_override(&self) -> Option<sentinel_config::InferenceProvider> {
+        self.inference_provider_override
+    }
+
+    /// Record model-based routing result.
+    ///
+    /// Called when model-based routing selects an upstream based on the model name.
+    #[inline]
+    pub fn record_model_routing(
+        &mut self,
+        upstream: &str,
+        model: Option<String>,
+        provider_override: Option<sentinel_config::InferenceProvider>,
+    ) {
+        self.upstream = Some(upstream.to_string());
+        self.model_routing_used = true;
+        if model.is_some() {
+            self.inference_model = model;
+        }
+        self.inference_provider_override = provider_override;
+    }
 }
 
 impl Default for RequestContext {
@@ -497,5 +681,90 @@ mod tests {
 
         ctx.set_response_bytes(1024);
         assert_eq!(ctx.response_bytes(), 1024);
+    }
+
+    #[test]
+    fn test_fallback_tracking() {
+        let mut ctx = RequestContext::new();
+
+        // Initially no fallback
+        assert_eq!(ctx.fallback_attempt(), 0);
+        assert!(!ctx.used_fallback());
+        assert!(ctx.tried_upstreams().is_empty());
+        assert!(ctx.fallback_reason().is_none());
+        assert!(ctx.original_upstream().is_none());
+
+        // Set initial upstream
+        ctx.set_upstream("openai-primary");
+
+        // Record first fallback
+        ctx.record_fallback(FallbackReason::HealthCheckFailed, "anthropic-fallback");
+
+        assert_eq!(ctx.fallback_attempt(), 1);
+        assert!(ctx.used_fallback());
+        assert_eq!(ctx.tried_upstreams(), &["openai-primary".to_string()]);
+        assert!(matches!(
+            ctx.fallback_reason(),
+            Some(FallbackReason::HealthCheckFailed)
+        ));
+        assert_eq!(ctx.original_upstream(), Some("openai-primary"));
+        assert_eq!(ctx.upstream(), Some("anthropic-fallback"));
+
+        // Record second fallback
+        ctx.record_fallback(
+            FallbackReason::ErrorCode(503),
+            "local-gpu",
+        );
+
+        assert_eq!(ctx.fallback_attempt(), 2);
+        assert_eq!(
+            ctx.tried_upstreams(),
+            &["openai-primary".to_string(), "anthropic-fallback".to_string()]
+        );
+        assert!(matches!(
+            ctx.fallback_reason(),
+            Some(FallbackReason::ErrorCode(503))
+        ));
+        // Original upstream should still be the first one
+        assert_eq!(ctx.original_upstream(), Some("openai-primary"));
+        assert_eq!(ctx.upstream(), Some("local-gpu"));
+    }
+
+    #[test]
+    fn test_model_mapping_tracking() {
+        let mut ctx = RequestContext::new();
+
+        assert!(ctx.model_mapping_applied().is_none());
+
+        ctx.record_model_mapping("gpt-4".to_string(), "claude-3-opus".to_string());
+
+        let mapping = ctx.model_mapping_applied().unwrap();
+        assert_eq!(mapping.0, "gpt-4");
+        assert_eq!(mapping.1, "claude-3-opus");
+    }
+
+    #[test]
+    fn test_fallback_reason_display() {
+        assert_eq!(
+            FallbackReason::HealthCheckFailed.to_string(),
+            "health_check_failed"
+        );
+        assert_eq!(
+            FallbackReason::BudgetExhausted.to_string(),
+            "budget_exhausted"
+        );
+        assert_eq!(
+            FallbackReason::LatencyThreshold {
+                observed_ms: 5500,
+                threshold_ms: 5000
+            }
+            .to_string(),
+            "latency_threshold_5500ms_exceeded_5000ms"
+        );
+        assert_eq!(FallbackReason::ErrorCode(502).to_string(), "error_code_502");
+        assert_eq!(
+            FallbackReason::ConnectionError("timeout".to_string()).to_string(),
+            "connection_error_timeout"
+        );
     }
 }
