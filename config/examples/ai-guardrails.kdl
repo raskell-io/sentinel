@@ -1,0 +1,355 @@
+// Example: AI Guardrails Configuration
+//
+// This example demonstrates how to configure semantic guardrails for
+// LLM/AI endpoints including prompt injection detection and PII protection.
+
+server {
+    worker-threads 4
+    max-connections 5000
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 300
+    }
+}
+
+upstreams {
+    upstream "llm-backend" {
+        target "10.0.1.10:8000" weight=1
+        target "10.0.1.11:8000" weight=1
+
+        load-balancing "least_connections"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+            timeout-secs 5
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+
+        timeouts {
+            connect-secs 10
+            request-secs 300
+        }
+    }
+}
+
+// =============================================================================
+// Agents for guardrail processing
+// =============================================================================
+agents {
+    // Prompt injection detection agent
+    agent "prompt-guard" {
+        type "guardrail"
+        transport "unix_socket" {
+            path "/var/run/sentinel/prompt-guard.sock"
+        }
+        events "request_body"
+        timeout-ms 500
+        failure-mode "open"  // Fail-open: allow on agent failure
+
+        circuit-breaker {
+            failure-threshold 5
+            success-threshold 2
+            timeout-seconds 30
+            half-open-max-requests 1
+        }
+    }
+
+    // PII detection agent
+    agent "pii-detector" {
+        type "guardrail"
+        transport "unix_socket" {
+            path "/var/run/sentinel/pii-detector.sock"
+        }
+        events "response_body"
+        timeout-ms 300
+        failure-mode "open"
+
+        circuit-breaker {
+            failure-threshold 5
+            success-threshold 2
+            timeout-seconds 30
+        }
+    }
+
+    // Content moderation agent
+    agent "content-moderator" {
+        type "guardrail"
+        transport "unix_socket" {
+            path "/var/run/sentinel/content-mod.sock"
+        }
+        events "request_body" "response_body"
+        timeout-ms 400
+        failure-mode "closed"  // Fail-closed: block on agent failure
+    }
+}
+
+// =============================================================================
+// Routes with guardrail configurations
+// =============================================================================
+routes {
+    // Chat endpoint with full guardrails
+    route "chat-protected" {
+        priority "high"
+
+        matches {
+            path-prefix "/v1/chat"
+            method "POST"
+        }
+
+        upstream "llm-backend"
+        service-type "inference"
+
+        inference {
+            provider "generic"
+
+            // Semantic guardrails configuration
+            guardrails {
+                // Prompt injection detection
+                prompt-injection {
+                    enabled #true
+                    agent "prompt-guard"
+
+                    // Action when injection detected
+                    action "block"  // block, log, warn
+                    block-status 400
+                    block-message "Request blocked: potential prompt injection detected"
+
+                    // Agent timeout behavior
+                    timeout-ms 500
+                    failure-mode "open"  // Allow if agent fails
+                }
+
+                // PII detection in responses
+                pii-detection {
+                    enabled #true
+                    agent "pii-detector"
+
+                    // What to do when PII is found
+                    action "redact"  // log, redact, block
+
+                    // PII types to detect
+                    detect-types "ssn" "credit_card" "email" "phone" "address"
+
+                    // Agent timeout
+                    timeout-ms 300
+                    failure-mode "open"
+                }
+            }
+        }
+
+        policies {
+            timeout-secs 300
+            max-body-size "1MB"
+            buffer-requests #true   // Required for request inspection
+            buffer-responses #true  // Required for response inspection
+            failure-mode "closed"
+        }
+    }
+
+    // Completion endpoint with logging-only guardrails
+    route "completion-monitored" {
+        priority "high"
+
+        matches {
+            path-prefix "/v1/completions"
+            method "POST"
+        }
+
+        upstream "llm-backend"
+        service-type "inference"
+
+        inference {
+            provider "generic"
+
+            guardrails {
+                // Log-only mode for monitoring
+                prompt-injection {
+                    enabled #true
+                    agent "prompt-guard"
+                    action "log"  // Just log, don't block
+                    timeout-ms 500
+                    failure-mode "open"
+                }
+
+                pii-detection {
+                    enabled #true
+                    agent "pii-detector"
+                    action "log"
+                    detect-types "ssn" "credit_card"
+                    timeout-ms 300
+                    failure-mode "open"
+                }
+            }
+        }
+
+        policies {
+            timeout-secs 300
+            max-body-size "1MB"
+            buffer-requests #true
+            buffer-responses #true
+        }
+    }
+
+    // High-security endpoint with strict guardrails
+    route "secure-chat" {
+        priority "high"
+
+        matches {
+            path-prefix "/v1/secure/chat"
+            method "POST"
+            header "X-Security-Level" "high"
+        }
+
+        upstream "llm-backend"
+        service-type "inference"
+
+        inference {
+            provider "generic"
+
+            guardrails {
+                prompt-injection {
+                    enabled #true
+                    agent "prompt-guard"
+                    action "block"
+                    block-status 403
+                    block-message "Security violation: request rejected"
+                    timeout-ms 1000  // Longer timeout for thorough analysis
+                    failure-mode "closed"  // Block if agent fails
+                }
+
+                pii-detection {
+                    enabled #true
+                    agent "pii-detector"
+                    action "block"  // Block instead of redact
+                    detect-types "ssn" "credit_card" "email" "phone" "address" "dob"
+                    timeout-ms 500
+                    failure-mode "closed"
+                }
+            }
+        }
+
+        // Also apply content moderation filter
+        filters "content-moderator"
+
+        policies {
+            timeout-secs 300
+            max-body-size "512KB"  // Smaller limit for security
+            buffer-requests #true
+            buffer-responses #true
+            failure-mode "closed"
+        }
+    }
+
+    // Embeddings endpoint (no response guardrails needed)
+    route "embeddings" {
+        priority "normal"
+
+        matches {
+            path-prefix "/v1/embeddings"
+            method "POST"
+        }
+
+        upstream "llm-backend"
+        service-type "inference"
+
+        inference {
+            provider "generic"
+
+            guardrails {
+                // Only check prompts, not responses
+                prompt-injection {
+                    enabled #true
+                    agent "prompt-guard"
+                    action "warn"  // Add warning header but allow
+                    timeout-ms 200
+                    failure-mode "open"
+                }
+                // No PII detection for embeddings
+            }
+        }
+
+        policies {
+            timeout-secs 60
+            max-body-size "10MB"  // Large batches
+            buffer-requests #true
+        }
+    }
+
+    // Internal/trusted endpoint (no guardrails)
+    route "internal-chat" {
+        priority "normal"
+
+        matches {
+            path-prefix "/internal/chat"
+            method "POST"
+        }
+
+        upstream "llm-backend"
+        service-type "inference"
+
+        inference {
+            provider "generic"
+            // No guardrails for internal trusted traffic
+        }
+
+        policies {
+            timeout-secs 300
+            max-body-size "10MB"
+        }
+    }
+
+    // Health check
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+}
+
+// =============================================================================
+// Observability
+// =============================================================================
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+        // Guardrail metrics exported:
+        // - sentinel_guardrail_checks_total (by type, result)
+        // - sentinel_guardrail_latency_seconds
+        // - sentinel_guardrail_blocks_total
+        // - sentinel_pii_detections_total (by type)
+    }
+
+    logging {
+        level "info"
+        format "json"
+
+        // Audit log for security events
+        audit-log {
+            enabled #true
+            file "/var/log/sentinel/guardrails-audit.log"
+            log-blocked #true
+            log-agent-decisions #true
+        }
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-body-size-bytes 10485760
+    max-body-buffer-bytes 1048576  // 1MB buffer for inspection
+}

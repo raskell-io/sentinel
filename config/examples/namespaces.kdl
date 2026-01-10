@@ -1,0 +1,501 @@
+// Example: Namespaces and Hierarchical Configuration
+//
+// This example demonstrates how to organize resources using namespaces
+// for multi-tenant or microservice architectures with:
+// - Namespace-scoped resources (routes, upstreams, agents, filters)
+// - Service definitions within namespaces
+// - Resource exports for sharing across namespaces
+// - Hierarchical scope resolution (service → namespace → global)
+
+server {
+    worker-threads 4
+    max-connections 20000
+}
+
+// =============================================================================
+// Global listeners (shared across all namespaces)
+// =============================================================================
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 60
+    }
+
+    listener "https" {
+        address "0.0.0.0:8443"
+        protocol "https"
+
+        tls {
+            cert-file "/etc/sentinel/certs/wildcard.crt"
+            key-file "/etc/sentinel/certs/wildcard.key"
+            min-version "TLS1.2"
+        }
+    }
+}
+
+// =============================================================================
+// Global upstreams (available to all namespaces)
+// =============================================================================
+upstreams {
+    // Shared authentication service
+    upstream "auth-service" {
+        target "auth.internal:8080" weight=1
+        target "auth.internal:8081" weight=1
+
+        load-balancing "round_robin"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+        }
+    }
+
+    // Shared logging/analytics service
+    upstream "analytics" {
+        target "analytics.internal:8080" weight=1
+
+        load-balancing "round_robin"
+    }
+}
+
+// =============================================================================
+// Global filters (available to all namespaces)
+// =============================================================================
+filters {
+    filter "global-rate-limit" {
+        type "rate-limit"
+        max-rps 1000
+        burst 2000
+        key "client-ip"
+        on-limit "reject"
+    }
+
+    filter "global-cors" {
+        type "cors"
+    }
+}
+
+// =============================================================================
+// Global agents (available to all namespaces)
+// =============================================================================
+agents {
+    agent "waf-agent" {
+        type "waf"
+        transport "unix_socket" {
+            path "/var/run/sentinel/waf.sock"
+        }
+        events "request_headers" "request_body"
+        timeout-ms 200
+        failure-mode "closed"
+    }
+}
+
+// =============================================================================
+// Namespace: Platform (shared platform services)
+// =============================================================================
+namespaces {
+    namespace "platform" {
+        // Namespace-level limits
+        limits {
+            max-body-size-bytes 10485760  // 10MB
+            max-connections-per-client 50
+        }
+
+        // Namespace-scoped upstreams
+        upstreams {
+            upstream "user-service" {
+                target "users.platform.internal:8080" weight=1
+                target "users.platform.internal:8081" weight=1
+
+                load-balancing "least_connections"
+
+                health-check {
+                    type "http" {
+                        path "/health"
+                    }
+                    interval-secs 10
+                }
+            }
+
+            upstream "notification-service" {
+                target "notifications.platform.internal:8080" weight=1
+
+                load-balancing "round_robin"
+            }
+        }
+
+        // Namespace-scoped filters
+        filters {
+            filter "platform-auth" {
+                type "agent"
+                agent "auth-agent"
+                timeout-ms 100
+                failure-mode "closed"
+            }
+        }
+
+        // Namespace-scoped agents
+        agents {
+            agent "auth-agent" {
+                type "auth"
+                transport "unix_socket" {
+                    path "/var/run/sentinel/platform-auth.sock"
+                }
+                events "request_headers"
+                timeout-ms 100
+                failure-mode "closed"
+            }
+        }
+
+        // Namespace-level routes
+        routes {
+            route "users-api" {
+                priority "high"
+
+                matches {
+                    host "api.example.com"
+                    path-prefix "/users"
+                }
+
+                upstream "user-service"
+
+                filters "platform-auth" "global-rate-limit"
+
+                policies {
+                    timeout-secs 30
+                    failure-mode "closed"
+                }
+            }
+
+            route "notifications-api" {
+                priority "normal"
+
+                matches {
+                    host "api.example.com"
+                    path-prefix "/notifications"
+                }
+
+                upstream "notification-service"
+
+                filters "platform-auth"
+
+                policies {
+                    timeout-secs 10
+                }
+            }
+        }
+
+        // Export resources for use by other namespaces
+        exports {
+            // Allow other namespaces to use user-service
+            upstreams "user-service"
+            // Allow other namespaces to use platform auth
+            filters "platform-auth"
+            agents "auth-agent"
+        }
+
+        // Services within the platform namespace
+        services {
+            // User management service
+            service "user-management" {
+                // Service-specific limits override namespace limits
+                limits {
+                    max-body-size-bytes 5242880  // 5MB
+                }
+
+                routes {
+                    route "user-crud" {
+                        priority "high"
+
+                        matches {
+                            host "users.example.com"
+                            path-prefix "/api"
+                            method "GET" "POST" "PUT" "DELETE"
+                        }
+
+                        // Reference namespace upstream
+                        upstream "user-service"
+
+                        policies {
+                            timeout-secs 30
+                        }
+                    }
+
+                    route "user-avatar" {
+                        priority "normal"
+
+                        matches {
+                            host "users.example.com"
+                            path-prefix "/avatars"
+                        }
+
+                        upstream "user-service"
+
+                        policies {
+                            timeout-secs 60
+                            max-body-size "10MB"  // Override for uploads
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================================================
+    // Namespace: Storefront (e-commerce tenant)
+    // ==========================================================================
+    namespace "storefront" {
+        limits {
+            max-body-size-bytes 52428800  // 50MB for product images
+            max-connections-per-client 100
+        }
+
+        upstreams {
+            upstream "catalog-service" {
+                target "catalog.storefront.internal:8080" weight=1
+                target "catalog.storefront.internal:8081" weight=1
+
+                load-balancing "round_robin"
+            }
+
+            upstream "cart-service" {
+                target "cart.storefront.internal:8080" weight=1
+
+                load-balancing "ip_hash"  // Session affinity
+            }
+
+            upstream "checkout-service" {
+                target "checkout.storefront.internal:8080" weight=1
+
+                load-balancing "round_robin"
+            }
+        }
+
+        filters {
+            filter "storefront-cache" {
+                type "cache"
+                ttl-secs 300
+                vary-headers "Accept" "Accept-Encoding"
+            }
+        }
+
+        routes {
+            route "catalog" {
+                priority "high"
+
+                matches {
+                    host "shop.example.com"
+                    path-prefix "/catalog"
+                }
+
+                upstream "catalog-service"
+
+                // Use exported platform auth
+                filters "platform:platform-auth" "storefront-cache"
+
+                policies {
+                    timeout-secs 10
+                    cache {
+                        enabled #true
+                        ttl-secs 300
+                    }
+                }
+            }
+
+            route "cart" {
+                priority "high"
+
+                matches {
+                    host "shop.example.com"
+                    path-prefix "/cart"
+                }
+
+                upstream "cart-service"
+
+                filters "platform:platform-auth"
+
+                policies {
+                    timeout-secs 30
+                    failure-mode "closed"
+                }
+            }
+
+            route "checkout" {
+                priority "critical"
+
+                matches {
+                    host "shop.example.com"
+                    path-prefix "/checkout"
+                }
+
+                upstream "checkout-service"
+
+                // Full security for checkout
+                filters "platform:platform-auth" "waf-agent"
+
+                policies {
+                    timeout-secs 60
+                    failure-mode "closed"
+                    buffer-requests #true
+                }
+            }
+        }
+
+        services {
+            service "product-api" {
+                routes {
+                    route "products" {
+                        matches {
+                            host "api.shop.example.com"
+                            path-prefix "/products"
+                        }
+
+                        upstream "catalog-service"
+
+                        policies {
+                            timeout-secs 10
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================================================
+    // Namespace: Analytics (internal analytics platform)
+    // ==========================================================================
+    namespace "analytics" {
+        limits {
+            max-body-size-bytes 104857600  // 100MB for data ingestion
+        }
+
+        upstreams {
+            upstream "ingestion" {
+                target "ingest.analytics.internal:8080" weight=1
+                target "ingest.analytics.internal:8081" weight=1
+                target "ingest.analytics.internal:8082" weight=1
+
+                load-balancing "least_connections"
+
+                connection-pool {
+                    max-connections 200
+                    max-idle 50
+                }
+            }
+
+            upstream "query" {
+                target "query.analytics.internal:8080" weight=1
+
+                load-balancing "round_robin"
+
+                timeouts {
+                    request-secs 300  // Long timeout for queries
+                }
+            }
+        }
+
+        routes {
+            route "ingest" {
+                priority "high"
+
+                matches {
+                    host "analytics.internal"
+                    path-prefix "/ingest"
+                    method "POST"
+                }
+
+                upstream "ingestion"
+
+                policies {
+                    timeout-secs 30
+                    max-body-size "100MB"
+                    failure-mode "open"  // Don't block on ingestion failure
+                }
+            }
+
+            route "query" {
+                priority "normal"
+
+                matches {
+                    host "analytics.internal"
+                    path-prefix "/query"
+                }
+
+                upstream "query"
+
+                // Use exported platform auth
+                filters "platform:platform-auth"
+
+                policies {
+                    timeout-secs 300
+                    failure-mode "closed"
+                }
+            }
+        }
+
+        // Export ingestion for other namespaces
+        exports {
+            upstreams "ingestion"
+        }
+    }
+}
+
+// =============================================================================
+// Global routes (match after namespace routes)
+// =============================================================================
+routes {
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+
+    route "metrics" {
+        priority "critical"
+
+        matches {
+            path "/metrics"
+        }
+
+        builtin-handler "metrics"
+    }
+
+    // Catch-all fallback
+    route "fallback" {
+        priority "low"
+
+        matches {
+            path-prefix "/"
+        }
+
+        builtin-handler "not-found"
+    }
+}
+
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+        // Namespace labels added to all metrics
+    }
+
+    logging {
+        level "info"
+        format "json"
+
+        access-log {
+            enabled #true
+            file "/var/log/sentinel/access.log"
+            // Namespace and service fields included in logs
+        }
+    }
+}

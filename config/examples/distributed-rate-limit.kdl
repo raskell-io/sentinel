@@ -1,0 +1,429 @@
+// Example: Distributed Rate Limiting Configuration
+//
+// This example demonstrates how to configure distributed rate limiting
+// using Redis or Memcached backends for multi-instance deployments.
+
+server {
+    worker-threads 4
+    max-connections 10000
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 60
+    }
+}
+
+upstreams {
+    upstream "api-backend" {
+        target "10.0.1.10:8080" weight=1
+        target "10.0.1.11:8080" weight=1
+        target "10.0.1.12:8080" weight=1
+
+        load-balancing "round_robin"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+        }
+    }
+
+    upstream "premium-backend" {
+        target "10.0.2.10:8080" weight=1
+        target "10.0.2.11:8080" weight=1
+
+        load-balancing "least_connections"
+    }
+
+    upstream "public-backend" {
+        target "10.0.3.10:8080" weight=1
+
+        load-balancing "round_robin"
+    }
+}
+
+// =============================================================================
+// Filter definitions with different rate limit backends
+// =============================================================================
+filters {
+    // -------------------------------------------------------------------------
+    // Redis-backed distributed rate limiting
+    // -------------------------------------------------------------------------
+    filter "redis-rate-limit" {
+        type "rate-limit"
+
+        // Rate limit configuration
+        max-rps 100
+        burst 200
+        key "client-ip"
+        on-limit "reject"
+
+        // Redis backend for distributed counting
+        backend "redis"
+        redis-url "redis://redis-cluster.internal:6379"
+        redis-prefix "sentinel:ratelimit:"
+        redis-pool-size 10
+        redis-timeout-ms 50
+        redis-fallback-local #true  // Fall back to local if Redis unavailable
+    }
+
+    // Redis rate limit with API key as key
+    filter "redis-api-rate-limit" {
+        type "rate-limit"
+
+        max-rps 1000
+        burst 2000
+        key "header:X-API-Key"
+        on-limit "reject"
+
+        backend "redis"
+        redis-url "redis://redis-cluster.internal:6379"
+        redis-prefix "sentinel:api-ratelimit:"
+        redis-pool-size 20
+        redis-timeout-ms 100
+        redis-fallback-local #true
+    }
+
+    // Redis rate limit with delay action (instead of reject)
+    filter "redis-rate-delay" {
+        type "rate-limit"
+
+        max-rps 50
+        burst 100
+        key "client-ip"
+        on-limit "delay"  // Delay instead of reject
+        max-delay-ms 5000  // Max 5 second delay
+
+        backend "redis"
+        redis-url "redis://redis-cluster.internal:6379"
+        redis-prefix "sentinel:delay-ratelimit:"
+        redis-pool-size 10
+        redis-timeout-ms 50
+        redis-fallback-local #true
+    }
+
+    // -------------------------------------------------------------------------
+    // Memcached-backed distributed rate limiting
+    // -------------------------------------------------------------------------
+    filter "memcached-rate-limit" {
+        type "rate-limit"
+
+        max-rps 100
+        burst 200
+        key "client-ip"
+        on-limit "reject"
+
+        // Memcached backend
+        backend "memcached"
+        memcached-url "memcache://memcached.internal:11211"
+        memcached-prefix "sentinel:ratelimit:"
+        memcached-pool-size 10
+        memcached-timeout-ms 50
+        memcached-ttl-secs 2
+        memcached-fallback-local #true
+    }
+
+    // Memcached with multiple servers
+    filter "memcached-cluster-rate-limit" {
+        type "rate-limit"
+
+        max-rps 500
+        burst 1000
+        key "header:X-User-Id"
+        on-limit "reject"
+
+        backend "memcached"
+        // Comma-separated list for multiple servers
+        memcached-url "memcache://mc1.internal:11211,mc2.internal:11211,mc3.internal:11211"
+        memcached-prefix "sentinel:user-ratelimit:"
+        memcached-pool-size 20
+        memcached-timeout-ms 100
+        memcached-fallback-local #true
+    }
+
+    // -------------------------------------------------------------------------
+    // Local rate limiting (single instance only)
+    // -------------------------------------------------------------------------
+    filter "local-rate-limit" {
+        type "rate-limit"
+
+        max-rps 1000
+        burst 2000
+        key "client-ip"
+        on-limit "reject"
+
+        // Local backend (default, no external dependency)
+        backend "local"
+    }
+
+    // -------------------------------------------------------------------------
+    // Tiered rate limits by user type
+    // -------------------------------------------------------------------------
+    filter "free-tier-limit" {
+        type "rate-limit"
+
+        max-rps 10
+        burst 20
+        key "header:X-User-Id"
+        on-limit "reject"
+
+        backend "redis"
+        redis-url "redis://redis-cluster.internal:6379"
+        redis-prefix "sentinel:free:"
+        redis-fallback-local #true
+    }
+
+    filter "premium-tier-limit" {
+        type "rate-limit"
+
+        max-rps 1000
+        burst 2000
+        key "header:X-User-Id"
+        on-limit "reject"
+
+        backend "redis"
+        redis-url "redis://redis-cluster.internal:6379"
+        redis-prefix "sentinel:premium:"
+        redis-fallback-local #true
+    }
+
+    filter "enterprise-tier-limit" {
+        type "rate-limit"
+
+        max-rps 10000
+        burst 20000
+        key "header:X-Org-Id"
+        on-limit "delay"
+        max-delay-ms 1000
+
+        backend "redis"
+        redis-url "redis://redis-cluster.internal:6379"
+        redis-prefix "sentinel:enterprise:"
+        redis-fallback-local #true
+    }
+}
+
+routes {
+    // -------------------------------------------------------------------------
+    // Public API with Redis rate limiting
+    // -------------------------------------------------------------------------
+    route "public-api" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api/public"
+        }
+
+        upstream "public-backend"
+
+        filters "redis-rate-limit"
+
+        policies {
+            timeout-secs 30
+            failure-mode "open"
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Authenticated API with API key rate limiting
+    // -------------------------------------------------------------------------
+    route "authenticated-api" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/v1"
+            header "X-API-Key"
+        }
+
+        upstream "api-backend"
+
+        filters "redis-api-rate-limit"
+
+        policies {
+            timeout-secs 30
+            failure-mode "closed"
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Tiered API access
+    // -------------------------------------------------------------------------
+    route "free-tier-api" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api"
+            header "X-User-Tier" "free"
+        }
+
+        upstream "api-backend"
+
+        filters "free-tier-limit"
+
+        policies {
+            timeout-secs 30
+        }
+    }
+
+    route "premium-tier-api" {
+        priority "high"
+
+        matches {
+            path-prefix "/api"
+            header "X-User-Tier" "premium"
+        }
+
+        upstream "premium-backend"
+
+        filters "premium-tier-limit"
+
+        policies {
+            timeout-secs 60
+        }
+    }
+
+    route "enterprise-tier-api" {
+        priority "high"
+
+        matches {
+            path-prefix "/api"
+            header "X-User-Tier" "enterprise"
+        }
+
+        upstream "premium-backend"
+
+        filters "enterprise-tier-limit"
+
+        policies {
+            timeout-secs 120
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Rate limit with delay (graceful degradation)
+    // -------------------------------------------------------------------------
+    route "graceful-api" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api/graceful"
+        }
+
+        upstream "api-backend"
+
+        // Uses delay instead of hard reject
+        filters "redis-rate-delay"
+
+        policies {
+            timeout-secs 35  // Account for potential delay
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Memcached-backed route
+    // -------------------------------------------------------------------------
+    route "memcached-api" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api/cached"
+        }
+
+        upstream "api-backend"
+
+        filters "memcached-rate-limit"
+
+        policies {
+            timeout-secs 30
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Local rate limit (for single-instance deployments)
+    // -------------------------------------------------------------------------
+    route "local-api" {
+        priority "low"
+
+        matches {
+            path-prefix "/api/local"
+        }
+
+        upstream "api-backend"
+
+        filters "local-rate-limit"
+
+        policies {
+            timeout-secs 30
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Multiple rate limits (layered)
+    // -------------------------------------------------------------------------
+    route "layered-rate-limit" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/protected"
+        }
+
+        upstream "api-backend"
+
+        // Apply multiple rate limits:
+        // 1. Per-IP rate limit (distributed)
+        // 2. Per-API-key rate limit (distributed)
+        filters "redis-rate-limit" "redis-api-rate-limit"
+
+        policies {
+            timeout-secs 30
+            failure-mode "closed"
+        }
+    }
+
+    // Health check (no rate limiting)
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+}
+
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+        // Rate limit metrics exported:
+        // - sentinel_rate_limit_requests_total (by filter, result)
+        // - sentinel_rate_limit_limited_total
+        // - sentinel_rate_limit_backend_latency_seconds
+        // - sentinel_rate_limit_backend_errors_total
+        // - sentinel_rate_limit_fallback_total
+    }
+
+    logging {
+        level "info"
+        format "json"
+
+        access-log {
+            enabled #true
+            file "/var/log/sentinel/access.log"
+            // Rate limit headers included in logs
+        }
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-header-count 100
+    max-body-size-bytes 10485760
+}

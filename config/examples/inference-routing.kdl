@@ -1,0 +1,346 @@
+// Example: Inference Routing Configuration
+//
+// This example demonstrates how to configure Sentinel for LLM/AI inference
+// endpoints with token-based rate limiting, model routing, and cost tracking.
+
+server {
+    worker-threads 4
+    max-connections 5000
+    graceful-shutdown-timeout-secs 30
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 300  // Long timeout for inference
+    }
+}
+
+// =============================================================================
+// Upstreams for different inference providers
+// =============================================================================
+upstreams {
+    // OpenAI-compatible endpoint
+    upstream "openai" {
+        target "api.openai.com:443" weight=1
+
+        load-balancing "round_robin"
+
+        tls {
+            sni "api.openai.com"
+            verify #true
+        }
+
+        health-check {
+            type "tcp"
+            interval-secs 30
+            timeout-secs 5
+            healthy-threshold 1
+            unhealthy-threshold 3
+        }
+
+        timeouts {
+            connect-secs 10
+            request-secs 300
+            read-secs 300
+        }
+    }
+
+    // Anthropic endpoint
+    upstream "anthropic" {
+        target "api.anthropic.com:443" weight=1
+
+        load-balancing "round_robin"
+
+        tls {
+            sni "api.anthropic.com"
+            verify #true
+        }
+
+        timeouts {
+            connect-secs 10
+            request-secs 300
+            read-secs 300
+        }
+    }
+
+    // Self-hosted vLLM or similar
+    upstream "local-llm" {
+        target "10.0.1.10:8000" weight=3
+        target "10.0.1.11:8000" weight=3
+        target "10.0.1.12:8000" weight=2
+
+        // Use least-tokens-queued for optimal GPU utilization
+        load-balancing "least_tokens_queued"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+            timeout-secs 5
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+
+        connection-pool {
+            max-connections 50
+            max-idle 10
+            idle-timeout-secs 60
+        }
+    }
+
+    // Fallback provider (cheaper, lower quality)
+    upstream "fallback-llm" {
+        target "inference-fallback.internal:8080" weight=1
+
+        load-balancing "round_robin"
+    }
+}
+
+// =============================================================================
+// Routes with inference configuration
+// =============================================================================
+routes {
+    // OpenAI API proxy with token rate limiting
+    route "openai-chat" {
+        priority "high"
+
+        matches {
+            path-prefix "/v1/chat/completions"
+            method "POST"
+        }
+
+        upstream "openai"
+        service-type "inference"
+
+        inference {
+            // Provider determines token extraction strategy
+            provider "openai"
+
+            // Token-based rate limiting (per-minute)
+            rate-limit {
+                tokens-per-minute 100000
+                burst-tokens 20000
+                key "header:X-API-Key"  // Rate limit per API key
+            }
+
+            // Token budget for cumulative tracking
+            budget {
+                max-tokens 10000000  // 10M tokens per period
+                period "monthly"
+                key "header:X-Org-Id"  // Budget per organization
+            }
+
+            // Cost attribution for billing
+            cost-attribution {
+                enabled #true
+                models {
+                    model "gpt-4" {
+                        input-cost-per-1k 0.03
+                        output-cost-per-1k 0.06
+                    }
+                    model "gpt-4-turbo" {
+                        input-cost-per-1k 0.01
+                        output-cost-per-1k 0.03
+                    }
+                    model "gpt-3.5-turbo" {
+                        input-cost-per-1k 0.0005
+                        output-cost-per-1k 0.0015
+                    }
+                }
+            }
+
+            // Inference-aware routing
+            routing {
+                strategy "least_tokens_queued"
+            }
+        }
+
+        policies {
+            timeout-secs 300
+            max-body-size "1MB"
+            failure-mode "closed"
+            buffer-requests #true  // Required for token counting
+        }
+    }
+
+    // Anthropic API proxy
+    route "anthropic-messages" {
+        priority "high"
+
+        matches {
+            path-prefix "/v1/messages"
+            method "POST"
+        }
+
+        upstream "anthropic"
+        service-type "inference"
+
+        inference {
+            provider "anthropic"
+
+            rate-limit {
+                tokens-per-minute 50000
+                burst-tokens 10000
+                key "header:X-API-Key"
+            }
+
+            // Model routing with fallback
+            model-routing {
+                // Route specific models to specific upstreams
+                mappings {
+                    mapping "claude-3-opus*" {
+                        upstream "anthropic"
+                    }
+                    mapping "claude-3-sonnet*" {
+                        upstream "anthropic"
+                    }
+                    // Fallback unknown models to local
+                    mapping "*" {
+                        upstream "local-llm"
+                    }
+                }
+            }
+        }
+
+        policies {
+            timeout-secs 300
+            max-body-size "1MB"
+            failure-mode "closed"
+        }
+    }
+
+    // Local LLM with model-based routing
+    route "local-inference" {
+        priority "normal"
+
+        matches {
+            path-prefix "/inference"
+            method "POST"
+        }
+
+        upstream "local-llm"
+        service-type "inference"
+
+        inference {
+            provider "generic"
+
+            // Token estimation when provider doesn't report tokens
+            token-estimation "chars"  // chars, words, or tiktoken
+
+            rate-limit {
+                tokens-per-minute 500000
+                burst-tokens 100000
+                key "client_ip"
+            }
+
+            routing {
+                strategy "least_latency"
+            }
+
+            // Model routing for multi-model deployments
+            model-routing {
+                model-header "X-Model-Name"
+                mappings {
+                    mapping "llama-70b*" {
+                        upstream "local-llm"
+                        weight 1
+                    }
+                    mapping "llama-7b*" {
+                        upstream "local-llm"
+                        weight 3  // Prefer smaller model
+                    }
+                    mapping "mistral*" {
+                        upstream "local-llm"
+                    }
+                }
+            }
+        }
+
+        // Automatic fallback on errors
+        fallback {
+            upstream "fallback-llm"
+
+            triggers {
+                on-health-failure #true
+                on-budget-exhausted #true
+                on-latency-threshold-ms 5000
+                on-error-codes 502 503 504 429
+            }
+
+            // Model mapping for cross-provider fallback
+            model-mapping {
+                "llama-70b" "llama-7b"  // Fall back to smaller model
+                "claude-3-opus" "gpt-4"
+            }
+        }
+
+        policies {
+            timeout-secs 120
+            max-body-size "10MB"
+            failure-mode "open"  // Fail open for local inference
+        }
+
+        circuit-breaker {
+            failure-threshold 5
+            success-threshold 2
+            timeout-seconds 60
+            half-open-max-requests 3
+        }
+
+        retry-policy {
+            max-attempts 2
+            timeout-ms 10000
+            backoff-base-ms 500
+            retryable-status-codes 502 503 504
+        }
+    }
+
+    // Health check
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+}
+
+// =============================================================================
+// Observability for inference metrics
+// =============================================================================
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+        // Inference-specific metrics are automatically exported:
+        // - sentinel_inference_tokens_total (by model, type)
+        // - sentinel_inference_latency_seconds
+        // - sentinel_inference_queue_depth
+        // - sentinel_inference_cost_dollars
+    }
+
+    logging {
+        level "info"
+        format "json"
+
+        access-log {
+            enabled #true
+            file "/var/log/sentinel/inference-access.log"
+            // Include token counts in access logs
+            include-trace-id #true
+        }
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-header-count 100
+    max-body-size-bytes 10485760  // 10MB for large prompts
+}

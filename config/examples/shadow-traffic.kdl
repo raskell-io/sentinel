@@ -1,0 +1,354 @@
+// Example: Shadow Traffic / Traffic Mirroring Configuration
+//
+// This example demonstrates how to configure shadow traffic for:
+// - Canary deployments
+// - A/B testing new backends
+// - Load testing without affecting production
+// - Debugging and comparison testing
+
+server {
+    worker-threads 4
+    max-connections 10000
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 60
+    }
+}
+
+upstreams {
+    // Production backend (receives real responses)
+    upstream "production" {
+        target "10.0.1.10:8080" weight=1
+        target "10.0.1.11:8080" weight=1
+        target "10.0.1.12:8080" weight=1
+
+        load-balancing "round_robin"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+            timeout-secs 5
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+
+        connection-pool {
+            max-connections 100
+            max-idle 20
+            idle-timeout-secs 60
+        }
+    }
+
+    // Canary backend (new version being tested)
+    upstream "canary" {
+        target "10.0.2.10:8080" weight=1
+        target "10.0.2.11:8080" weight=1
+
+        load-balancing "round_robin"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+            timeout-secs 5
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+    }
+
+    // Shadow backend for testing (fire-and-forget)
+    upstream "shadow-test" {
+        target "10.0.3.10:8080" weight=1
+
+        load-balancing "round_robin"
+
+        // Relaxed health checks for test environment
+        health-check {
+            type "tcp"
+            interval-secs 30
+            timeout-secs 5
+            healthy-threshold 1
+            unhealthy-threshold 5
+        }
+    }
+
+    // Load test environment
+    upstream "load-test" {
+        target "load-test.internal:8080" weight=1
+
+        load-balancing "round_robin"
+    }
+}
+
+routes {
+    // ==========================================================================
+    // API route with percentage-based shadow traffic
+    // ==========================================================================
+    route "api-with-shadow" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/v1"
+            method "GET" "POST" "PUT" "DELETE"
+        }
+
+        upstream "production"
+
+        // Shadow configuration: mirror requests to canary
+        shadow {
+            upstream "canary"
+
+            // Mirror 10% of traffic
+            percentage 10.0
+
+            // Timeout for shadow requests (fire-and-forget)
+            timeout-ms 5000
+
+            // Buffer body for POST/PUT requests
+            buffer-body #true
+            max-body-bytes 1048576  // 1MB max
+        }
+
+        policies {
+            timeout-secs 30
+            max-body-size "10MB"
+            failure-mode "closed"
+        }
+    }
+
+    // ==========================================================================
+    // Route with header-based shadow sampling
+    // ==========================================================================
+    route "api-header-shadow" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/v2"
+        }
+
+        upstream "production"
+
+        // Only shadow requests with specific header
+        shadow {
+            upstream "shadow-test"
+
+            // 100% of matching requests (those with the header)
+            percentage 100.0
+
+            // Only shadow if this header matches
+            sample-header "X-Shadow-Test" "enabled"
+
+            timeout-ms 3000
+            buffer-body #true
+        }
+
+        policies {
+            timeout-secs 30
+        }
+    }
+
+    // ==========================================================================
+    // Full traffic mirroring for load testing
+    // ==========================================================================
+    route "api-load-test" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api/load-test"
+        }
+
+        upstream "production"
+
+        // Mirror 100% to load test environment
+        shadow {
+            upstream "load-test"
+            percentage 100.0
+            timeout-ms 10000
+            buffer-body #true
+            max-body-bytes 10485760  // 10MB for large payloads
+        }
+
+        policies {
+            timeout-secs 60
+            max-body-size "10MB"
+        }
+    }
+
+    // ==========================================================================
+    // Gradual rollout with increasing shadow percentage
+    // ==========================================================================
+
+    // Phase 1: 1% shadow to canary
+    route "gradual-rollout-phase1" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/new-feature"
+            header "X-Rollout-Phase" "1"
+        }
+
+        upstream "production"
+
+        shadow {
+            upstream "canary"
+            percentage 1.0
+            timeout-ms 5000
+            buffer-body #true
+        }
+
+        policies {
+            timeout-secs 30
+        }
+    }
+
+    // Phase 2: 10% shadow to canary
+    route "gradual-rollout-phase2" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/new-feature"
+            header "X-Rollout-Phase" "2"
+        }
+
+        upstream "production"
+
+        shadow {
+            upstream "canary"
+            percentage 10.0
+            timeout-ms 5000
+            buffer-body #true
+        }
+
+        policies {
+            timeout-secs 30
+        }
+    }
+
+    // Phase 3: 50% shadow to canary
+    route "gradual-rollout-phase3" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/new-feature"
+            header "X-Rollout-Phase" "3"
+        }
+
+        upstream "production"
+
+        shadow {
+            upstream "canary"
+            percentage 50.0
+            timeout-ms 5000
+            buffer-body #true
+        }
+
+        policies {
+            timeout-secs 30
+        }
+    }
+
+    // ==========================================================================
+    // GET-only shadow (no body buffering needed)
+    // ==========================================================================
+    route "read-shadow" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api/read"
+            method "GET"
+        }
+
+        upstream "production"
+
+        shadow {
+            upstream "canary"
+            percentage 25.0
+            timeout-ms 2000
+            // No body buffering needed for GET
+            buffer-body #false
+        }
+
+        policies {
+            timeout-secs 10
+        }
+    }
+
+    // ==========================================================================
+    // Debug route with full mirroring
+    // ==========================================================================
+    route "debug-mirror" {
+        priority "low"
+
+        matches {
+            path-prefix "/debug"
+            header "X-Debug-Mode" "shadow"
+        }
+
+        upstream "production"
+
+        shadow {
+            upstream "shadow-test"
+            percentage 100.0
+            timeout-ms 30000  // Long timeout for debugging
+            buffer-body #true
+            max-body-bytes 52428800  // 50MB for debug
+        }
+
+        policies {
+            timeout-secs 60
+            max-body-size "50MB"
+            buffer-requests #true
+        }
+    }
+
+    // Health check
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+}
+
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+        // Shadow metrics exported:
+        // - sentinel_shadow_requests_total (by upstream, status)
+        // - sentinel_shadow_latency_seconds
+        // - sentinel_shadow_errors_total
+        // - sentinel_shadow_timeouts_total
+    }
+
+    logging {
+        level "info"
+        format "json"
+
+        access-log {
+            enabled #true
+            file "/var/log/sentinel/access.log"
+            include-trace-id #true
+            // Shadow requests are logged with shadow=true field
+        }
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-body-size-bytes 52428800  // 50MB
+    max-body-buffer-bytes 10485760  // 10MB buffer for shadow
+}

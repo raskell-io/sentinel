@@ -1,0 +1,393 @@
+// Example: HTTP Caching Configuration
+//
+// This example demonstrates how to configure HTTP response caching
+// with different storage backends (memory, disk, hybrid).
+
+server {
+    worker-threads 4
+    max-connections 10000
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 60
+    }
+}
+
+upstreams {
+    upstream "api-backend" {
+        target "10.0.1.10:8080" weight=1
+        target "10.0.1.11:8080" weight=1
+
+        load-balancing "round_robin"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+        }
+    }
+
+    upstream "static-backend" {
+        target "10.0.2.10:8080" weight=1
+
+        load-balancing "round_robin"
+    }
+
+    upstream "slow-backend" {
+        target "10.0.3.10:8080" weight=1
+
+        load-balancing "round_robin"
+
+        timeouts {
+            request-secs 120
+        }
+    }
+}
+
+// =============================================================================
+// Global cache storage configuration
+// =============================================================================
+cache {
+    enabled #true
+
+    // Storage backend: "memory", "disk", or "hybrid"
+    backend "memory"
+
+    // Maximum cache size (100MB)
+    max-size 104857600
+
+    // When to start evicting entries (90% of max)
+    eviction-limit 94371840
+
+    // Lock timeout to prevent thundering herd (seconds)
+    lock-timeout 10
+
+    // Disk cache settings (only used with "disk" or "hybrid" backend)
+    // disk-path "/var/cache/sentinel"
+    // disk-shards 16
+}
+
+routes {
+    // -------------------------------------------------------------------------
+    // API with caching enabled
+    // -------------------------------------------------------------------------
+    route "api-cached" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/v1"
+            method "GET"
+        }
+
+        upstream "api-backend"
+
+        policies {
+            timeout-secs 30
+
+            // Per-route cache configuration
+            cache {
+                enabled #true
+
+                // Cache TTL in seconds
+                ttl-secs 300  // 5 minutes
+
+                // Vary cache by these headers
+                vary-headers "Accept" "Accept-Encoding" "Accept-Language"
+
+                // Respect Cache-Control headers from upstream
+                respect-cache-control #true
+
+                // Cache even if upstream returns no-cache (override)
+                ignore-no-cache #false
+
+                // Stale-while-revalidate: serve stale while refreshing
+                stale-while-revalidate-secs 60
+
+                // Stale-if-error: serve stale on upstream error
+                stale-if-error-secs 300
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Static assets with aggressive caching
+    // -------------------------------------------------------------------------
+    route "static-assets" {
+        priority "normal"
+
+        matches {
+            path-prefix "/static"
+            method "GET"
+        }
+
+        upstream "static-backend"
+
+        policies {
+            timeout-secs 10
+
+            cache {
+                enabled #true
+
+                // Long TTL for static assets
+                ttl-secs 86400  // 24 hours
+
+                // Only vary by Accept-Encoding for static files
+                vary-headers "Accept-Encoding"
+
+                // Ignore Cache-Control from origin for static
+                respect-cache-control #false
+
+                // Long stale times for availability
+                stale-while-revalidate-secs 3600
+                stale-if-error-secs 86400
+            }
+
+            response-headers {
+                set {
+                    "Cache-Control" "public, max-age=86400, immutable"
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Short-lived cache for dynamic content
+    // -------------------------------------------------------------------------
+    route "dynamic-cached" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api/feed"
+            method "GET"
+        }
+
+        upstream "api-backend"
+
+        policies {
+            timeout-secs 30
+
+            cache {
+                enabled #true
+
+                // Short TTL for frequently changing data
+                ttl-secs 30
+
+                vary-headers "Accept" "Authorization"
+
+                // Follow upstream cache headers strictly
+                respect-cache-control #true
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // API key-based cache variation
+    // -------------------------------------------------------------------------
+    route "api-key-cached" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/user"
+            method "GET"
+            header "X-API-Key"
+        }
+
+        upstream "api-backend"
+
+        policies {
+            timeout-secs 30
+
+            cache {
+                enabled #true
+                ttl-secs 60
+
+                // Cache varies by API key (per-user cache)
+                vary-headers "X-API-Key" "Accept"
+
+                respect-cache-control #true
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Slow endpoint with long cache
+    // -------------------------------------------------------------------------
+    route "slow-endpoint" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api/reports"
+            method "GET"
+        }
+
+        upstream "slow-backend"
+
+        policies {
+            timeout-secs 120
+
+            cache {
+                enabled #true
+
+                // Long cache for expensive computations
+                ttl-secs 3600  // 1 hour
+
+                vary-headers "Accept"
+
+                // Generous stale settings
+                stale-while-revalidate-secs 600
+                stale-if-error-secs 3600
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Cache bypass for authenticated requests
+    // -------------------------------------------------------------------------
+    route "no-cache-auth" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/private"
+            method "GET"
+            header "Authorization"
+        }
+
+        upstream "api-backend"
+
+        policies {
+            timeout-secs 30
+
+            // Disable caching for authenticated requests
+            cache {
+                enabled #false
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Cache with custom key
+    // -------------------------------------------------------------------------
+    route "custom-cache-key" {
+        priority "normal"
+
+        matches {
+            path-prefix "/api/search"
+            method "GET"
+        }
+
+        upstream "api-backend"
+
+        policies {
+            timeout-secs 30
+
+            cache {
+                enabled #true
+                ttl-secs 300
+
+                // Include query parameters in cache key
+                vary-headers "Accept"
+                // Query string is automatically part of cache key
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // POST requests are not cached by default
+    // -------------------------------------------------------------------------
+    route "api-write" {
+        priority "high"
+
+        matches {
+            path-prefix "/api"
+            method "POST" "PUT" "DELETE" "PATCH"
+        }
+
+        upstream "api-backend"
+
+        policies {
+            timeout-secs 30
+            // No cache block - POST/PUT/DELETE are not cached
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Cache purge endpoint (builtin handler)
+    // -------------------------------------------------------------------------
+    route "cache-purge" {
+        priority "critical"
+
+        matches {
+            path-prefix "/_cache/purge"
+            method "POST" "DELETE"
+        }
+
+        builtin-handler "cache-purge"
+
+        policies {
+            failure-mode "closed"
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Cache stats endpoint (builtin handler)
+    // -------------------------------------------------------------------------
+    route "cache-stats" {
+        priority "critical"
+
+        matches {
+            path "/_cache/stats"
+            method "GET"
+        }
+
+        builtin-handler "cache-stats"
+    }
+
+    // Health check
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+}
+
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+        // Cache metrics exported:
+        // - sentinel_cache_hits_total
+        // - sentinel_cache_misses_total
+        // - sentinel_cache_stale_hits_total
+        // - sentinel_cache_size_bytes
+        // - sentinel_cache_entries_count
+        // - sentinel_cache_evictions_total
+        // - sentinel_cache_lock_waits_total
+    }
+
+    logging {
+        level "info"
+        format "json"
+
+        access-log {
+            enabled #true
+            file "/var/log/sentinel/access.log"
+            // Cache status included in logs (HIT, MISS, STALE, BYPASS)
+        }
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-header-count 100
+    max-body-size-bytes 10485760
+}
