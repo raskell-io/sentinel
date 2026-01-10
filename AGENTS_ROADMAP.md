@@ -48,6 +48,7 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [JavaScript](https://sentinel.raskell.io/agents/js/) | Beta | JavaScript scripting (QuickJS) |
 | [WebAssembly](https://sentinel.raskell.io/agents/wasm/) | Beta | High-performance Wasm modules |
 | [Bot Management](https://sentinel.raskell.io/agents/bot-management/) | Beta | Multi-signal bot detection with behavioral analysis |
+| [Transform](https://sentinel.raskell.io/agents/transform/) | Beta | URL rewriting, header manipulation, JSON body transforms |
 
 ---
 
@@ -76,32 +77,6 @@ GraphQL-specific security controls.
 - Prevent resource exhaustion from deep/complex queries
 - Field-level access control
 - Production hardening
-
----
-
-#### Request/Response Transform
-**Status:** Proposed
-**Complexity:** Medium
-**Value:** Medium
-
-Advanced request and response transformation beyond built-in capabilities.
-
-> **Note:** Sentinel core includes basic header manipulation (`set`/`add`/`remove` for request and response headers) and body decompression. This agent would provide **advanced** transformations.
-
-**Features:**
-- [ ] Complex URL rewriting (regex-based, with capture groups)
-- [ ] Body transformation (JSON path manipulation, jq-style queries)
-- [ ] XML/HTML body transformation
-- [ ] Request/response cloning for A/B testing
-- [ ] Conditional transforms (based on JWT claims, custom logic)
-- [ ] Template-based responses (Handlebars, Tera)
-- [ ] Content-Type conversion (JSON ↔ XML)
-
-**Use Cases:**
-- API migration (legacy URL support with complex rewrites)
-- Response shaping for different clients
-- Backend response normalization
-- GraphQL-to-REST bridging
 
 ---
 
