@@ -20,8 +20,8 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # Core dependencies
-pingora = { version = "0.6", features = ["proxy", "lb"] }
-pingora-core = "0.6"
+pingora = { version = "0.6", features = ["proxy", "lb", "rustls"] }
+pingora-core = { version = "0.6", features = ["rustls"] }
 pingora-http = "0.6"
 pingora-proxy = "0.6"
 pingora-load-balancing = "0.6"

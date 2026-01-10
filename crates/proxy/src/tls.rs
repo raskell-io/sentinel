@@ -511,6 +511,72 @@ impl Default for OcspStapler {
 // Upstream mTLS Support (Client Certificates)
 // ============================================================================
 
+/// Load client certificate and key for mTLS to upstreams
+///
+/// This function loads PEM-encoded certificates and private key and converts
+/// them to Pingora's CertKey format for use with `HttpPeer.client_cert_key`.
+///
+/// # Arguments
+///
+/// * `cert_path` - Path to PEM-encoded certificate (may include chain)
+/// * `key_path` - Path to PEM-encoded private key
+///
+/// # Returns
+///
+/// An `Arc<CertKey>` that can be set on `peer.client_cert_key` for mTLS
+pub fn load_client_cert_key(
+    cert_path: &Path,
+    key_path: &Path,
+) -> Result<Arc<pingora_core::utils::tls::CertKey>, TlsError> {
+    // Read certificate chain (PEM format, may contain intermediates)
+    let cert_file = File::open(cert_path)
+        .map_err(|e| TlsError::CertificateLoad(format!("{}: {}", cert_path.display(), e)))?;
+    let mut cert_reader = BufReader::new(cert_file);
+
+    // Parse certificates from PEM to DER
+    let cert_ders: Vec<Vec<u8>> = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| TlsError::CertificateLoad(format!("{}: {}", cert_path.display(), e)))?
+        .into_iter()
+        .map(|c| c.to_vec())
+        .collect();
+
+    if cert_ders.is_empty() {
+        return Err(TlsError::CertificateLoad(format!(
+            "{}: No certificates found in PEM file",
+            cert_path.display()
+        )));
+    }
+
+    // Read private key (PEM format)
+    let key_file = File::open(key_path)
+        .map_err(|e| TlsError::KeyLoad(format!("{}: {}", key_path.display(), e)))?;
+    let mut key_reader = BufReader::new(key_file);
+
+    // Parse private key from PEM to DER
+    let key_der = rustls_pemfile::private_key(&mut key_reader)
+        .map_err(|e| TlsError::KeyLoad(format!("{}: {}", key_path.display(), e)))?
+        .ok_or_else(|| {
+            TlsError::KeyLoad(format!(
+                "{}: No private key found in PEM file",
+                key_path.display()
+            ))
+        })?
+        .secret_der()
+        .to_vec();
+
+    // Create Pingora's CertKey (certificates: Vec<Vec<u8>>, key: Vec<u8>)
+    let cert_key = pingora_core::utils::tls::CertKey::new(cert_ders, key_der);
+
+    debug!(
+        cert_path = %cert_path.display(),
+        key_path = %key_path.display(),
+        "Loaded mTLS client certificate for upstream connections"
+    );
+
+    Ok(Arc::new(cert_key))
+}
+
 /// Build a TLS client configuration for upstream connections with mTLS
 ///
 /// This creates a rustls ClientConfig that can be used when Sentinel

@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tracing::trace;
 
 use sentinel_common::types::{HealthCheckType, LoadBalancingAlgorithm};
@@ -131,11 +132,25 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                     .map(parse_upstream_timeouts)
                     .unwrap_or_default();
 
+                // Parse TLS configuration
+                let tls = child
+                    .children()
+                    .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "tls"))
+                    .map(parse_upstream_tls);
+
+                if tls.is_some() {
+                    trace!(
+                        upstream_id = %id,
+                        "Parsed TLS configuration"
+                    );
+                }
+
                 trace!(
                     upstream_id = %id,
                     target_count = targets.len(),
                     load_balancing = ?load_balancing,
                     has_health_check = health_check.is_some(),
+                    has_tls = tls.is_some(),
                     http_version = http_version.max_version,
                     max_connections = connection_pool.max_connections,
                     connect_timeout = timeouts.connect_secs,
@@ -151,7 +166,7 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                         health_check,
                         connection_pool,
                         timeouts,
-                        tls: None,
+                        tls,
                         http_version,
                     },
                 );
@@ -288,6 +303,54 @@ fn parse_upstream_timeouts(node: &kdl::KdlNode) -> UpstreamTimeouts {
         read_secs,
         write_secs,
     }
+}
+
+/// Parse upstream TLS configuration
+///
+/// Example KDL:
+/// ```kdl
+/// tls {
+///     sni "backend.example.com"
+///     insecure-skip-verify false
+///     client-cert "/path/to/client.crt"
+///     client-key "/path/to/client.key"
+///     ca-cert "/path/to/ca.crt"
+/// }
+/// ```
+fn parse_upstream_tls(node: &kdl::KdlNode) -> UpstreamTlsConfig {
+    let sni = find_string_entry_from_node(node, "sni");
+
+    let insecure_skip_verify = find_bool_entry_from_node(node, "insecure-skip-verify").unwrap_or(false);
+
+    let client_cert = find_string_entry_from_node(node, "client-cert").map(PathBuf::from);
+
+    let client_key = find_string_entry_from_node(node, "client-key").map(PathBuf::from);
+
+    let ca_cert = find_string_entry_from_node(node, "ca-cert").map(PathBuf::from);
+
+    UpstreamTlsConfig {
+        sni,
+        insecure_skip_verify,
+        client_cert,
+        client_key,
+        ca_cert,
+    }
+}
+
+/// Find a string entry in a node's children by name
+fn find_string_entry_from_node(node: &kdl::KdlNode, name: &str) -> Option<String> {
+    node.children()
+        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == name))
+        .and_then(|n| n.entries().first())
+        .and_then(|e| e.value().as_string().map(|s| s.to_string()))
+}
+
+/// Find a boolean entry in a node's children by name
+fn find_bool_entry_from_node(node: &kdl::KdlNode, name: &str) -> Option<bool> {
+    node.children()
+        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == name))
+        .and_then(|n| n.entries().first())
+        .and_then(|e| e.value().as_bool())
 }
 
 /// Parse health check configuration
@@ -538,4 +601,142 @@ fn find_float_entry(nodes: &[kdl::KdlNode], name: &str) -> Option<f64> {
                 .as_float()
                 .or_else(|| e.value().as_integer().map(|i| i as f64))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_kdl_upstreams(input: &str) -> Result<HashMap<String, UpstreamConfig>> {
+        let doc: kdl::KdlDocument = input.parse().unwrap();
+        let node = doc.nodes().first().unwrap();
+        parse_upstreams(node)
+    }
+
+    #[test]
+    fn test_parse_upstream_tls_full() {
+        let kdl = r#"
+        upstreams {
+            upstream "secure-backend" {
+                target "10.0.0.1:8443"
+                tls {
+                    sni "backend.example.com"
+                    insecure-skip-verify #false
+                    client-cert "/path/to/client.crt"
+                    client-key "/path/to/client.key"
+                    ca-cert "/path/to/ca.crt"
+                }
+            }
+        }
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl).unwrap();
+        let upstream = upstreams.get("secure-backend").unwrap();
+
+        assert!(upstream.tls.is_some());
+        let tls = upstream.tls.as_ref().unwrap();
+
+        assert_eq!(tls.sni, Some("backend.example.com".to_string()));
+        assert!(!tls.insecure_skip_verify);
+        assert_eq!(
+            tls.client_cert,
+            Some(PathBuf::from("/path/to/client.crt"))
+        );
+        assert_eq!(tls.client_key, Some(PathBuf::from("/path/to/client.key")));
+        assert_eq!(tls.ca_cert, Some(PathBuf::from("/path/to/ca.crt")));
+    }
+
+    #[test]
+    fn test_parse_upstream_tls_minimal() {
+        let kdl = r#"
+        upstreams {
+            upstream "simple-tls" {
+                target "10.0.0.1:443"
+                tls {
+                    sni "api.example.com"
+                }
+            }
+        }
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl).unwrap();
+        let upstream = upstreams.get("simple-tls").unwrap();
+
+        assert!(upstream.tls.is_some());
+        let tls = upstream.tls.as_ref().unwrap();
+
+        assert_eq!(tls.sni, Some("api.example.com".to_string()));
+        assert!(!tls.insecure_skip_verify); // default
+        assert!(tls.client_cert.is_none());
+        assert!(tls.client_key.is_none());
+        assert!(tls.ca_cert.is_none());
+    }
+
+    #[test]
+    fn test_parse_upstream_tls_insecure() {
+        let kdl = r#"
+        upstreams {
+            upstream "dev-backend" {
+                target "localhost:8443"
+                tls {
+                    insecure-skip-verify #true
+                }
+            }
+        }
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl).unwrap();
+        let upstream = upstreams.get("dev-backend").unwrap();
+
+        assert!(upstream.tls.is_some());
+        let tls = upstream.tls.as_ref().unwrap();
+
+        assert!(tls.insecure_skip_verify);
+        assert!(tls.sni.is_none());
+    }
+
+    #[test]
+    fn test_parse_upstream_no_tls() {
+        let kdl = r#"
+        upstreams {
+            upstream "plain-http" {
+                target "10.0.0.1:8080"
+            }
+        }
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl).unwrap();
+        let upstream = upstreams.get("plain-http").unwrap();
+
+        assert!(upstream.tls.is_none());
+    }
+
+    #[test]
+    fn test_parse_upstream_tls_mtls_only() {
+        let kdl = r#"
+        upstreams {
+            upstream "mtls-backend" {
+                target "10.0.0.1:443"
+                tls {
+                    client-cert "/certs/client.pem"
+                    client-key "/certs/client-key.pem"
+                }
+            }
+        }
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl).unwrap();
+        let upstream = upstreams.get("mtls-backend").unwrap();
+
+        assert!(upstream.tls.is_some());
+        let tls = upstream.tls.as_ref().unwrap();
+
+        assert_eq!(tls.client_cert, Some(PathBuf::from("/certs/client.pem")));
+        assert_eq!(
+            tls.client_key,
+            Some(PathBuf::from("/certs/client-key.pem"))
+        );
+        assert!(tls.sni.is_none());
+        assert!(tls.ca_cert.is_none());
+    }
 }

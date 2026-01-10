@@ -1034,18 +1034,33 @@ impl UpstreamPool {
                     );
                 }
 
-                // Log mTLS client certificate configuration
-                // Note: Full mTLS client cert support requires Pingora connector customization
-                // The certificates are loaded but Pingora's standard connector doesn't expose
-                // a direct way to inject client certs. For production mTLS to backends,
-                // consider using a custom Pingora Connector implementation.
-                if tls_config.client_cert.is_some() {
-                    debug!(
-                        upstream_id = %self.id,
-                        target = %selection.address,
-                        client_cert = ?tls_config.client_cert,
-                        "mTLS client certificate configured (requires custom connector for full support)"
-                    );
+                // Configure mTLS client certificate if provided
+                if let (Some(cert_path), Some(key_path)) =
+                    (&tls_config.client_cert, &tls_config.client_key)
+                {
+                    match crate::tls::load_client_cert_key(cert_path, key_path) {
+                        Ok(cert_key) => {
+                            peer.client_cert_key = Some(cert_key);
+                            info!(
+                                upstream_id = %self.id,
+                                target = %selection.address,
+                                cert_path = ?cert_path,
+                                "mTLS client certificate configured"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                upstream_id = %self.id,
+                                target = %selection.address,
+                                error = %e,
+                                "Failed to load mTLS client certificate"
+                            );
+                            return Err(SentinelError::Tls {
+                                message: format!("Failed to load client certificate: {}", e),
+                                source: None,
+                            });
+                        }
+                    }
                 }
             }
 

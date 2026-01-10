@@ -383,6 +383,15 @@ mod tests {
         ConnectionPoolConfig, HttpVersionConfig, UpstreamTarget, UpstreamTimeouts,
     };
     use std::collections::HashMap;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn init_crypto_provider() {
+        INIT.call_once(|| {
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        });
+    }
 
     fn create_test_config() -> UpstreamConfig {
         UpstreamConfig {
@@ -414,6 +423,7 @@ mod tests {
 
     #[test]
     fn test_create_health_checker() {
+        init_crypto_provider();
         let config = create_test_config();
         let checker = ActiveHealthChecker::new(&config);
         assert!(checker.is_some());
@@ -434,6 +444,7 @@ mod tests {
 
     #[test]
     fn test_health_check_runner() {
+        init_crypto_provider();
         let mut runner = HealthCheckRunner::new();
         assert_eq!(runner.checker_count(), 0);
 
