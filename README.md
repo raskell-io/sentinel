@@ -82,6 +82,18 @@ The goal is infrastructure that is **correct, calm, and trustworthy**.
 
 See [`MANIFESTO.md`](MANIFESTO.md) for the full philosophy.
 
+## Crates
+
+| Crate | Description |
+|-------|-------------|
+| [`sentinel-proxy`](crates/proxy/) | Core reverse proxy built on Pingora |
+| [`sentinel-config`](crates/config/) | KDL configuration parsing and validation |
+| [`sentinel-common`](crates/common/) | Shared types, errors, and utilities |
+| [`sentinel-agent-protocol`](crates/agent-protocol/) | External agent communication protocol |
+| [`sentinel-sim`](crates/sim/) | WASM-compatible configuration simulator |
+| [`sentinel-stack`](crates/stack/) | All-in-one process manager for proxy and agents |
+| [`sentinel-playground-wasm`](crates/playground-wasm/) | Browser bindings for the config playground |
+
 ## Community
 
 - 💬 [Discussions](https://github.com/raskell-io/sentinel/discussions) — Questions, ideas, show & tell
