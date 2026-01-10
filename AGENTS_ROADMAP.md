@@ -2,6 +2,38 @@
 
 This document tracks ideas for future Sentinel agents. Agents extend Sentinel's capabilities through the [Agent Protocol](https://sentinel.raskell.io/docs/agent-protocol/).
 
+## Architecture: Built-in vs Agent
+
+Sentinel follows a **"boring dataplane, innovative agents"** philosophy:
+
+**Built-in to Sentinel Core** (stable, bounded, predictable):
+- Rate limiting (local + distributed)
+- Load balancing (multiple algorithms)
+- Circuit breakers
+- Health checks + target ejection
+- HTTP caching
+- CORS handling
+- GeoIP filtering
+- TLS/mTLS termination
+- Service discovery
+- OpenTelemetry tracing
+- Traffic mirroring
+- Static file serving
+- Header manipulation
+- Body decompression/compression
+
+**Agents** (out-of-process, extensible, isolated):
+- Authentication & authorization (JWT, OAuth, API keys)
+- WAF / attack detection
+- Custom business logic
+- Complex transformations
+- Protocol-specific security (GraphQL, gRPC, MQTT)
+- Scripting (Lua, JavaScript, WebAssembly)
+
+This separation keeps the dataplane safe and bounded while allowing complex, potentially risky features to be isolated and independently upgraded.
+
+---
+
 ## Current Agents
 
 | Agent | Status | Description |
@@ -73,72 +105,30 @@ GraphQL-specific security controls.
 #### Request/Response Transform
 **Status:** Proposed
 **Complexity:** Medium
-**Value:** High
+**Value:** Medium
 
-General-purpose request and response transformation.
+Advanced request and response transformation beyond built-in capabilities.
 
-**Features:**
-- [ ] URL rewriting (path, query params)
-- [ ] Header injection/removal/modification
-- [ ] Body transformation (JSON path manipulation)
-- [ ] Request/response cloning
-- [ ] Conditional transforms (based on headers, paths)
-- [ ] Template-based responses
-
-**Use Cases:**
-- API migration (legacy URL support)
-- Backend normalization
-- Header standardization
-- API versioning support
-
----
-
-#### Circuit Breaker
-**Status:** Proposed
-**Complexity:** Medium
-**Value:** High
-
-Resilience patterns for upstream protection.
+> **Note:** Sentinel core includes basic header manipulation (`set`/`add`/`remove` for request and response headers) and body decompression. This agent would provide **advanced** transformations.
 
 **Features:**
-- [ ] Failure threshold configuration
-- [ ] Half-open state with gradual recovery
-- [ ] Per-upstream circuit breakers
-- [ ] Fallback responses (static or from cache)
-- [ ] Health check integration
-- [ ] Metrics and alerting hooks
-- [ ] Slow call detection
+- [ ] Complex URL rewriting (regex-based, with capture groups)
+- [ ] Body transformation (JSON path manipulation, jq-style queries)
+- [ ] XML/HTML body transformation
+- [ ] Request/response cloning for A/B testing
+- [ ] Conditional transforms (based on JWT claims, custom logic)
+- [ ] Template-based responses (Handlebars, Tera)
+- [ ] Content-Type conversion (JSON ↔ XML)
 
 **Use Cases:**
-- Microservices resilience
-- Graceful degradation
-- Cascade failure prevention
+- API migration (legacy URL support with complex rewrites)
+- Response shaping for different clients
+- Backend response normalization
+- GraphQL-to-REST bridging
 
 ---
 
 ### Priority 2: Observability
-
-#### OpenTelemetry
-**Status:** Proposed
-**Complexity:** Medium
-**Value:** High
-
-Distributed tracing integration.
-
-**Features:**
-- [ ] Trace context propagation (W3C, B3)
-- [ ] Span creation for proxy processing
-- [ ] Custom span attributes from headers/claims
-- [ ] Sampling configuration
-- [ ] OTLP export (gRPC, HTTP)
-- [ ] Baggage propagation
-
-**Use Cases:**
-- End-to-end request tracing
-- Performance analysis
-- Debugging distributed systems
-
----
 
 #### Audit Logger
 **Status:** Proposed
@@ -185,30 +175,6 @@ PII protection and data minimization.
 - PCI DSS (card data protection)
 - Secure logging
 - Data minimization
-
----
-
-#### CORS
-**Status:** Proposed
-**Complexity:** Low
-**Value:** Medium
-
-> Note: Evaluate if this should be built-in to Sentinel core instead.
-
-Dynamic CORS policy management.
-
-**Features:**
-- [ ] Origin allowlist/denylist
-- [ ] Regex origin matching
-- [ ] Per-route CORS configuration
-- [ ] Credentials support
-- [ ] Preflight caching
-- [ ] Custom headers exposure
-
-**Use Cases:**
-- SPA/mobile API security
-- Third-party integrations
-- Development environments
 
 ---
 
@@ -308,10 +274,18 @@ API lifecycle management.
 
 | Idea | Reason |
 |------|--------|
-| Rate Limiter Agent | Now built-in to Sentinel core |
-| Load Balancer Agent | Built-in to Sentinel core |
-| Cache Agent | Better suited as built-in feature |
-| Service Discovery Agent | Integration via config, not agent |
+| Rate Limiter Agent | Built-in: local (token bucket) and distributed (Redis, Memcached) rate limiting |
+| Load Balancer Agent | Built-in: round-robin, least-connections, consistent hashing, P2C, adaptive |
+| Cache Agent | Built-in: HTTP caching with Cache-Control, LRU eviction, stale-while-revalidate |
+| Service Discovery Agent | Built-in: static, DNS, DNS SRV, Consul, Kubernetes |
+| Circuit Breaker Agent | Built-in: per-upstream circuit breakers with failure thresholds, half-open state, metrics |
+| OpenTelemetry Agent | Built-in: W3C trace context propagation, OTLP export, sampling configuration |
+| CORS Agent | Built-in: per-route CORS with origins, methods, headers, credentials, preflight caching |
+| GeoIP Agent | Built-in: MaxMind/IP2Location with allow/block modes, country header injection |
+| Health Check Agent | Built-in: HTTP/TCP/gRPC health checks with target ejection |
+| Retry Agent | Built-in: configurable retry policy with backoff |
+| Traffic Mirroring Agent | Built-in: shadow/mirror traffic with sampling |
+| Static File Agent | Built-in: file serving with directory listing, SPA support, range requests |
 
 ---
 
