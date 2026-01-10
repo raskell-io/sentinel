@@ -6,9 +6,13 @@ The web runs on systems that sit quietly at the edge, making decisions millions 
 
 Sentinel is an attempt to do this layer right.
 
-Not bigger.  
-Not smarter.  
+Not bigger.
+Not smarter.
 Just **more honest**.
+
+We build on proven foundations. Cloudflare's Pingora has handled trillions of requests. We inherit that battle-tested core and focus on what matters above it: configuration that humans can reason about, extension points that don't destabilize the system, and operational behavior you can trust with your sleep.
+
+Sentinel aspires to be a **reference implementation**—not because we claim to be the best, but because we aim to demonstrate how this layer *should* be built: with explicit contracts, bounded resources, and a clear separation between what must be fast and what must be flexible.
 
 ---
 
@@ -66,8 +70,13 @@ Anything that is:
 
 belongs **outside** the core, behind explicit contracts.
 
-This is why Sentinel favors external agents over embedded logic.
+This is why Sentinel favors **external agents** over embedded logic.
+
+The agent architecture is not a workaround or a plugin system bolted on as an afterthought. It is a fundamental design choice: the dataplane does one thing well (moving bytes with bounded resources), while agents handle everything else (WAF inspection, authentication, rate limiting, custom business logic).
+
 A broken extension must never take the whole system down with it.
+Agents can crash, restart, be upgraded, or be disabled—independently of the proxy.
+The blast radius of complexity is contained by process boundaries, not just code boundaries.
 
 ---
 
@@ -105,6 +114,26 @@ does not belong in the core.
 
 ---
 
+## Guarding Tomorrow's Web
+
+The web is changing. New challenges are emerging that reverse proxies must address:
+
+**Inference traffic is different.**
+AI workloads don't fit the request-response model we've optimized for decades. Token streams, long-running connections, and cost-per-token economics require new primitives. Sentinel will treat inference as a first-class traffic type—with token-aware rate limiting, model routing, and semantic guardrails—without compromising the simplicity of HTTP routing.
+
+**Identity is becoming workload-native.**
+The future of security is not firewalls at the perimeter but cryptographic identity at every hop. Sentinel will embrace workload identity (SPIFFE, mTLS, continuous verification) so that every request can answer: *who is asking, and should they be allowed?*
+
+**Explainability is mandatory.**
+As edge decisions grow more complex—WAF rules, rate limits, routing policies, agent verdicts—operators need to understand *why* a request was blocked or allowed. Sentinel will make every decision traceable: not just what happened, but which rule, which agent, which configuration line.
+
+**The attack surface is expanding.**
+Prompt injection, model jailbreaking, PII leakage through AI APIs—these are new categories of harm that the edge must help prevent. Sentinel's agent architecture is designed precisely for this: specialized agents can inspect, classify, and guard against threats we haven't fully imagined yet, without requiring changes to the core.
+
+We do not know exactly what the web will look like in ten years. But we know that the layer sitting at the boundary—accepting connections, making decisions, routing traffic—will still matter. Sentinel is built to evolve with that future, not to predict it.
+
+---
+
 ## What Sentinel Is Not
 
 Sentinel is not:
@@ -139,7 +168,13 @@ Sentinel will still be here tomorrow.
 Sentinel stands for:
 - explicit limits,
 - predictable behavior,
+- observable decisions,
+- isolated complexity,
 - and infrastructure people can trust.
+
+We guard not just the web of today—the HTTP requests, the upstream pools, the TLS handshakes—but the web of tomorrow: the inference streams, the workload identities, the threats we haven't named yet.
+
+We do this by staying small where it matters, extensible where it counts, and honest everywhere.
 
 Guarding the free web does not require aggression.
 
