@@ -160,6 +160,24 @@ pub enum LoadBalancingAlgorithm {
     /// to other zones when local targets are unhealthy or overloaded.
     /// Useful for multi-region deployments to minimize latency.
     LocalityAware,
+    /// Peak EWMA (Exponentially Weighted Moving Average)
+    ///
+    /// Twitter Finagle's algorithm that tracks latency using EWMA and selects
+    /// the backend with the lowest predicted completion time. Reacts quickly
+    /// to latency spikes by using the peak of EWMA and recent latency.
+    PeakEwma,
+    /// Deterministic Subsetting
+    ///
+    /// For very large clusters (1000+ backends), limits each proxy instance
+    /// to a deterministic subset of backends. Reduces connection overhead
+    /// while ensuring even distribution across all proxies.
+    DeterministicSubset,
+    /// Weighted Least Connections
+    ///
+    /// Combines weight with connection counting. Selects the backend with
+    /// the lowest ratio of active connections to weight. Useful when backends
+    /// have different capacities.
+    WeightedLeastConnections,
 }
 
 /// Health check type

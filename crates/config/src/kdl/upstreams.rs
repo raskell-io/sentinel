@@ -197,6 +197,13 @@ fn parse_load_balancing(s: &str) -> LoadBalancingAlgorithm {
         }
         "maglev" => LoadBalancingAlgorithm::Maglev,
         "locality_aware" | "localityaware" | "locality" => LoadBalancingAlgorithm::LocalityAware,
+        "peak_ewma" | "peakewma" | "ewma" => LoadBalancingAlgorithm::PeakEwma,
+        "deterministic_subset" | "subset" | "subsetting" => {
+            LoadBalancingAlgorithm::DeterministicSubset
+        }
+        "weighted_least_connections" | "weighted_least_conn" | "wlc" => {
+            LoadBalancingAlgorithm::WeightedLeastConnections
+        }
         _ => LoadBalancingAlgorithm::RoundRobin,
     }
 }

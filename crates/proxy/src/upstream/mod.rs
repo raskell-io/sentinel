@@ -91,6 +91,9 @@ pub mod least_tokens;
 pub mod locality;
 pub mod maglev;
 pub mod p2c;
+pub mod peak_ewma;
+pub mod subset;
+pub mod weighted_least_conn;
 
 // Re-export commonly used types from sub-modules
 pub use adaptive::{AdaptiveBalancer, AdaptiveConfig};
@@ -101,6 +104,9 @@ pub use least_tokens::{LeastTokensQueuedBalancer, LeastTokensQueuedConfig, Least
 pub use locality::{LocalityAwareBalancer, LocalityAwareConfig};
 pub use maglev::{MaglevBalancer, MaglevConfig};
 pub use p2c::{P2cBalancer, P2cConfig};
+pub use peak_ewma::{PeakEwmaBalancer, PeakEwmaConfig};
+pub use subset::{SubsetBalancer, SubsetConfig};
+pub use weighted_least_conn::{WeightedLeastConnBalancer, WeightedLeastConnConfig};
 
 /// Request context for load balancer decisions
 #[derive(Debug, Clone)]
@@ -918,6 +924,20 @@ impl UpstreamPool {
                 targets.to_vec(),
                 LocalityAwareConfig::default(),
             )),
+            LoadBalancingAlgorithm::PeakEwma => Arc::new(PeakEwmaBalancer::new(
+                targets.to_vec(),
+                PeakEwmaConfig::default(),
+            )),
+            LoadBalancingAlgorithm::DeterministicSubset => Arc::new(SubsetBalancer::new(
+                targets.to_vec(),
+                SubsetConfig::default(),
+            )),
+            LoadBalancingAlgorithm::WeightedLeastConnections => {
+                Arc::new(WeightedLeastConnBalancer::new(
+                    targets.to_vec(),
+                    WeightedLeastConnConfig::default(),
+                ))
+            }
         };
         Ok(balancer)
     }
