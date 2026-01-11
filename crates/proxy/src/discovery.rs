@@ -875,6 +875,244 @@ impl ServiceDiscovery for KubernetesDiscovery {
     }
 }
 
+// ============================================================================
+// File-based Service Discovery
+// ============================================================================
+
+/// File-based service discovery
+///
+/// Discovers backends by reading a configuration file. The file is watched
+/// for changes and backends are reloaded automatically.
+///
+/// # File Format
+///
+/// One backend per line:
+/// ```text
+/// # Comment lines start with #
+/// 10.0.0.1:8080
+/// 10.0.0.2:8080 weight=2
+/// 10.0.0.3:8080 weight=3
+///
+/// # Empty lines are ignored
+/// backend.example.com:8080
+/// ```
+///
+/// # Example KDL Configuration
+///
+/// ```kdl
+/// upstream "dynamic-backend" {
+///     discovery "file" {
+///         path "/etc/sentinel/backends/api-servers.txt"
+///         watch-interval 5
+///     }
+/// }
+/// ```
+pub struct FileDiscovery {
+    /// Path to the backends file
+    path: String,
+    /// Watch/refresh interval
+    watch_interval: Duration,
+    /// Cached backends
+    cached_backends: RwLock<BTreeSet<Backend>>,
+    /// Last check time
+    last_check: RwLock<Instant>,
+    /// Last known file modification time
+    last_modified: RwLock<Option<std::time::SystemTime>>,
+}
+
+impl FileDiscovery {
+    /// Create a new file-based discovery instance
+    pub fn new(path: String, watch_interval: Duration) -> Self {
+        Self {
+            path,
+            watch_interval,
+            cached_backends: RwLock::new(BTreeSet::new()),
+            last_check: RwLock::new(Instant::now() - watch_interval),
+            last_modified: RwLock::new(None),
+        }
+    }
+
+    /// Check if we should re-check the file
+    fn needs_check(&self) -> bool {
+        let last = *self.last_check.read();
+        last.elapsed() >= self.watch_interval
+    }
+
+    /// Check if file has been modified since last read
+    fn file_modified(&self) -> bool {
+        let metadata = match std::fs::metadata(&self.path) {
+            Ok(m) => m,
+            Err(_) => return true, // If we can't read metadata, try to read the file
+        };
+
+        let modified = match metadata.modified() {
+            Ok(m) => m,
+            Err(_) => return true,
+        };
+
+        let last_known = *self.last_modified.read();
+        match last_known {
+            Some(last) => modified > last,
+            None => true, // First check
+        }
+    }
+
+    /// Read and parse backends from the file
+    fn read_backends(&self) -> Result<BTreeSet<Backend>, Box<Error>> {
+        trace!(path = %self.path, "Reading backends from file");
+
+        let content = std::fs::read_to_string(&self.path).map_err(|e| {
+            Error::explain(
+                ErrorType::ReadError,
+                format!("Failed to read backends file '{}': {}", self.path, e),
+            )
+        })?;
+
+        // Update last modified time
+        if let Ok(metadata) = std::fs::metadata(&self.path) {
+            if let Ok(modified) = metadata.modified() {
+                *self.last_modified.write() = Some(modified);
+            }
+        }
+
+        let mut backends = BTreeSet::new();
+        let mut line_num = 0;
+
+        for line in content.lines() {
+            line_num += 1;
+            let line = line.trim();
+
+            // Skip empty lines and comments
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            // Parse line: "host:port" or "host:port weight=N"
+            let (address, weight) = Self::parse_backend_line(line, line_num)?;
+
+            // Resolve address
+            match address.to_socket_addrs() {
+                Ok(mut addrs) => {
+                    if let Some(socket_addr) = addrs.next() {
+                        backends.insert(Backend {
+                            addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(socket_addr),
+                            weight,
+                            ext: http::Extensions::new(),
+                        });
+                        trace!(
+                            address = %address,
+                            weight = weight,
+                            "Added backend from file"
+                        );
+                    } else {
+                        warn!(
+                            path = %self.path,
+                            line = line_num,
+                            address = %address,
+                            "Address resolved but no socket address found"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        path = %self.path,
+                        line = line_num,
+                        address = %address,
+                        error = %e,
+                        "Failed to resolve backend address, skipping"
+                    );
+                }
+            }
+        }
+
+        debug!(
+            path = %self.path,
+            backend_count = backends.len(),
+            "Loaded backends from file"
+        );
+
+        Ok(backends)
+    }
+
+    /// Parse a single backend line
+    ///
+    /// Format: `host:port [weight=N]`
+    fn parse_backend_line(line: &str, line_num: usize) -> Result<(String, usize), Box<Error>> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+
+        if parts.is_empty() {
+            return Err(Error::explain(
+                ErrorType::InternalError,
+                format!("Empty backend line at line {}", line_num),
+            ));
+        }
+
+        let address = parts[0].to_string();
+        let mut weight = 1usize;
+
+        // Parse optional weight parameter
+        for part in parts.iter().skip(1) {
+            if let Some(weight_str) = part.strip_prefix("weight=") {
+                weight = weight_str.parse().unwrap_or_else(|_| {
+                    warn!(
+                        line = line_num,
+                        weight = weight_str,
+                        "Invalid weight value, using default 1"
+                    );
+                    1
+                });
+            }
+        }
+
+        Ok((address, weight))
+    }
+}
+
+#[async_trait]
+impl ServiceDiscovery for FileDiscovery {
+    async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>)> {
+        // Check if we need to refresh
+        if self.needs_check() {
+            *self.last_check.write() = Instant::now();
+
+            // Check if file has been modified
+            if self.file_modified() {
+                match self.read_backends() {
+                    Ok(backends) => {
+                        info!(
+                            path = %self.path,
+                            backend_count = backends.len(),
+                            "File-based discovery updated backends"
+                        );
+                        *self.cached_backends.write() = backends;
+                    }
+                    Err(e) => {
+                        // Return cached backends on error if available
+                        let cached = self.cached_backends.read().clone();
+                        if !cached.is_empty() {
+                            warn!(
+                                path = %self.path,
+                                error = %e,
+                                cached_count = cached.len(),
+                                "File read failed, using cached backends"
+                            );
+                            return Ok((cached, HashMap::new()));
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        let backends = self.cached_backends.read().clone();
+        Ok((backends, HashMap::new()))
+    }
+}
+
+// ============================================================================
+// Service Discovery Manager
+// ============================================================================
+
 /// Service discovery manager
 ///
 /// Manages service discovery for upstreams with support for multiple
@@ -1012,11 +1250,10 @@ impl DiscoveryManager {
                     upstream_id = %upstream_id,
                     path = %path,
                     watch_interval_secs = watch_interval.as_secs(),
-                    "File-based discovery not yet implemented, using empty static"
+                    "Registered file-based service discovery"
                 );
 
-                // TODO: Implement file-based discovery
-                Arc::new(StaticWrapper(StaticDiscovery::new(BTreeSet::new())))
+                Arc::new(FileDiscovery::new(path, watch_interval))
             }
         };
 
@@ -1219,5 +1456,185 @@ mod tests {
 
         assert_eq!(manager.count(), 1);
         assert!(manager.get("k8s-upstream").is_some());
+    }
+
+    // ========================================================================
+    // File-based Discovery Tests
+    // ========================================================================
+
+    #[test]
+    fn test_file_discovery_parse_backend_line_simple() {
+        let (address, weight) = FileDiscovery::parse_backend_line("127.0.0.1:8080", 1).unwrap();
+        assert_eq!(address, "127.0.0.1:8080");
+        assert_eq!(weight, 1);
+    }
+
+    #[test]
+    fn test_file_discovery_parse_backend_line_with_weight() {
+        let (address, weight) =
+            FileDiscovery::parse_backend_line("10.0.0.1:8080 weight=5", 1).unwrap();
+        assert_eq!(address, "10.0.0.1:8080");
+        assert_eq!(weight, 5);
+    }
+
+    #[test]
+    fn test_file_discovery_parse_backend_line_hostname() {
+        let (address, weight) =
+            FileDiscovery::parse_backend_line("backend.example.com:443 weight=2", 1).unwrap();
+        assert_eq!(address, "backend.example.com:443");
+        assert_eq!(weight, 2);
+    }
+
+    #[test]
+    fn test_file_discovery_needs_check() {
+        let discovery = FileDiscovery::new(
+            "/nonexistent/path.txt".to_string(),
+            Duration::from_secs(0), // Immediate refresh
+        );
+
+        // Should need check immediately after creation
+        assert!(discovery.needs_check());
+    }
+
+    #[tokio::test]
+    async fn test_file_discovery_with_temp_file() {
+        use std::io::Write;
+
+        // Create temp file with backend addresses
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("backends.txt");
+
+        {
+            let mut file = std::fs::File::create(&file_path).unwrap();
+            writeln!(file, "# Backend servers").unwrap();
+            writeln!(file, "127.0.0.1:8080").unwrap();
+            writeln!(file, "127.0.0.1:8081 weight=2").unwrap();
+            writeln!(file, "").unwrap(); // Empty line
+            writeln!(file, "127.0.0.1:8082 weight=3").unwrap();
+        }
+
+        let discovery = FileDiscovery::new(
+            file_path.to_string_lossy().to_string(),
+            Duration::from_secs(1),
+        );
+
+        // Discover backends
+        let (backends, _) = discovery.discover().await.unwrap();
+
+        assert_eq!(backends.len(), 3);
+
+        // Verify weights are preserved
+        let weights: Vec<usize> = backends.iter().map(|b| b.weight).collect();
+        assert!(weights.contains(&1)); // Default weight
+        assert!(weights.contains(&2));
+        assert!(weights.contains(&3));
+    }
+
+    #[tokio::test]
+    async fn test_file_discovery_missing_file_uses_cache() {
+        use std::io::Write;
+
+        // Create temp file first
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("backends.txt");
+
+        {
+            let mut file = std::fs::File::create(&file_path).unwrap();
+            writeln!(file, "127.0.0.1:8080").unwrap();
+        }
+
+        let discovery = FileDiscovery::new(
+            file_path.to_string_lossy().to_string(),
+            Duration::from_secs(0), // Immediate refresh
+        );
+
+        // Initial discovery
+        let (backends, _) = discovery.discover().await.unwrap();
+        assert_eq!(backends.len(), 1);
+
+        // Delete the file
+        std::fs::remove_file(&file_path).unwrap();
+
+        // Wait a bit to ensure needs_check returns true
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Discovery should use cached backends
+        let (backends, _) = discovery.discover().await.unwrap();
+        assert_eq!(backends.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_file_discovery_hot_reload() {
+        use std::io::Write;
+
+        // Create temp file
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("backends.txt");
+
+        {
+            let mut file = std::fs::File::create(&file_path).unwrap();
+            writeln!(file, "127.0.0.1:8080").unwrap();
+        }
+
+        let discovery = FileDiscovery::new(
+            file_path.to_string_lossy().to_string(),
+            Duration::from_millis(10), // Short interval for test
+        );
+
+        // Initial discovery
+        let (backends, _) = discovery.discover().await.unwrap();
+        assert_eq!(backends.len(), 1);
+
+        // Wait for watch interval
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Update the file
+        {
+            let mut file = std::fs::File::create(&file_path).unwrap();
+            writeln!(file, "127.0.0.1:8080").unwrap();
+            writeln!(file, "127.0.0.1:8081").unwrap();
+            writeln!(file, "127.0.0.1:8082").unwrap();
+        }
+
+        // Discover again - should pick up changes
+        let (backends, _) = discovery.discover().await.unwrap();
+        assert_eq!(backends.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_discovery_manager_file() {
+        use std::io::Write;
+
+        // Create temp file
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("backends.txt");
+
+        {
+            let mut file = std::fs::File::create(&file_path).unwrap();
+            writeln!(file, "127.0.0.1:8080").unwrap();
+            writeln!(file, "127.0.0.1:8081").unwrap();
+        }
+
+        let manager = DiscoveryManager::new();
+
+        // Register file-based discovery
+        manager
+            .register(
+                "file-upstream",
+                DiscoveryConfig::File {
+                    path: file_path.to_string_lossy().to_string(),
+                    watch_interval: Duration::from_secs(5),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(manager.count(), 1);
+        assert!(manager.get("file-upstream").is_some());
+
+        // Discover backends
+        let result = manager.discover("file-upstream").await;
+        assert!(result.is_some());
+        let (backends, _) = result.unwrap().unwrap();
+        assert_eq!(backends.len(), 2);
     }
 }
