@@ -90,6 +90,14 @@ jobs:
           # Add ARM64 architecture for cross-compilation libraries
           sudo dpkg --add-architecture arm64
 
+          # Fix existing sources to only use amd64, then add arm64 from ports
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list 2>/dev/null || true
+          # Handle newer ubuntu.sources format if present
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's/^Types: deb$/Types: deb\nArchitectures: amd64/' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+
           # Add Ubuntu ports mirror for ARM64 packages
           cat << EOF | sudo tee /etc/apt/sources.list.d/arm64-cross.list
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${CODENAME} main restricted universe
