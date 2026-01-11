@@ -52,6 +52,7 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [GraphQL Security](https://sentinel.raskell.io/agents/graphql-security/) | Beta | Query depth/complexity limiting, introspection control, field auth |
 | [Audit Logger](https://sentinel.raskell.io/agents/audit-logger/) | Beta | Structured audit logging with PII redaction, SIEM formats |
 | [API Deprecation](https://sentinel.raskell.io/agents/api-deprecation/) | Beta | Sunset headers, usage tracking, automatic redirects, migration support |
+| [Mock Server](https://sentinel.raskell.io/agents/mock-server/) | Beta | Request matching, stub responses, templating, fault injection |
 
 ---
 
@@ -179,25 +180,24 @@ IoT protocol security.
 
 ### Priority 5: Developer Experience
 
-#### Mock Server
-**Status:** Proposed
+#### ~~Mock Server~~ ✅
+**Status:** Complete
 **Complexity:** Low
 **Value:** Low
 
 Request matching and stub responses.
 
 **Features:**
-- [ ] Request matching (path, headers, body)
-- [ ] Static response stubs
-- [ ] Dynamic responses (templates)
-- [ ] Latency simulation
-- [ ] Failure injection
-- [ ] Record and replay mode
+- [x] Request matching (path, headers, body, query params)
+- [x] Static response stubs
+- [x] Dynamic responses (Handlebars templates)
+- [x] Latency simulation (fixed and random)
+- [x] Failure injection (errors, timeouts, corruption, slow responses)
+- [x] Match limits and priority matching
+- [ ] Record and replay mode (future enhancement)
 
-**Use Cases:**
-- API development/testing
-- Integration testing
-- Demo environments
+**Repository:** https://github.com/raskell-io/sentinel-agent-mock-server
+**Docs:** https://sentinel.raskell.io/agents/mock-server/
 
 ---
 
