@@ -49,6 +49,8 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [WebAssembly](https://sentinel.raskell.io/agents/wasm/) | Beta | High-performance Wasm modules |
 | [Bot Management](https://sentinel.raskell.io/agents/bot-management/) | Beta | Multi-signal bot detection with behavioral analysis |
 | [Transform](https://sentinel.raskell.io/agents/transform/) | Beta | URL rewriting, header manipulation, JSON body transforms |
+| [GraphQL Security](https://sentinel.raskell.io/agents/graphql-security/) | Beta | Query depth/complexity limiting, introspection control, field auth |
+| [Audit Logger](https://sentinel.raskell.io/agents/audit-logger/) | Beta | Structured audit logging with PII redaction, SIEM formats |
 
 ---
 
@@ -56,51 +58,49 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 
 ### Priority 1: High Value
 
-#### GraphQL Security
-**Status:** Proposed
+#### ~~GraphQL Security~~ ✅
+**Status:** Complete
 **Complexity:** Medium
 **Value:** High
 
 GraphQL-specific security controls.
 
 **Features:**
-- [ ] Query depth limiting
-- [ ] Query complexity analysis (cost calculation)
-- [ ] Field-level authorization
-- [ ] Introspection control (disable in production)
-- [ ] Batch query limits
-- [ ] Alias limits
-- [ ] Persisted queries / allowlist mode
-- [ ] N+1 detection
+- [x] Query depth limiting
+- [x] Query complexity analysis (cost calculation)
+- [x] Field-level authorization
+- [x] Introspection control (disable in production)
+- [x] Batch query limits
+- [x] Alias limits
+- [x] Persisted queries / allowlist mode
+- [ ] N+1 detection (future enhancement)
 
-**Use Cases:**
-- Prevent resource exhaustion from deep/complex queries
-- Field-level access control
-- Production hardening
+**Repository:** https://github.com/raskell-io/sentinel-agent-graphql-security
+**Docs:** https://sentinel.raskell.io/agents/graphql-security/
 
 ---
 
 ### Priority 2: Observability
 
-#### Audit Logger
-**Status:** Proposed
+#### ~~Audit Logger~~ ✅
+**Status:** Complete
 **Complexity:** Low
 **Value:** Medium
 
 Structured compliance-focused audit logging.
 
 **Features:**
-- [ ] Configurable log fields
-- [ ] Multiple output formats (JSON, CEF, LEEF)
-- [ ] Log shipping (file, syslog, HTTP, Kafka)
-- [ ] PII redaction in logs
-- [ ] Request/response body logging (configurable)
-- [ ] Compliance templates (SOC2, HIPAA, PCI)
+- [x] Configurable log fields
+- [x] Multiple output formats (JSON, CEF, LEEF)
+- [x] Log shipping (file, syslog, HTTP)
+- [x] PII redaction in logs
+- [x] Request/response body logging (configurable)
+- [x] Compliance templates (SOC2, HIPAA, PCI, GDPR)
+- [x] Custom redaction patterns
+- [x] Request sampling and filtering
 
-**Use Cases:**
-- Security audit trails
-- Compliance requirements
-- Incident investigation
+**Repository:** https://github.com/raskell-io/sentinel-agent-audit-logger
+**Docs:** https://sentinel.raskell.io/agents/audit-logger/
 
 ---
 
