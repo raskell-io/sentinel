@@ -53,6 +53,7 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [Audit Logger](https://sentinel.raskell.io/agents/audit-logger/) | Beta | Structured audit logging with PII redaction, SIEM formats |
 | [API Deprecation](https://sentinel.raskell.io/agents/api-deprecation/) | Beta | Sunset headers, usage tracking, automatic redirects, migration support |
 | [Data Masking](https://sentinel.raskell.io/agents/data-masking/) | Beta | PII tokenization, FPE, pattern-based masking for JSON/XML/form |
+| [gRPC Inspector](https://sentinel.raskell.io/agents/grpc-inspector/) | Beta | Method authorization, rate limiting, metadata inspection, reflection control |
 
 ---
 
@@ -137,25 +138,28 @@ PII protection and data minimization.
 
 ### Priority 4: Protocol-Specific
 
-#### gRPC Inspector
-**Status:** Proposed
+#### ~~gRPC Inspector~~ ✅
+**Status:** Complete
 **Complexity:** High
 **Value:** Medium
 
 gRPC/Protocol Buffers security.
 
 **Features:**
-- [ ] Method-level authorization
-- [ ] Message size limits
-- [ ] Metadata inspection
-- [ ] Rate limiting per method
-- [ ] Schema validation
-- [ ] Reflection control
+- [x] Method-level authorization
+- [x] Message size limits
+- [x] Metadata inspection
+- [x] Rate limiting per method
+- [ ] Schema validation (future enhancement with prost-reflect)
+- [x] Reflection control
 
 **Use Cases:**
 - gRPC API security
 - Service mesh integration
 - Internal API governance
+
+**Repository:** https://github.com/raskell-io/sentinel-agent-grpc-inspector
+**Docs:** https://sentinel.raskell.io/agents/grpc-inspector/
 
 ---
 
