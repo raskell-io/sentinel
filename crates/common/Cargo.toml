@@ -12,13 +12,13 @@ keywords = ["proxy", "reverse-proxy", "utilities"]
 categories = ["network-programming"]
 
 [dependencies]
-# Async runtime
-tokio = { workspace = true, features = ["sync"] }
+# Async runtime (not WASM-compatible)
+tokio = { workspace = true, features = ["sync"], optional = true }
 
 # Logging and tracing
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-prometheus = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
+prometheus = { workspace = true, optional = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -32,12 +32,17 @@ serde_json = { workspace = true }
 http = { workspace = true }
 
 # Utilities
-uuid = { workspace = true }
+uuid = { workspace = true, optional = true }
 chrono = { workspace = true }
 parking_lot = { workspace = true }
 
-# System metrics
-sysinfo = "0.31"
+# System metrics (not WASM-compatible)
+sysinfo = { version = "0.31", optional = true }
+
+[features]
+default = ["runtime"]
+# Runtime features - not available in WASM
+runtime = ["tokio", "tracing-subscriber", "prometheus", "sysinfo", "uuid"]
 
 [dev-dependencies]
 criterion = { workspace = true }

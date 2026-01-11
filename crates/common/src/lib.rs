@@ -9,29 +9,36 @@
 //! - [`types`]: Common type definitions (ByteSize, Priority, etc.)
 //! - [`errors`]: Error types and result aliases
 //! - [`limits`]: Resource limits and rate limiting
-//! - [`observability`]: Metrics, logging, and tracing
-//! - [`circuit_breaker`]: Circuit breaker state machine
-//! - [`registry`]: Generic type-safe registry abstraction
+//! - [`observability`]: Metrics, logging, and tracing (runtime only)
+//! - [`circuit_breaker`]: Circuit breaker state machine (runtime only)
+//! - [`registry`]: Generic type-safe registry abstraction (runtime only)
 
 pub mod budget;
+#[cfg(feature = "runtime")]
 pub mod circuit_breaker;
 pub mod errors;
 pub mod ids;
 pub mod inference;
 pub mod limits;
+#[cfg(feature = "runtime")]
 pub mod observability;
+#[cfg(feature = "runtime")]
 pub mod registry;
+#[cfg(feature = "runtime")]
 pub mod scoped_metrics;
+#[cfg(feature = "runtime")]
 pub mod scoped_registry;
 pub mod types;
 
-// Re-export commonly used items at the crate root
+// Re-export commonly used items at the crate root (runtime only)
+#[cfg(feature = "runtime")]
 pub use observability::{
     init_tracing, AuditLogEntry, ComponentHealth, ComponentHealthTracker, HealthStatus,
     RequestMetrics,
 };
 
 // Backwards compatibility alias (deprecated, use ComponentHealthTracker)
+#[cfg(feature = "runtime")]
 #[deprecated(since = "0.2.0", note = "Use ComponentHealthTracker instead")]
 pub type HealthChecker = ComponentHealthTracker;
 
@@ -53,14 +60,18 @@ pub use inference::{
     QueueDepthConfig, WarmthDetectionConfig,
 };
 
-// Re-export circuit breaker
+// Re-export circuit breaker (runtime only)
+#[cfg(feature = "runtime")]
 pub use circuit_breaker::CircuitBreaker;
 
-// Re-export registries
+// Re-export registries (runtime only)
+#[cfg(feature = "runtime")]
 pub use registry::Registry;
+#[cfg(feature = "runtime")]
 pub use scoped_registry::ScopedRegistry;
 
-// Re-export scoped metrics
+// Re-export scoped metrics (runtime only)
+#[cfg(feature = "runtime")]
 pub use scoped_metrics::{ScopedMetrics, ScopeLabels};
 
 // Re-export budget types

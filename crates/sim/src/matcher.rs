@@ -447,6 +447,8 @@ mod tests {
             websocket: false,
             websocket_inspection: false,
             shadow: None,
+            inference: None,
+            fallback: None,
         }
     }
 

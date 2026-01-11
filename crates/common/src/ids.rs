@@ -28,6 +28,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+#[cfg(feature = "runtime")]
 use uuid::Uuid;
 
 // ============================================================================
@@ -269,7 +270,8 @@ impl From<String> for QualifiedId {
 pub struct CorrelationId(String);
 
 impl CorrelationId {
-    /// Create a new random correlation ID
+    /// Create a new random correlation ID (requires runtime feature)
+    #[cfg(feature = "runtime")]
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }
@@ -290,6 +292,7 @@ impl CorrelationId {
     }
 }
 
+#[cfg(feature = "runtime")]
 impl Default for CorrelationId {
     fn default() -> Self {
         Self::new()
@@ -322,7 +325,8 @@ impl From<&str> for CorrelationId {
 pub struct RequestId(String);
 
 impl RequestId {
-    /// Create a new random request ID
+    /// Create a new random request ID (requires runtime feature)
+    #[cfg(feature = "runtime")]
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }
@@ -333,6 +337,7 @@ impl RequestId {
     }
 }
 
+#[cfg(feature = "runtime")]
 impl Default for RequestId {
     fn default() -> Self {
         Self::new()
@@ -617,6 +622,7 @@ mod tests {
     // ========================================================================
 
     #[test]
+    #[cfg(feature = "runtime")]
     fn test_correlation_id() {
         let id1 = CorrelationId::new();
         let id2 = CorrelationId::from_string("test-id");

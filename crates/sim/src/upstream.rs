@@ -253,6 +253,102 @@ fn select_target(
                 ),
             )
         }
+
+        LoadBalancingAlgorithm::Maglev => {
+            // Maglev consistent hashing - Google's algorithm
+            // Uses the same key as consistent hash for simulation
+            let hash_key = request
+                .headers
+                .get("x-forwarded-for")
+                .or(request.headers.get("x-real-ip"))
+                .cloned()
+                .unwrap_or_else(|| request.cache_key());
+
+            let hash = xxh3_64(hash_key.as_bytes());
+            let index = (hash as usize) % targets.len();
+
+            (
+                index,
+                format!(
+                    "Maglev: key '{}' maps to target {} (minimal disruption on backend changes)",
+                    truncate_for_display(&hash_key, 30),
+                    index
+                ),
+            )
+        }
+
+        LoadBalancingAlgorithm::LocalityAware => {
+            // Locality-aware prefers same zone, but we can't simulate zones
+            let hash = xxh3_64(request.cache_key().as_bytes());
+            let index = (hash as usize) % targets.len();
+
+            (
+                index,
+                format!(
+                    "Locality-aware: simulated as index {} (actual selection prefers same-zone targets)",
+                    index
+                ),
+            )
+        }
+
+        LoadBalancingAlgorithm::PeakEwma => {
+            // Peak EWMA uses latency metrics - can't simulate
+            let hash = xxh3_64(request.cache_key().as_bytes());
+            let index = (hash as usize) % targets.len();
+
+            (
+                index,
+                format!(
+                    "Peak EWMA: simulated as index {} (actual selection uses latency EWMA metrics)",
+                    index
+                ),
+            )
+        }
+
+        LoadBalancingAlgorithm::DeterministicSubset => {
+            // Deterministic subsetting for large clusters
+            // Hash to select a subset, then pick from that subset
+            let hash = xxh3_64(request.cache_key().as_bytes());
+            let index = (hash as usize) % targets.len();
+
+            (
+                index,
+                format!(
+                    "Deterministic subset: simulated as index {} (actual selection uses subset of {} targets)",
+                    index,
+                    targets.len()
+                ),
+            )
+        }
+
+        LoadBalancingAlgorithm::WeightedLeastConnections => {
+            // Weighted least connections combines weights with connection counts
+            let total_weight: u32 = targets.iter().map(|t| t.weight).sum();
+            if total_weight == 0 {
+                return (0, "Weighted least connections: all weights zero, using first target".to_string());
+            }
+
+            let hash = xxh3_64(request.cache_key().as_bytes());
+            let pick = (hash % total_weight as u64) as u32;
+
+            let mut cumulative = 0;
+            for (i, target) in targets.iter().enumerate() {
+                cumulative += target.weight;
+                if pick < cumulative {
+                    return (
+                        i,
+                        format!(
+                            "Weighted least connections: target {} (weight {}/{}, actual also considers active connections)",
+                            i,
+                            target.weight,
+                            total_weight
+                        ),
+                    );
+                }
+            }
+
+            (0, "Weighted least connections: fallback to first target".to_string())
+        }
     }
 }
 
