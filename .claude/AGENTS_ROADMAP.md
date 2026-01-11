@@ -51,6 +51,7 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [Transform](https://sentinel.raskell.io/agents/transform/) | Beta | URL rewriting, header manipulation, JSON body transforms |
 | [GraphQL Security](https://sentinel.raskell.io/agents/graphql-security/) | Beta | Query depth/complexity limiting, introspection control, field auth |
 | [Audit Logger](https://sentinel.raskell.io/agents/audit-logger/) | Beta | Structured audit logging with PII redaction, SIEM formats |
+| [API Deprecation](https://sentinel.raskell.io/agents/api-deprecation/) | Beta | Sunset headers, usage tracking, automatic redirects, migration support |
 
 ---
 
@@ -200,25 +201,23 @@ Request matching and stub responses.
 
 ---
 
-#### API Deprecation
-**Status:** Proposed
+#### ~~API Deprecation~~ ✅
+**Status:** Complete
 **Complexity:** Low
 **Value:** Low
 
 API lifecycle management.
 
 **Features:**
-- [ ] Deprecation warning headers
-- [ ] Sunset date headers
-- [ ] Usage tracking for deprecated endpoints
-- [ ] Automatic redirects to new versions
-- [ ] Migration documentation links
-- [ ] Gradual traffic shifting
+- [x] Deprecation warning headers
+- [x] Sunset date headers (RFC 8594)
+- [x] Usage tracking for deprecated endpoints
+- [x] Automatic redirects to new versions
+- [x] Migration documentation links
+- [ ] Gradual traffic shifting (future enhancement)
 
-**Use Cases:**
-- API versioning strategy
-- Breaking change management
-- Client migration tracking
+**Repository:** https://github.com/raskell-io/sentinel-agent-api-deprecation
+**Docs:** https://sentinel.raskell.io/agents/api-deprecation/
 
 ---
 
