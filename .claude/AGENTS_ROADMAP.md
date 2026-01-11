@@ -55,6 +55,8 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [Data Masking](https://sentinel.raskell.io/agents/data-masking/) | Beta | PII tokenization, FPE, pattern-based masking for JSON/XML/form |
 | [gRPC Inspector](https://sentinel.raskell.io/agents/grpc-inspector/) | Beta | Method authorization, rate limiting, metadata inspection, reflection control |
 | [Chaos Engineering](https://sentinel.raskell.io/agents/chaos/) | Beta | Controlled fault injection: latency, errors, timeouts, corruption |
+| [IP Reputation](https://sentinel.raskell.io/agents/ip-reputation/) | Beta | IP threat intelligence with AbuseIPDB, blocklists, Tor detection |
+| [Content Scanner](https://sentinel.raskell.io/agents/content-scanner/) | Beta | Malware scanning with ClamAV daemon |
 
 ---
 
@@ -253,6 +255,63 @@ Controlled fault injection for resilience testing.
 
 **Repository:** https://github.com/raskell-io/sentinel-agent-chaos
 **Docs:** https://sentinel.raskell.io/agents/chaos/
+
+---
+
+#### ~~IP Reputation~~ ✅
+**Status:** Complete
+**Complexity:** Medium
+**Value:** High
+
+IP threat intelligence and blocklist checking.
+
+**Features:**
+- [x] AbuseIPDB integration for IP reputation scores
+- [x] File-based blocklists (plain text, CSV, JSON)
+- [x] Tor exit node detection
+- [x] Configurable score thresholds for blocking/flagging
+- [x] TTL-based caching for lookups
+- [x] Fail-open/fail-closed modes
+- [x] IP allowlist support with CIDR ranges
+- [ ] VPN/proxy detection (future enhancement)
+- [ ] Additional threat feeds (future enhancement)
+
+**Use Cases:**
+- Blocking known bad actors
+- Detecting Tor traffic
+- Threat intelligence integration
+- API abuse prevention
+
+**Repository:** https://github.com/raskell-io/sentinel-agent-ip-reputation
+**Docs:** https://sentinel.raskell.io/agents/ip-reputation/
+
+---
+
+#### ~~Content Scanner~~ ✅
+**Status:** Complete
+**Complexity:** Medium
+**Value:** High
+
+Malware scanning for uploaded files using ClamAV daemon.
+
+**Features:**
+- [x] ClamAV integration via Unix socket (INSTREAM protocol)
+- [x] Content-type filtering with glob patterns
+- [x] Path exclusions for health checks
+- [x] HTTP method filtering (POST, PUT, PATCH)
+- [x] Body size limits
+- [x] Fail-open/fail-closed modes
+- [x] Scan time tracking headers
+- [ ] Multiple scanner backends (future enhancement)
+
+**Use Cases:**
+- File upload security
+- API payload scanning
+- Document malware protection
+- Compliance requirements
+
+**Repository:** https://github.com/raskell-io/sentinel-agent-content-scanner
+**Docs:** https://sentinel.raskell.io/agents/content-scanner/
 
 ---
 
