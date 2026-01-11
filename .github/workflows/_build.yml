@@ -80,9 +80,33 @@ jobs:
 
       - name: Install cross-compilation toolchain (Linux ARM64)
         if: runner.os == 'Linux' && matrix.config.target == 'aarch64-unknown-linux-gnu'
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
+          # Add ARM64 architecture for cross-compilation libraries
+          sudo dpkg --add-architecture arm64
+
+          # Add Ubuntu ports mirror for ARM64 packages
+          sudo tee /etc/apt/sources.list.d/arm64.list << 'EOF'
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+
+          # Pin amd64 to default sources to avoid conflicts
+          sudo tee /etc/apt/preferences.d/arm64 << 'EOF'
+          Package: *
+          Pin: architecture amd64
+          Pin-Priority: 500
+
+          Package: *
+          Pin: architecture arm64
+          Pin-Priority: 400
+          EOF
+
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libssl-dev:arm64 pkg-config
 
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
@@ -93,9 +117,14 @@ jobs:
           TARGET="${{ matrix.config.target }}"
           PROFILE="${{ inputs.profile }}"
 
-          # Set cross-compilation linker for Linux ARM64
+          # Set cross-compilation environment for Linux ARM64
           if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+            export OPENSSL_DIR=/usr
+            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+            export OPENSSL_INCLUDE_DIR=/usr/include
           fi
 
           # Check if we need cross-compilation
