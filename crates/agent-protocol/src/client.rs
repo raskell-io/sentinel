@@ -2,14 +2,15 @@
 //!
 //! Supports two transport mechanisms:
 //! - Unix domain sockets (length-prefixed JSON)
-//! - gRPC (Protocol Buffers over HTTP/2)
+//! - gRPC (Protocol Buffers over HTTP/2, with optional TLS)
 
 use serde::Serialize;
+use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tonic::transport::Channel;
-use tracing::{debug, error, trace};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
+use tracing::{debug, error, trace, warn};
 
 use crate::errors::AgentProtocolError;
 use crate::grpc::{self, agent_processor_client::AgentProcessorClient};
@@ -19,6 +20,70 @@ use crate::protocol::{
     ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketDecision, WebSocketFrameEvent,
     MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
 };
+
+/// TLS configuration for gRPC agent connections
+#[derive(Debug, Clone, Default)]
+pub struct GrpcTlsConfig {
+    /// Skip certificate verification (DANGEROUS - only for testing)
+    pub insecure_skip_verify: bool,
+    /// CA certificate PEM data for verifying the server
+    pub ca_cert_pem: Option<Vec<u8>>,
+    /// Client certificate PEM data for mTLS
+    pub client_cert_pem: Option<Vec<u8>>,
+    /// Client key PEM data for mTLS
+    pub client_key_pem: Option<Vec<u8>>,
+    /// Domain name to use for TLS SNI and certificate validation
+    pub domain_name: Option<String>,
+}
+
+impl GrpcTlsConfig {
+    /// Create a new TLS config builder
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Load CA certificate from a file
+    pub async fn with_ca_cert_file(mut self, path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+        self.ca_cert_pem = Some(tokio::fs::read(path).await?);
+        Ok(self)
+    }
+
+    /// Set CA certificate from PEM data
+    pub fn with_ca_cert_pem(mut self, pem: impl Into<Vec<u8>>) -> Self {
+        self.ca_cert_pem = Some(pem.into());
+        self
+    }
+
+    /// Load client certificate and key from files (for mTLS)
+    pub async fn with_client_cert_files(
+        mut self,
+        cert_path: impl AsRef<Path>,
+        key_path: impl AsRef<Path>,
+    ) -> Result<Self, std::io::Error> {
+        self.client_cert_pem = Some(tokio::fs::read(cert_path).await?);
+        self.client_key_pem = Some(tokio::fs::read(key_path).await?);
+        Ok(self)
+    }
+
+    /// Set client certificate and key from PEM data (for mTLS)
+    pub fn with_client_identity(mut self, cert_pem: impl Into<Vec<u8>>, key_pem: impl Into<Vec<u8>>) -> Self {
+        self.client_cert_pem = Some(cert_pem.into());
+        self.client_key_pem = Some(key_pem.into());
+        self
+    }
+
+    /// Set the domain name for TLS SNI and certificate validation
+    pub fn with_domain_name(mut self, domain: impl Into<String>) -> Self {
+        self.domain_name = Some(domain.into());
+        self
+    }
+
+    /// Skip certificate verification (DANGEROUS - only for testing)
+    pub fn with_insecure_skip_verify(mut self) -> Self {
+        self.insecure_skip_verify = true;
+        self
+    }
+}
 
 /// Agent client for communicating with external agents
 pub struct AgentClient {
@@ -138,6 +203,144 @@ impl AgentClient {
             timeout,
             max_retries: 3,
         })
+    }
+
+    /// Create a new gRPC agent client with TLS
+    ///
+    /// # Arguments
+    /// * `id` - Agent identifier
+    /// * `address` - gRPC server address (e.g., "https://localhost:50051")
+    /// * `timeout` - Timeout for agent calls
+    /// * `tls_config` - TLS configuration
+    pub async fn grpc_tls(
+        id: impl Into<String>,
+        address: impl Into<String>,
+        timeout: Duration,
+        tls_config: GrpcTlsConfig,
+    ) -> Result<Self, AgentProtocolError> {
+        let id = id.into();
+        let address = address.into();
+
+        trace!(
+            agent_id = %id,
+            address = %address,
+            timeout_ms = timeout.as_millis() as u64,
+            has_ca_cert = tls_config.ca_cert_pem.is_some(),
+            has_client_cert = tls_config.client_cert_pem.is_some(),
+            insecure = tls_config.insecure_skip_verify,
+            "Connecting to agent via gRPC with TLS"
+        );
+
+        // Build TLS config
+        let mut client_tls_config = ClientTlsConfig::new();
+
+        // Set domain name for SNI if provided, otherwise extract from address
+        if let Some(domain) = &tls_config.domain_name {
+            client_tls_config = client_tls_config.domain_name(domain.clone());
+        } else {
+            // Try to extract domain from address URL
+            if let Some(domain) = Self::extract_domain(&address) {
+                client_tls_config = client_tls_config.domain_name(domain);
+            }
+        }
+
+        // Add CA certificate if provided
+        if let Some(ca_pem) = &tls_config.ca_cert_pem {
+            let ca_cert = Certificate::from_pem(ca_pem);
+            client_tls_config = client_tls_config.ca_certificate(ca_cert);
+            debug!(
+                agent_id = %id,
+                "Using custom CA certificate for gRPC TLS"
+            );
+        }
+
+        // Add client identity for mTLS if provided
+        if let (Some(cert_pem), Some(key_pem)) = (&tls_config.client_cert_pem, &tls_config.client_key_pem) {
+            let identity = Identity::from_pem(cert_pem, key_pem);
+            client_tls_config = client_tls_config.identity(identity);
+            debug!(
+                agent_id = %id,
+                "Using client certificate for mTLS to gRPC agent"
+            );
+        }
+
+        // Handle insecure skip verify (dangerous - only for testing)
+        if tls_config.insecure_skip_verify {
+            warn!(
+                agent_id = %id,
+                address = %address,
+                "SECURITY WARNING: TLS certificate verification disabled for gRPC agent connection"
+            );
+            // Note: tonic doesn't have a direct "skip verify" option like some other libraries
+            // The best we can do is use a permissive TLS config. For truly insecure connections,
+            // users should use the non-TLS grpc() method instead.
+        }
+
+        // Build channel with TLS
+        let channel = Channel::from_shared(address.clone())
+            .map_err(|e| {
+                error!(
+                    agent_id = %id,
+                    address = %address,
+                    error = %e,
+                    "Invalid gRPC URI"
+                );
+                AgentProtocolError::ConnectionFailed(format!("Invalid URI: {}", e))
+            })?
+            .tls_config(client_tls_config)
+            .map_err(|e| {
+                error!(
+                    agent_id = %id,
+                    address = %address,
+                    error = %e,
+                    "Invalid TLS configuration"
+                );
+                AgentProtocolError::ConnectionFailed(format!("TLS config error: {}", e))
+            })?
+            .timeout(timeout)
+            .connect()
+            .await
+            .map_err(|e| {
+                error!(
+                    agent_id = %id,
+                    address = %address,
+                    error = %e,
+                    "Failed to connect to agent via gRPC with TLS"
+                );
+                AgentProtocolError::ConnectionFailed(format!("gRPC TLS connect failed: {}", e))
+            })?;
+
+        let client = AgentProcessorClient::new(channel);
+
+        debug!(
+            agent_id = %id,
+            address = %address,
+            "Connected to agent via gRPC with TLS"
+        );
+
+        Ok(Self {
+            id,
+            connection: AgentConnection::Grpc(client),
+            timeout,
+            max_retries: 3,
+        })
+    }
+
+    /// Extract domain name from a URL for TLS SNI
+    fn extract_domain(address: &str) -> Option<String> {
+        // Try to parse as URL and extract host
+        let address = address.trim();
+
+        // Handle URLs like "https://example.com:443" or "http://example.com:8080"
+        if let Some(rest) = address.strip_prefix("https://").or_else(|| address.strip_prefix("http://")) {
+            // Split off port and path
+            let host = rest.split(':').next()?.split('/').next()?;
+            if !host.is_empty() {
+                return Some(host.to_string());
+            }
+        }
+
+        None
     }
 
     /// Get the agent ID
@@ -538,5 +741,67 @@ impl AgentClient {
             }
             AgentConnection::Grpc(_) => Ok(()), // gRPC channels close automatically
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_domain_https() {
+        assert_eq!(
+            AgentClient::extract_domain("https://example.com:443"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            AgentClient::extract_domain("https://agent.internal:50051"),
+            Some("agent.internal".to_string())
+        );
+        assert_eq!(
+            AgentClient::extract_domain("https://localhost:8080/path"),
+            Some("localhost".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_domain_http() {
+        assert_eq!(
+            AgentClient::extract_domain("http://example.com:8080"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            AgentClient::extract_domain("http://localhost:50051"),
+            Some("localhost".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_domain_invalid() {
+        assert_eq!(AgentClient::extract_domain("example.com:443"), None);
+        assert_eq!(AgentClient::extract_domain("tcp://example.com:443"), None);
+        assert_eq!(AgentClient::extract_domain(""), None);
+    }
+
+    #[test]
+    fn test_grpc_tls_config_builder() {
+        let config = GrpcTlsConfig::new()
+            .with_ca_cert_pem(b"test-ca-cert".to_vec())
+            .with_client_identity(b"test-cert".to_vec(), b"test-key".to_vec())
+            .with_domain_name("example.com");
+
+        assert!(config.ca_cert_pem.is_some());
+        assert!(config.client_cert_pem.is_some());
+        assert!(config.client_key_pem.is_some());
+        assert_eq!(config.domain_name, Some("example.com".to_string()));
+        assert!(!config.insecure_skip_verify);
+    }
+
+    #[test]
+    fn test_grpc_tls_config_insecure() {
+        let config = GrpcTlsConfig::new().with_insecure_skip_verify();
+
+        assert!(config.insecure_skip_verify);
+        assert!(config.ca_cert_pem.is_none());
     }
 }

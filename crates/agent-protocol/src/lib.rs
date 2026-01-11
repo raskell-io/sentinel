@@ -49,6 +49,33 @@
 //! let response = client.send_event(EventType::RequestHeaders, &event).await?;
 //! ```
 //!
+//! # Example: Client Usage (gRPC with TLS)
+//!
+//! ```ignore
+//! use sentinel_agent_protocol::{AgentClient, GrpcTlsConfig, EventType, RequestHeadersEvent};
+//!
+//! // Simple TLS (server verification only)
+//! let tls_config = GrpcTlsConfig::new()
+//!     .with_ca_cert_file("/etc/sentinel/certs/ca.crt").await?;
+//!
+//! let mut client = AgentClient::grpc_tls(
+//!     "my-agent",
+//!     "https://agent.internal:50051",
+//!     timeout,
+//!     tls_config
+//! ).await?;
+//!
+//! // mTLS (mutual authentication)
+//! let tls_config = GrpcTlsConfig::new()
+//!     .with_ca_cert_file("/etc/sentinel/certs/ca.crt").await?
+//!     .with_client_cert_files(
+//!         "/etc/sentinel/certs/client.crt",
+//!         "/etc/sentinel/certs/client.key"
+//!     ).await?;
+//!
+//! let mut client = AgentClient::grpc_tls("my-agent", "https://agent.internal:50051", timeout, tls_config).await?;
+//! ```
+//!
 //! # Example: Server Implementation
 //!
 //! ```ignore
@@ -94,7 +121,7 @@ pub use protocol::{
 };
 
 // Re-export client
-pub use client::AgentClient;
+pub use client::{AgentClient, GrpcTlsConfig};
 
 // Re-export server and handler
 pub use server::{

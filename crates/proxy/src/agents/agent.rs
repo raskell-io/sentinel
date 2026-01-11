@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use sentinel_agent_protocol::{AgentClient, AgentResponse, ConfigureEvent, Decision, EventType};
+use sentinel_agent_protocol::{AgentClient, AgentResponse, ConfigureEvent, Decision, EventType, GrpcTlsConfig};
 use sentinel_common::{errors::SentinelError, errors::SentinelResult, CircuitBreaker};
 use sentinel_config::{AgentConfig, AgentEvent, AgentTransport};
 use tokio::sync::RwLock;
@@ -146,36 +146,118 @@ impl Agent {
 
                 Ok(())
             }
-            AgentTransport::Grpc { address, tls: _ } => {
+            AgentTransport::Grpc { address, tls } => {
                 trace!(
                     agent_id = %self.config.id,
                     address = %address,
+                    tls_enabled = tls.is_some(),
                     "Connecting to agent via gRPC"
                 );
 
-                // TODO: Add TLS support for gRPC connections
-                let client = AgentClient::grpc(&self.config.id, address, timeout)
-                    .await
-                    .map_err(|e| {
-                        error!(
+                let client = match tls {
+                    Some(tls_config) => {
+                        // Build TLS configuration
+                        let mut grpc_tls = GrpcTlsConfig::new();
+
+                        // Load CA certificate if provided
+                        if let Some(ca_path) = &tls_config.ca_cert {
+                            grpc_tls = grpc_tls.with_ca_cert_file(ca_path).await.map_err(|e| {
+                                error!(
+                                    agent_id = %self.config.id,
+                                    ca_path = %ca_path.display(),
+                                    error = %e,
+                                    "Failed to load CA certificate for gRPC TLS"
+                                );
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to load CA certificate: {}", e),
+                                    event: "initialize".to_string(),
+                                    source: None,
+                                }
+                            })?;
+                        }
+
+                        // Load client certificate and key for mTLS if provided
+                        if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key) {
+                            grpc_tls = grpc_tls.with_client_cert_files(cert_path, key_path).await.map_err(|e| {
+                                error!(
+                                    agent_id = %self.config.id,
+                                    cert_path = %cert_path.display(),
+                                    key_path = %key_path.display(),
+                                    error = %e,
+                                    "Failed to load client certificate for gRPC mTLS"
+                                );
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to load client certificate: {}", e),
+                                    event: "initialize".to_string(),
+                                    source: None,
+                                }
+                            })?;
+                        }
+
+                        // Handle insecure skip verify
+                        if tls_config.insecure_skip_verify {
+                            warn!(
+                                agent_id = %self.config.id,
+                                address = %address,
+                                "SECURITY WARNING: TLS certificate verification disabled for agent"
+                            );
+                            grpc_tls = grpc_tls.with_insecure_skip_verify();
+                        }
+
+                        debug!(
                             agent_id = %self.config.id,
                             address = %address,
-                            error = %e,
-                            "Failed to connect to agent via gRPC"
+                            has_ca_cert = tls_config.ca_cert.is_some(),
+                            has_client_cert = tls_config.client_cert.is_some(),
+                            "Connecting to agent via gRPC with TLS"
                         );
-                        SentinelError::Agent {
-                            agent: self.config.id.clone(),
-                            message: format!("Failed to connect via gRPC: {}", e),
-                            event: "initialize".to_string(),
-                            source: None,
-                        }
-                    })?;
+
+                        AgentClient::grpc_tls(&self.config.id, address, timeout, grpc_tls)
+                            .await
+                            .map_err(|e| {
+                                error!(
+                                    agent_id = %self.config.id,
+                                    address = %address,
+                                    error = %e,
+                                    "Failed to connect to agent via gRPC with TLS"
+                                );
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to connect via gRPC TLS: {}", e),
+                                    event: "initialize".to_string(),
+                                    source: None,
+                                }
+                            })?
+                    }
+                    None => {
+                        // Plain gRPC without TLS
+                        AgentClient::grpc(&self.config.id, address, timeout)
+                            .await
+                            .map_err(|e| {
+                                error!(
+                                    agent_id = %self.config.id,
+                                    address = %address,
+                                    error = %e,
+                                    "Failed to connect to agent via gRPC"
+                                );
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to connect via gRPC: {}", e),
+                                    event: "initialize".to_string(),
+                                    source: None,
+                                }
+                            })?
+                    }
+                };
 
                 *self.client.write().await = Some(client);
 
                 info!(
                     agent_id = %self.config.id,
                     address = %address,
+                    tls_enabled = tls.is_some(),
                     connect_time_ms = start.elapsed().as_millis(),
                     "Agent connected via gRPC"
                 );
