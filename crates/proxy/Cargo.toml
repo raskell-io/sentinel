@@ -144,7 +144,7 @@ tonic = { workspace = true }
 tonic-health = "0.12"
 
 # HTTP client for shadow traffic and service discovery
-reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 [features]
 default = []
@@ -171,7 +171,7 @@ criterion = { workspace = true }
 proptest = { workspace = true }
 insta = { workspace = true }
 tempfile = "3.12"
-reqwest = { version = "0.12", features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 tokio-rustls = "0.26"
