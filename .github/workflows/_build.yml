@@ -83,25 +83,18 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          # Get Ubuntu codename dynamically
+          CODENAME=$(lsb_release -cs)
+          echo "Ubuntu codename: $CODENAME"
+
           # Add ARM64 architecture for cross-compilation libraries
           sudo dpkg --add-architecture arm64
 
           # Add Ubuntu ports mirror for ARM64 packages
-          sudo tee /etc/apt/sources.list.d/arm64.list << 'EOF'
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
-          EOF
-
-          # Pin amd64 to default sources to avoid conflicts
-          sudo tee /etc/apt/preferences.d/arm64 << 'EOF'
-          Package: *
-          Pin: architecture amd64
-          Pin-Priority: 500
-
-          Package: *
-          Pin: architecture arm64
-          Pin-Priority: 400
+          cat << EOF | sudo tee /etc/apt/sources.list.d/arm64-cross.list
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${CODENAME} main restricted universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${CODENAME}-updates main restricted universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${CODENAME}-security main restricted universe
           EOF
 
           sudo apt-get update
