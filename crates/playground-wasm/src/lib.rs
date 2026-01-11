@@ -55,7 +55,8 @@ use wasm_bindgen::prelude::*;
 
 use sentinel_sim::{
     validate as sim_validate, simulate as sim_simulate, get_effective_config,
-    simulate_sequence as sim_simulate_sequence, SimulatedRequest, TimestampedRequest,
+    simulate_sequence as sim_simulate_sequence, simulate_with_agents as sim_simulate_with_agents,
+    MockAgentResponse, SimulatedRequest, TimestampedRequest,
 };
 
 /// Initialize panic hook for better error messages in the console
@@ -273,6 +274,100 @@ pub fn simulate_stateful(config_kdl: &str, requests_json: &str) -> JsValue {
 
     // Run stateful simulation
     let result = sim_simulate_sequence(&config, &requests);
+
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+/// Simulate a request with mock agent responses
+///
+/// This enables simulation of agent decisions (WAF, auth, custom agents)
+/// and shows how they affect the request pipeline.
+///
+/// Takes:
+/// - `config_kdl`: KDL configuration string
+/// - `request_json`: JSON string representing the request
+/// - `agent_responses_json`: JSON array of mock agent responses
+///
+/// Mock agent response format:
+/// ```json
+/// [
+///     {
+///         "agent_id": "waf",
+///         "decision": { "type": "block", "status": 403, "body": "Blocked" },
+///         "request_headers": [{ "op": "set", "name": "X-WAF", "value": "checked" }],
+///         "response_headers": [],
+///         "audit": { "rule_ids": ["942100"], "tags": ["sql-injection"] }
+///     }
+/// ]
+/// ```
+///
+/// Decision types:
+/// - `{ "type": "allow" }` - Allow the request
+/// - `{ "type": "block", "status": 403, "body": "..." }` - Block with response
+/// - `{ "type": "redirect", "url": "...", "status": 302 }` - Redirect
+/// - `{ "type": "challenge", "challenge_type": "captcha", "params": {} }` - Challenge
+///
+/// Returns a JSON object with:
+/// - `matched_route`: The matched route
+/// - `agent_chain`: Step-by-step trace of agent execution
+/// - `final_decision`: Combined decision ("allow", "block", "redirect", "challenge")
+/// - `final_request`: Request after all header mutations
+/// - `block_response`: Block details (if blocked)
+/// - `redirect_url`: Redirect URL (if redirecting)
+/// - `audit_trail`: Combined audit info from all agents
+#[wasm_bindgen]
+pub fn simulate_with_agents(
+    config_kdl: &str,
+    request_json: &str,
+    agent_responses_json: &str,
+) -> JsValue {
+    // Validate config
+    let validation = sim_validate(config_kdl);
+    if !validation.valid {
+        return serde_wasm_bindgen::to_value(&SimulationError {
+            error: "Invalid configuration".to_string(),
+            details: validation.errors.iter().map(|e| e.message.clone()).collect(),
+        })
+        .unwrap_or(JsValue::NULL);
+    }
+
+    let config = match validation.effective_config {
+        Some(c) => c,
+        None => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Failed to parse configuration".to_string(),
+                details: vec![],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    // Parse request
+    let request: SimulatedRequest = match serde_json::from_str(request_json) {
+        Ok(r) => r,
+        Err(e) => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Invalid request JSON".to_string(),
+                details: vec![e.to_string()],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    // Parse mock responses
+    let mock_responses: Vec<MockAgentResponse> = match serde_json::from_str(agent_responses_json) {
+        Ok(r) => r,
+        Err(e) => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Invalid agent responses JSON".to_string(),
+                details: vec![e.to_string()],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    // Run agent simulation
+    let result = sim_simulate_with_agents(&config, &request, &mock_responses);
 
     serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }

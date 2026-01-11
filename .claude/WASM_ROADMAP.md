@@ -1,6 +1,6 @@
 # Sentinel WASM Roadmap
 
-> Last updated: 2026-01-11 (Phase 2 complete)
+> Last updated: 2026-01-11 (Phase 3 complete)
 
 This document outlines the current state and future direction for Sentinel's WebAssembly compilation, enabling browser-based configuration validation, simulation, and interactive playgrounds.
 
@@ -44,6 +44,18 @@ simulate_stateful(config: string, requests: string) → {
   final_state: FinalState,
   summary: SimulationSummary
 }
+
+// Simulate with mock agent responses (Phase 3)
+simulate_with_agents(config: string, request: string, agent_responses: string) → {
+  matched_route: MatchedRoute | null,
+  agent_chain: AgentChainStep[],
+  final_decision: "allow" | "block" | "redirect" | "challenge",
+  final_request: TransformedRequest,
+  response_headers: HeaderMutation[],
+  block_response: BlockResponse | null,
+  redirect_url: string | null,
+  audit_trail: AuditEntry[]
+}
 ```
 
 **Binary size:** ~800 KB uncompressed, ~250 KB gzipped
@@ -53,8 +65,8 @@ simulate_stateful(config: string, requests: string) → {
 
 | Crate | WASM Status | Size | Notes |
 |-------|-------------|------|-------|
-| `playground-wasm` | ✅ Production | ~280 lines | Full JS bindings |
-| `sim` | ✅ Production | ~3,300 lines | Zero runtime deps, stateful simulation |
+| `playground-wasm` | ✅ Production | ~450 lines | Full JS bindings |
+| `sim` | ✅ Production | ~4,250 lines | Zero runtime deps, stateful + agent simulation |
 | `config` | ✅ Compatible | 2,500+ lines | Needs `--no-default-features` |
 | `common` | ✅ Compatible | ~1,000 lines | Needs `--no-default-features` |
 | `agent-protocol` | ⚠️ Partial | ~1,300 lines | Types OK, transport impossible |
@@ -233,44 +245,49 @@ crates/sim/
 
 ### Phase 3: Agent Decision Simulation
 
-**Status:** Planned
-**Effort:** 1-2 weeks
-**Value:** Medium-High
+**Status:** ✅ Complete
 
-Create mock agent execution for the playground:
+Mock agent execution for the playground:
 
 ```javascript
-// New export
-simulate_with_agents(
-  config: string,
-  request: SimulatedRequest,
-  agent_responses: Map<string, AgentDecision>
-) → {
-  final_decision: "allow" | "block" | "redirect",
-  transformations: HeaderMutation[],
-  agent_trace: AgentStep[],
-  upstream_request: TransformedRequest
+simulate_with_agents(config: string, request: string, agent_responses: string) → {
+  matched_route: MatchedRoute | null,
+  agent_chain: AgentChainStep[],
+  final_decision: "allow" | "block" | "redirect" | "challenge",
+  final_request: TransformedRequest,
+  response_headers: HeaderMutation[],
+  block_response: BlockResponse | null,
+  redirect_url: string | null,
+  audit_trail: AuditEntry[]
 }
 ```
 
-**Features:**
-- Mock agent responses (user provides decisions)
-- Header mutation simulation
-- Agent chain execution order
-- Failure mode simulation (what if agent times out?)
+**Implemented Features:**
+- Mock agent responses (user provides decisions via JSON)
+- Four decision types: Allow, Block, Redirect, Challenge
+- Header mutation simulation (Set, Add, Remove operations)
+- Agent chain execution order with short-circuit behavior
+- Request transformation tracking (added/modified/removed headers)
+- Audit trail aggregation from all agents
+- Missing mock response warnings
 
 **Implementation:**
 
 ```
-crates/
-├── sim/
-│   └── ... (existing)
-└── agent-sim/  ← NEW CRATE (~400-600 lines)
-    ├── Cargo.toml
-    ├── lib.rs
-    ├── mock.rs      # Mock agent implementations
-    ├── chain.rs     # Agent chain execution
-    └── transform.rs # Request/response mutations
+crates/sim/
+├── lib.rs
+├── matcher.rs
+├── upstream.rs
+├── trace.rs
+├── types.rs
+├── stateful.rs
+└── agents.rs  ← ~950 lines
+    ├── AgentDecision (Allow/Block/Redirect/Challenge)
+    ├── HeaderMutation (Set/Add/Remove)
+    ├── MockAgentResponse / AuditInfo
+    ├── AgentSimulationResult / AgentChainStep
+    ├── TransformedRequest / BlockResponse / ChallengeInfo
+    └── simulate_with_agents()
 ```
 
 **Use cases:**

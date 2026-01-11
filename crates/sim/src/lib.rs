@@ -18,6 +18,7 @@
 //! This crate is designed to compile to WebAssembly. Use the `sentinel-playground-wasm`
 //! crate for JavaScript bindings.
 
+pub mod agents;
 mod matcher;
 pub mod stateful;
 mod trace;
@@ -35,6 +36,10 @@ pub use stateful::{
     simulate_sequence, CacheSnapshot, CircuitBreakerSnapshot, FinalState, RequestResult,
     SimulationSummary, StatefulSimulationResult, StateTransition, TimestampedRequest,
     TokenBucketSnapshot,
+};
+pub use agents::{
+    simulate_with_agents, AgentChainStep, AgentDecision, AgentSimulationResult, AuditEntry,
+    AuditInfo, BlockResponse, ChallengeInfo, HeaderMutation, MockAgentResponse, TransformedRequest,
 };
 
 use sentinel_config::Config;
