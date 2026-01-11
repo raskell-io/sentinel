@@ -52,7 +52,7 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [GraphQL Security](https://sentinel.raskell.io/agents/graphql-security/) | Beta | Query depth/complexity limiting, introspection control, field auth |
 | [Audit Logger](https://sentinel.raskell.io/agents/audit-logger/) | Beta | Structured audit logging with PII redaction, SIEM formats |
 | [API Deprecation](https://sentinel.raskell.io/agents/api-deprecation/) | Beta | Sunset headers, usage tracking, automatic redirects, migration support |
-| [Mock Server](https://sentinel.raskell.io/agents/mock-server/) | Beta | Request matching, stub responses, templating, fault injection |
+| [Data Masking](https://sentinel.raskell.io/agents/data-masking/) | Beta | PII tokenization, FPE, pattern-based masking for JSON/XML/form |
 
 ---
 
@@ -108,27 +108,30 @@ Structured compliance-focused audit logging.
 
 ### Priority 3: Compliance & Data
 
-#### Data Masking
-**Status:** Proposed
+#### ~~Data Masking~~ ✅
+**Status:** Complete
 **Complexity:** High
 **Value:** Medium
 
 PII protection and data minimization.
 
 **Features:**
-- [ ] Field-level tokenization
-- [ ] Format-preserving encryption
-- [ ] Regex-based detection and masking
-- [ ] Header value masking
-- [ ] Request body field masking
-- [ ] Response body field masking
-- [ ] Reversible vs irreversible masking
+- [x] Field-level tokenization
+- [x] Format-preserving encryption (FF1-style, AES-based)
+- [x] Regex-based detection and masking
+- [x] Header value masking
+- [x] Request body field masking
+- [x] Response body field masking
+- [x] Reversible vs irreversible masking
+- [ ] Redis token store backend (future enhancement)
 
 **Use Cases:**
 - GDPR compliance
 - PCI DSS (card data protection)
 - Secure logging
 - Data minimization
+
+**Repository:** https://github.com/raskell-io/sentinel (agents/data-masking)
 
 ---
 

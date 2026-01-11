@@ -6,6 +6,7 @@ members = [
     "crates/common",
     "crates/stack",
     "agents/echo",
+    "agents/data-masking",
 ]
 exclude = [
     # WASM crates are built separately with wasm-pack

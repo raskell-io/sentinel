@@ -1,0 +1,26 @@
+# Data Masking Agent manifest
+# This file describes the agent for the Sentinel agent registry
+
+[agent]
+name = "data-masking"
+version = "0.2.4"
+description = "PII protection with tokenization, format-preserving encryption, and pattern-based masking"
+authors = ["Sentinel Contributors"]
+
+[agent.capabilities]
+events = [
+    "configure",
+    "request_headers",
+    "request_body",
+    "response_headers",
+    "response_body",
+    "request_complete",
+]
+
+[agent.config]
+# Default configuration schema
+store = { type = "memory", ttl_seconds = 300, max_entries = 100000 }
+
+[agent.transport]
+# Default transport configuration
+unix_socket = { path = "/tmp/data-masking-agent.sock" }

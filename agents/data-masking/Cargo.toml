@@ -1,0 +1,66 @@
+[package]
+name = "sentinel-data-masking-agent"
+version = "0.2.4"
+edition = "2021"
+authors = ["Sentinel Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/raskell-io/sentinel"
+homepage = "https://github.com/raskell-io/sentinel"
+description = "Data masking agent for Sentinel - tokenization, FPE, and pattern-based PII protection"
+keywords = ["proxy", "data-masking", "tokenization", "fpe", "pii"]
+categories = ["network-programming", "cryptography"]
+
+[[bin]]
+name = "sentinel-data-masking-agent"
+path = "src/main.rs"
+
+[dependencies]
+# Local dependencies
+sentinel-agent-protocol = { path = "../../crates/agent-protocol", version = "0.2.4" }
+sentinel-common = { path = "../../crates/common", version = "0.2.4" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_urlencoded = "0.7"
+
+# Content type parsers
+quick-xml = { version = "0.37", features = ["serialize"] }
+
+# Format-preserving encryption (FF1 - NIST approved)
+aes = "0.8"
+
+# Regex for pattern matching
+regex = "1.11"
+
+# Hashing (for irreversible masking)
+sha2 = "0.10"
+
+# Token storage
+dashmap = "6.1"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+
+# Base64 encoding for body chunks
+base64 = "0.22"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Command line
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3.12"
+tokio-test = "0.4"
