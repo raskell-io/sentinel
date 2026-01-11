@@ -78,9 +78,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - name: Install cross for ARM64 cross-compilation
+      - name: Install zigbuild for ARM64 cross-compilation
         if: runner.os == 'Linux' && matrix.config.target == 'aarch64-unknown-linux-gnu'
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: |
+          pip3 install ziglang
+          cargo install cargo-zigbuild
 
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
@@ -94,26 +96,26 @@ jobs:
 
           # Determine build command
           if [ "$TARGET" = "aarch64-unknown-linux-gnu" ] && [ "$HOST_TARGET" != "$TARGET" ]; then
-            # Use cross for ARM64 cross-compilation (handles OpenSSL and other deps)
-            BUILD_CMD="cross"
+            # Use zigbuild for ARM64 cross-compilation
+            BUILD_CMD="cargo zigbuild"
           else
-            BUILD_CMD="cargo"
+            BUILD_CMD="cargo build"
           fi
 
           if [ "$HOST_TARGET" = "$TARGET" ]; then
             echo "Building natively for $TARGET"
             if [ "$PROFILE" = "release" ]; then
-              $BUILD_CMD build --release --workspace
+              $BUILD_CMD --release --workspace
             else
-              $BUILD_CMD build --workspace
+              $BUILD_CMD --workspace
             fi
             echo "BUILD_DIR=target" >> $GITHUB_ENV
           else
             echo "Cross-compiling from $HOST_TARGET to $TARGET"
             if [ "$PROFILE" = "release" ]; then
-              $BUILD_CMD build --release --workspace --target "$TARGET"
+              $BUILD_CMD --release --workspace --target "$TARGET"
             else
-              $BUILD_CMD build --workspace --target "$TARGET"
+              $BUILD_CMD --workspace --target "$TARGET"
             fi
             echo "BUILD_DIR=target/$TARGET" >> $GITHUB_ENV
           fi
