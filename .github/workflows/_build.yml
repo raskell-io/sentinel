@@ -78,36 +78,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - name: Install cross-compilation toolchain (Linux ARM64)
+      - name: Install cross for ARM64 cross-compilation
         if: runner.os == 'Linux' && matrix.config.target == 'aarch64-unknown-linux-gnu'
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          # Get Ubuntu codename dynamically
-          CODENAME=$(lsb_release -cs)
-          echo "Ubuntu codename: $CODENAME"
-
-          # Add ARM64 architecture for cross-compilation libraries
-          sudo dpkg --add-architecture arm64
-
-          # Fix existing sources to only use amd64, then add arm64 from ports
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list 2>/dev/null || true
-          # Handle newer ubuntu.sources format if present
-          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-            sudo sed -i 's/^Types: deb$/Types: deb\nArchitectures: amd64/' /etc/apt/sources.list.d/ubuntu.sources
-          fi
-
-          # Add Ubuntu ports mirror for ARM64 packages
-          cat << EOF | sudo tee /etc/apt/sources.list.d/arm64-cross.list
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${CODENAME} main restricted universe
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${CODENAME}-updates main restricted universe
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${CODENAME}-security main restricted universe
-          EOF
-
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            libssl-dev:arm64 pkg-config
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
@@ -117,34 +90,30 @@ jobs:
         run: |
           TARGET="${{ matrix.config.target }}"
           PROFILE="${{ inputs.profile }}"
-
-          # Set cross-compilation environment for Linux ARM64
-          if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-            export PKG_CONFIG_ALLOW_CROSS=1
-            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-            export OPENSSL_DIR=/usr
-            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-            export OPENSSL_INCLUDE_DIR=/usr/include
-          fi
-
-          # Check if we need cross-compilation
           HOST_TARGET=$(rustc -vV | grep host | cut -d' ' -f2)
+
+          # Determine build command
+          if [ "$TARGET" = "aarch64-unknown-linux-gnu" ] && [ "$HOST_TARGET" != "$TARGET" ]; then
+            # Use cross for ARM64 cross-compilation (handles OpenSSL and other deps)
+            BUILD_CMD="cross"
+          else
+            BUILD_CMD="cargo"
+          fi
 
           if [ "$HOST_TARGET" = "$TARGET" ]; then
             echo "Building natively for $TARGET"
             if [ "$PROFILE" = "release" ]; then
-              cargo build --release --workspace
+              $BUILD_CMD build --release --workspace
             else
-              cargo build --workspace
+              $BUILD_CMD build --workspace
             fi
             echo "BUILD_DIR=target" >> $GITHUB_ENV
           else
             echo "Cross-compiling from $HOST_TARGET to $TARGET"
             if [ "$PROFILE" = "release" ]; then
-              cargo build --release --workspace --target "$TARGET"
+              $BUILD_CMD build --release --workspace --target "$TARGET"
             else
-              cargo build --workspace --target "$TARGET"
+              $BUILD_CMD build --workspace --target "$TARGET"
             fi
             echo "BUILD_DIR=target/$TARGET" >> $GITHUB_ENV
           fi
@@ -154,6 +123,8 @@ jobs:
         run: |
           TARGET="${{ matrix.config.target }}"
           if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
+            # Install strip tool for ARM64
+            sudo apt-get install -y binutils-aarch64-linux-gnu
             STRIP=aarch64-linux-gnu-strip
           else
             STRIP=strip
