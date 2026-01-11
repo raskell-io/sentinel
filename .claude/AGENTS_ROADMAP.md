@@ -54,6 +54,7 @@ This separation keeps the dataplane safe and bounded while allowing complex, pot
 | [API Deprecation](https://sentinel.raskell.io/agents/api-deprecation/) | Beta | Sunset headers, usage tracking, automatic redirects, migration support |
 | [Data Masking](https://sentinel.raskell.io/agents/data-masking/) | Beta | PII tokenization, FPE, pattern-based masking for JSON/XML/form |
 | [gRPC Inspector](https://sentinel.raskell.io/agents/grpc-inspector/) | Beta | Method authorization, rate limiting, metadata inspection, reflection control |
+| [Chaos Engineering](https://sentinel.raskell.io/agents/chaos/) | Beta | Controlled fault injection: latency, errors, timeouts, corruption |
 
 ---
 
@@ -225,6 +226,33 @@ API lifecycle management.
 
 **Repository:** https://github.com/raskell-io/sentinel-agent-api-deprecation
 **Docs:** https://sentinel.raskell.io/agents/api-deprecation/
+
+---
+
+#### ~~Chaos Engineering~~ ✅
+**Status:** Complete
+**Complexity:** Low
+**Value:** Medium
+
+Controlled fault injection for resilience testing.
+
+**Features:**
+- [x] Latency injection (fixed or random range)
+- [x] Error injection (HTTP status codes)
+- [x] Timeout simulation
+- [x] Response corruption
+- [x] Connection reset simulation
+- [x] Flexible targeting (path, header, method, percentage)
+- [x] Safety controls (schedule windows, excluded paths, dry run)
+
+**Use Cases:**
+- Resilience testing
+- Game days
+- Client timeout tuning
+- Chaos engineering
+
+**Repository:** https://github.com/raskell-io/sentinel-agent-chaos
+**Docs:** https://sentinel.raskell.io/agents/chaos/
 
 ---
 
