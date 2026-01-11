@@ -19,6 +19,7 @@
 //! crate for JavaScript bindings.
 
 mod matcher;
+pub mod stateful;
 mod trace;
 mod types;
 mod upstream;
@@ -30,6 +31,11 @@ pub use types::{
     UpstreamSelection, ValidationError, ValidationResult, ValidationSeverity, Warning,
 };
 pub use upstream::{simulate_upstream_selection, LoadBalancerSimulation};
+pub use stateful::{
+    simulate_sequence, CacheSnapshot, CircuitBreakerSnapshot, FinalState, RequestResult,
+    SimulationSummary, StatefulSimulationResult, StateTransition, TimestampedRequest,
+    TokenBucketSnapshot,
+};
 
 use sentinel_config::Config;
 

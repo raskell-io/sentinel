@@ -55,7 +55,7 @@ use wasm_bindgen::prelude::*;
 
 use sentinel_sim::{
     validate as sim_validate, simulate as sim_simulate, get_effective_config,
-    SimulatedRequest,
+    simulate_sequence as sim_simulate_sequence, SimulatedRequest, TimestampedRequest,
 };
 
 /// Initialize panic hook for better error messages in the console
@@ -192,6 +192,89 @@ pub fn get_normalized_config(config_kdl: &str) -> JsValue {
 pub fn create_sample_request(method: &str, host: &str, path: &str) -> JsValue {
     let request = SimulatedRequest::new(method, host, path);
     serde_wasm_bindgen::to_value(&request).unwrap_or(JsValue::NULL)
+}
+
+/// Simulate a sequence of requests with stateful policy tracking
+///
+/// This enables simulation of multiple requests with state tracking for:
+/// - Rate limiting (token bucket per route)
+/// - Caching (entries with TTL)
+/// - Circuit breakers (per upstream)
+/// - Load balancer position (round-robin)
+///
+/// Takes:
+/// - `config_kdl`: KDL configuration string
+/// - `requests_json`: JSON array of timestamped requests
+///
+/// Request JSON format:
+/// ```json
+/// [
+///     {
+///         "method": "GET",
+///         "host": "example.com",
+///         "path": "/api/users",
+///         "timestamp": 0.0
+///     },
+///     {
+///         "method": "GET",
+///         "host": "example.com",
+///         "path": "/api/users",
+///         "timestamp": 0.1
+///     }
+/// ]
+/// ```
+///
+/// Returns a JSON object with:
+/// - `results`: Array of per-request results
+/// - `state_transitions`: Array of state changes that occurred
+/// - `final_state`: Final state of all policy components
+/// - `summary`: Summary statistics (hit rates, rate limited count, etc.)
+#[wasm_bindgen]
+pub fn simulate_stateful(config_kdl: &str, requests_json: &str) -> JsValue {
+    // Parse config
+    let validation = sim_validate(config_kdl);
+    if !validation.valid {
+        return serde_wasm_bindgen::to_value(&SimulationError {
+            error: "Invalid configuration".to_string(),
+            details: validation.errors.iter().map(|e| e.message.clone()).collect(),
+        })
+        .unwrap_or(JsValue::NULL);
+    }
+
+    let config = match validation.effective_config {
+        Some(c) => c,
+        None => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Failed to parse configuration".to_string(),
+                details: vec![],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    // Parse requests
+    let mut requests: Vec<TimestampedRequest> = match serde_json::from_str(requests_json) {
+        Ok(r) => r,
+        Err(e) => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Invalid requests JSON".to_string(),
+                details: vec![e.to_string()],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    // Auto-assign timestamps if not provided (default is 0.0)
+    for (i, req) in requests.iter_mut().enumerate() {
+        if req.timestamp == 0.0 && i > 0 {
+            req.timestamp = i as f64;
+        }
+    }
+
+    // Run stateful simulation
+    let result = sim_simulate_sequence(&config, &requests);
+
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }
 
 // ============================================================================
