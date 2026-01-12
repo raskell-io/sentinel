@@ -62,6 +62,7 @@ pub mod http_helpers;
 pub mod inference;
 pub mod logging;
 pub mod memory_cache;
+pub mod metrics;
 pub mod otel;
 pub mod proxy;
 pub mod rate_limit;
@@ -200,6 +201,9 @@ pub use cache::{
 pub use memory_cache::{
     MemoryCacheConfig, MemoryCacheManager, MemoryCacheStats, RouteMatchEntry, TypedCache,
 };
+
+// Prometheus metrics
+pub use metrics::{MetricsManager, MetricsResponse};
 
 // Service discovery
 pub use discovery::{

@@ -490,6 +490,8 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
         agent_type,
         transport,
         events,
+        protocol_version: Default::default(), // V1 by default
+        pool: None,                           // No v2 pool config by default
         timeout_ms,
         failure_mode,
         circuit_breaker,

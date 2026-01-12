@@ -1,97 +1,39 @@
 # syntax=docker/dockerfile:1.4
 
+# Sentinel Optimized Container Image
+#
+# Targets:
+#   - proxy (default): Distroless production image (~20-25MB)
+#   - proxy-debug: Alpine with shell for debugging (~35-40MB)
+#   - proxy-prebuilt: For CI with pre-built binaries
+#   - echo-agent: Echo agent image
+#
+# Build examples:
+#   docker build -t sentinel:latest .
+#   docker build --target proxy-debug -t sentinel:debug .
+
 # Build arguments
 ARG RUST_VERSION=1.85
 ARG DEBIAN_VARIANT=slim-bookworm
-ARG TARGETPLATFORM
 
 ################################################################################
-# Stage for pre-built binaries (used in CI for fast multi-arch builds)
-# Usage: docker build --build-arg BINARY_PATH=./artifacts/sentinel --target proxy-prebuilt .
-FROM debian:bookworm-slim AS proxy-prebuilt
-
-# Install runtime dependencies
-RUN apt-get update && \
-    apt-get install -y \
-        libssl3 \
-        ca-certificates \
-        curl \
-        jq \
-        tini \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN groupadd -r sentinel -g 1000 && \
-    useradd -r -g sentinel -u 1000 -m -s /bin/bash sentinel
-
-# Create required directories
-RUN mkdir -p \
-    /etc/sentinel \
-    /var/lib/sentinel \
-    /var/log/sentinel \
-    /var/run/sentinel \
-    /usr/local/share/sentinel \
-    && chown -R sentinel:sentinel \
-    /etc/sentinel \
-    /var/lib/sentinel \
-    /var/log/sentinel \
-    /var/run/sentinel \
-    /usr/local/share/sentinel
-
-# Copy pre-built binary (passed via build context)
-COPY sentinel /usr/local/bin/sentinel
-RUN chmod +x /usr/local/bin/sentinel
-
-# Copy default configuration
-COPY config.kdl /etc/sentinel/config.kdl
-
-# Set up health check script
-RUN echo '#!/bin/sh\ncurl -f http://localhost:9090/health || exit 1' > /usr/local/bin/healthcheck && \
-    chmod +x /usr/local/bin/healthcheck
-
-# Switch to non-root user
-USER sentinel
-
-# Environment variables
-ENV RUST_LOG=info,sentinel_proxy=info \
-    SENTINEL_CONFIG=/etc/sentinel/config.kdl \
-    SENTINEL_DATA_DIR=/var/lib/sentinel \
-    SENTINEL_LOG_DIR=/var/log/sentinel
-
-# Expose ports
-EXPOSE 8080 8443 9090
-
-# Health check
-HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-    CMD ["/usr/local/bin/healthcheck"]
-
-# Use tini for proper signal handling
-ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Default command
-CMD ["sentinel", "-c", "/etc/sentinel/config.kdl"]
-
+# Build stage - compiles the Rust binary with optimizations
 ################################################################################
-# Create a stage for building the application (for local dev or single-arch builds)
 FROM rust:${RUST_VERSION}-${DEBIAN_VARIANT} AS builder
 
-# Install build dependencies
+# Install build dependencies (only what's needed for compilation)
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         pkg-config \
         libssl-dev \
         protobuf-compiler \
         cmake \
         build-essential \
-        git \
-        curl \
-        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app directory
 WORKDIR /app
 
-# Copy manifest files first for better caching
+# Copy manifest files first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 COPY crates/proxy/Cargo.toml crates/proxy/Cargo.toml
 COPY crates/agent-protocol/Cargo.toml crates/agent-protocol/Cargo.toml
@@ -101,7 +43,7 @@ COPY crates/stack/Cargo.toml crates/stack/Cargo.toml
 COPY agents/echo/Cargo.toml agents/echo/Cargo.toml
 
 # Create dummy source files for dependency compilation
-# sentinel-proxy has both lib.rs and main.rs (binary + library)
+# This allows Docker to cache the dependency build layer
 RUN mkdir -p crates/proxy/src && \
     echo "fn main() {}" > crates/proxy/src/main.rs && \
     echo "" > crates/proxy/src/lib.rs && \
@@ -111,7 +53,7 @@ RUN mkdir -p crates/proxy/src && \
     mkdir -p crates/stack/src && echo "fn main() {}" > crates/stack/src/main.rs && \
     mkdir -p agents/echo/src && echo "fn main() {}" > agents/echo/src/main.rs
 
-# Build dependencies for proxy only (this layer will be cached)
+# Build dependencies only (this layer is cached)
 RUN cargo build --release --package sentinel-proxy
 
 # Remove dummy source files
@@ -121,100 +63,139 @@ RUN rm -rf crates/*/src agents/*/src
 COPY crates/ crates/
 COPY agents/ agents/
 
-# Touch the main files to ensure they're newer than the deps
+# Touch source files to ensure rebuild
 RUN find . -name "main.rs" -exec touch {} \; && \
     find . -name "lib.rs" -exec touch {} \;
 
-# Build release binaries with optimizations
-RUN cargo build --release --package sentinel-proxy --package sentinel-echo-agent && \
-    strip /app/target/release/sentinel && \
-    strip /app/target/release/sentinel-echo-agent
+# Build release binaries with full optimizations
+# Binary is already stripped via Cargo.toml profile.release.strip = true
+RUN cargo build --release --package sentinel-proxy --package sentinel-echo-agent
 
 ################################################################################
-# Create runtime stage for the proxy
-FROM debian:bookworm-slim AS runtime-base
-
-# Install runtime dependencies
-RUN apt-get update && \
-    apt-get install -y \
-        libssl3 \
-        ca-certificates \
-        curl \
-        jq \
-        tini \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN groupadd -r sentinel -g 1000 && \
-    useradd -r -g sentinel -u 1000 -m -s /bin/bash sentinel
-
-# Create required directories
-RUN mkdir -p \
-    /etc/sentinel \
-    /var/lib/sentinel \
-    /var/log/sentinel \
-    /var/run/sentinel \
-    /usr/local/share/sentinel \
-    && chown -R sentinel:sentinel \
-    /etc/sentinel \
-    /var/lib/sentinel \
-    /var/log/sentinel \
-    /var/run/sentinel \
-    /usr/local/share/sentinel
-
+# Production image: Distroless (smallest, most secure)
+#
+# Uses gcr.io/distroless/cc-debian12 which includes:
+# - glibc runtime (required for dynamically-linked Rust binaries)
+# - libgcc
+# - CA certificates
+# - tzdata
+# - NO shell, NO package manager (minimal attack surface)
 ################################################################################
-# Proxy runtime stage
-FROM runtime-base AS proxy
+FROM gcr.io/distroless/cc-debian12:nonroot AS proxy
 
-# Copy proxy binary
-COPY --from=builder /app/target/release/sentinel /usr/local/bin/
+# Copy the binary
+COPY --from=builder /app/target/release/sentinel /sentinel
 
 # Copy default configuration
 COPY config/docker/default.kdl /etc/sentinel/config.kdl
 
-# Set up health check script
-RUN echo '#!/bin/sh\ncurl -f http://localhost:9090/health || exit 1' > /usr/local/bin/healthcheck && \
-    chmod +x /usr/local/bin/healthcheck
+# Labels for container metadata
+LABEL org.opencontainers.image.title="Sentinel" \
+      org.opencontainers.image.description="Security-first reverse proxy built on Pingora" \
+      org.opencontainers.image.vendor="Raskell" \
+      org.opencontainers.image.source="https://github.com/raskell-io/sentinel"
 
-# Switch to non-root user
-USER sentinel
+# Environment variables
+# - RUST_LOG: Logging configuration
+# - MALLOC_CONF: jemalloc tuning for container environments
+#   - background_thread: Offload memory purging from request threads
+#   - dirty_decay_ms: Return dirty pages to OS within 5s (container memory awareness)
+#   - muzzy_decay_ms: Same for muzzy pages
+ENV RUST_LOG=info,sentinel_proxy=info \
+    MALLOC_CONF="background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000"
+
+# Expose ports:
+# - 8080: HTTP listener
+# - 8443: HTTPS listener
+# - 9090: Metrics/observability
+EXPOSE 8080 8443 9090
+
+# Run as non-root user (distroless:nonroot runs as uid 65532)
+USER nonroot:nonroot
+
+# Health check notes:
+# Distroless has no shell, so HEALTHCHECK with curl/wget isn't possible.
+# Use one of these approaches:
+# 1. Kubernetes: Configure livenessProbe/readinessProbe with httpGet to /_builtin/health
+# 2. Docker Compose: Use `test: ["CMD", "/sentinel", "test", "-c", "/etc/sentinel/config.kdl"]`
+# 3. External monitoring: Poll http://container:8080/_builtin/health
+
+# Sentinel handles SIGTERM/SIGHUP natively via signal_hook - no tini needed
+ENTRYPOINT ["/sentinel"]
+CMD ["-c", "/etc/sentinel/config.kdl"]
+
+################################################################################
+# Debug image: Alpine with shell for troubleshooting
+################################################################################
+FROM alpine:3.21 AS proxy-debug
+
+# Install minimal runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    curl \
+    && adduser -D -u 65532 -g 65532 sentinel
+
+# Copy the binary
+COPY --from=builder /app/target/release/sentinel /usr/local/bin/sentinel
+
+# Copy default configuration
+COPY config/docker/default.kdl /etc/sentinel/config.kdl
+
+# Create directories with correct ownership
+RUN mkdir -p /var/lib/sentinel /var/log/sentinel && \
+    chown -R sentinel:sentinel /etc/sentinel /var/lib/sentinel /var/log/sentinel
 
 # Environment variables
 ENV RUST_LOG=info,sentinel_proxy=info \
-    SENTINEL_CONFIG=/etc/sentinel/config.kdl \
-    SENTINEL_DATA_DIR=/var/lib/sentinel \
-    SENTINEL_LOG_DIR=/var/log/sentinel
+    MALLOC_CONF="background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000"
 
-# Expose ports
 EXPOSE 8080 8443 9090
 
-# Health check
-HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-    CMD ["/usr/local/bin/healthcheck"]
-
-# Use tini for proper signal handling
-ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Default command
-CMD ["sentinel", "-c", "/etc/sentinel/config.kdl"]
-
-################################################################################
-# Echo agent runtime stage
-FROM runtime-base AS echo-agent
-
-# Copy echo agent binary
-COPY --from=builder /app/target/release/sentinel-echo-agent /usr/local/bin/
-
-# Switch to non-root user
 USER sentinel
 
-# Environment variables
+# Alpine has curl, so we can use HTTP health checks
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -sf http://localhost:8080/_builtin/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/sentinel"]
+CMD ["-c", "/etc/sentinel/config.kdl"]
+
+################################################################################
+# Pre-built binary stage (for CI multi-arch builds)
+# Usage: docker build --build-arg BINARY_PATH=./sentinel --target proxy-prebuilt .
+################################################################################
+FROM gcr.io/distroless/cc-debian12:nonroot AS proxy-prebuilt
+
+# Copy pre-built binary from build context
+COPY sentinel /sentinel
+
+# Copy default configuration
+COPY config/docker/default.kdl /etc/sentinel/config.kdl
+
+LABEL org.opencontainers.image.title="Sentinel" \
+      org.opencontainers.image.description="Security-first reverse proxy built on Pingora"
+
+ENV RUST_LOG=info,sentinel_proxy=info \
+    MALLOC_CONF="background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000"
+
+EXPOSE 8080 8443 9090
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/sentinel"]
+CMD ["-c", "/etc/sentinel/config.kdl"]
+
+################################################################################
+# Echo agent image (for testing agent functionality)
+################################################################################
+FROM gcr.io/distroless/cc-debian12:nonroot AS echo-agent
+
+COPY --from=builder /app/target/release/sentinel-echo-agent /sentinel-echo-agent
+
 ENV RUST_LOG=info,sentinel_echo_agent=debug \
     SOCKET_PATH=/var/run/sentinel/echo.sock
 
-# The echo agent listens on a Unix socket
-CMD ["sentinel-echo-agent"]
+USER nonroot:nonroot
 
-################################################################################
-# NOTE: Additional agents (ratelimit, waf, etc.) are available as
-# separate repositories. See https://github.com/raskell-io for community agents.
+CMD ["/sentinel-echo-agent"]

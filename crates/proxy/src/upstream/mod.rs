@@ -1013,7 +1013,7 @@ impl UpstreamPool {
             // Check circuit breaker
             let breakers = self.circuit_breakers.read().await;
             if let Some(breaker) = breakers.get(&selection.address) {
-                if !breaker.is_closed().await {
+                if !breaker.is_closed() {
                     debug!(
                         upstream_id = %self.id,
                         target = %selection.address,
@@ -1261,7 +1261,7 @@ impl UpstreamPool {
 
         if success {
             if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
-                breaker.record_success().await;
+                breaker.record_success();
                 trace!(
                     upstream_id = %self.id,
                     target = %target,
@@ -1271,7 +1271,7 @@ impl UpstreamPool {
             self.load_balancer.report_health(target, true).await;
         } else {
             if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
-                breaker.record_failure().await;
+                breaker.record_failure();
                 debug!(
                     upstream_id = %self.id,
                     target = %target,
@@ -1310,11 +1310,11 @@ impl UpstreamPool {
         // Update circuit breaker
         if success {
             if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
-                breaker.record_success().await;
+                breaker.record_success();
             }
         } else {
             if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
-                breaker.record_failure().await;
+                breaker.record_failure();
             }
             self.stats.failures.fetch_add(1, Ordering::Relaxed);
         }
@@ -1375,7 +1375,7 @@ impl UpstreamPool {
         // Check circuit breaker
         let breakers = self.circuit_breakers.read().await;
         if let Some(breaker) = breakers.get(&selection.address) {
-            if !breaker.is_closed().await {
+            if !breaker.is_closed() {
                 return Err(SentinelError::upstream(
                     self.id.to_string(),
                     "Circuit breaker is open for shadow target",

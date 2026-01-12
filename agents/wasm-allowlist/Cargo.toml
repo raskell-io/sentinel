@@ -1,0 +1,19 @@
+[package]
+name = "sentinel-wasm-allowlist"
+version = "0.3.0"
+edition = "2021"
+authors = ["Sentinel Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/raskell-io/sentinel"
+description = "Example WASM agent for path-based allowlist/denylist"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = "s"      # Optimize for size
+lto = true           # Link-time optimization

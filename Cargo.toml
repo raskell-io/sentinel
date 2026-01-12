@@ -5,6 +5,7 @@ members = [
     "crates/config",
     "crates/common",
     "crates/stack",
+    "crates/wasm-runtime",
     "agents/echo",
     "agents/data-masking",
 ]
@@ -12,11 +13,12 @@ exclude = [
     # WASM crates are built separately with wasm-pack
     "crates/sim",
     "crates/playground-wasm",
+    "agents/wasm-allowlist",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.5"
+version = "0.3.0"
 edition = "2021"
 authors = ["Sentinel Contributors"]
 license = "MIT OR Apache-2.0"
@@ -80,7 +82,7 @@ criterion = "0.6"
 insta = "1.41"
 
 # Security
-rustls = "0.23"
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
 rustls-pemfile = "2.2"
 
 # HTTP

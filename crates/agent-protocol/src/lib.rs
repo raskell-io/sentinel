@@ -118,14 +118,25 @@
 
 #![allow(dead_code)]
 
+pub mod binary;
+pub mod buffer_pool;
 mod client;
 mod errors;
+pub mod headers;
 mod protocol;
 mod server;
 
 /// gRPC protocol definitions generated from proto/agent.proto
 pub mod grpc {
     tonic::include_proto!("sentinel.agent.v1");
+}
+
+/// Protocol v2 types with bidirectional streaming, capabilities, and flow control
+pub mod v2;
+
+/// gRPC v2 protocol definitions generated from proto/agent_v2.proto
+pub mod grpc_v2 {
+    tonic::include_proto!("sentinel.agent.v2");
 }
 
 // Re-export error types

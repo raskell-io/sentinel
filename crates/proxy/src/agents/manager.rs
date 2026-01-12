@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use pingora_timeout::timeout;
 use sentinel_agent_protocol::{
+    v2::MetricsCollector,
     AgentResponse, EventType, RequestBodyChunkEvent, RequestHeadersEvent, ResponseBodyChunkEvent,
     ResponseHeadersEvent, WebSocketFrameEvent,
 };
@@ -15,23 +16,242 @@ use sentinel_common::{
     types::CircuitBreakerConfig,
     CircuitBreaker,
 };
-use sentinel_config::{AgentConfig, FailureMode};
+use futures::future::join_all;
+use sentinel_config::{AgentConfig, AgentProtocolVersion, FailureMode};
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, trace, warn};
 
 use super::agent::Agent;
+use super::agent_v2::AgentV2;
 use super::context::AgentCallContext;
 use super::decision::AgentDecision;
 use super::metrics::AgentMetrics;
 use super::pool::AgentConnectionPool;
 
+/// Unified agent wrapper supporting both v1 and v2 protocols.
+pub enum UnifiedAgent {
+    V1(Arc<Agent>),
+    V2(Arc<AgentV2>),
+}
+
+impl UnifiedAgent {
+    /// Get the agent ID.
+    pub fn id(&self) -> &str {
+        match self {
+            UnifiedAgent::V1(agent) => agent.id(),
+            UnifiedAgent::V2(agent) => agent.id(),
+        }
+    }
+
+    /// Get the agent's circuit breaker.
+    pub fn circuit_breaker(&self) -> &CircuitBreaker {
+        match self {
+            UnifiedAgent::V1(agent) => agent.circuit_breaker(),
+            UnifiedAgent::V2(agent) => agent.circuit_breaker(),
+        }
+    }
+
+    /// Get the agent's failure mode.
+    pub fn failure_mode(&self) -> FailureMode {
+        match self {
+            UnifiedAgent::V1(agent) => agent.failure_mode(),
+            UnifiedAgent::V2(agent) => agent.failure_mode(),
+        }
+    }
+
+    /// Get the agent's timeout in milliseconds.
+    pub fn timeout_ms(&self) -> u64 {
+        match self {
+            UnifiedAgent::V1(agent) => agent.timeout_ms(),
+            UnifiedAgent::V2(agent) => agent.timeout_ms(),
+        }
+    }
+
+    /// Check if agent handles a specific event type.
+    pub fn handles_event(&self, event_type: EventType) -> bool {
+        match self {
+            UnifiedAgent::V1(agent) => agent.handles_event(event_type),
+            UnifiedAgent::V2(agent) => agent.handles_event(event_type),
+        }
+    }
+
+    /// Initialize agent connection(s).
+    pub async fn initialize(&self) -> SentinelResult<()> {
+        match self {
+            UnifiedAgent::V1(agent) => agent.initialize().await,
+            UnifiedAgent::V2(agent) => agent.initialize().await,
+        }
+    }
+
+    /// Call agent with event.
+    ///
+    /// For V2 agents, this dispatches to the appropriate typed method based on
+    /// event type. The event is serialized and deserialized to convert between
+    /// the generic type and the specific event struct.
+    pub async fn call_event<T: serde::Serialize>(
+        &self,
+        event_type: EventType,
+        event: &T,
+    ) -> SentinelResult<AgentResponse> {
+        match self {
+            UnifiedAgent::V1(agent) => agent.call_event(event_type, event).await,
+            UnifiedAgent::V2(agent) => {
+                // V2 uses typed methods - convert to appropriate event type
+                let json = serde_json::to_value(event).map_err(|e| SentinelError::Agent {
+                    agent: agent.id().to_string(),
+                    message: format!("Failed to serialize event: {}", e),
+                    event: format!("{:?}", event_type),
+                    source: None,
+                })?;
+
+                match event_type {
+                    EventType::RequestHeaders => {
+                        let typed_event: RequestHeadersEvent =
+                            serde_json::from_value(json).map_err(|e| SentinelError::Agent {
+                                agent: agent.id().to_string(),
+                                message: format!("Failed to deserialize RequestHeadersEvent: {}", e),
+                                event: format!("{:?}", event_type),
+                                source: None,
+                            })?;
+                        agent.call_request_headers(&typed_event).await
+                    }
+                    EventType::RequestBodyChunk => {
+                        let typed_event: RequestBodyChunkEvent =
+                            serde_json::from_value(json).map_err(|e| SentinelError::Agent {
+                                agent: agent.id().to_string(),
+                                message: format!("Failed to deserialize RequestBodyChunkEvent: {}", e),
+                                event: format!("{:?}", event_type),
+                                source: None,
+                            })?;
+                        agent.call_request_body_chunk(&typed_event).await
+                    }
+                    EventType::ResponseHeaders => {
+                        let typed_event: ResponseHeadersEvent =
+                            serde_json::from_value(json).map_err(|e| SentinelError::Agent {
+                                agent: agent.id().to_string(),
+                                message: format!("Failed to deserialize ResponseHeadersEvent: {}", e),
+                                event: format!("{:?}", event_type),
+                                source: None,
+                            })?;
+                        agent.call_response_headers(&typed_event).await
+                    }
+                    EventType::ResponseBodyChunk => {
+                        let typed_event: ResponseBodyChunkEvent =
+                            serde_json::from_value(json).map_err(|e| SentinelError::Agent {
+                                agent: agent.id().to_string(),
+                                message: format!("Failed to deserialize ResponseBodyChunkEvent: {}", e),
+                                event: format!("{:?}", event_type),
+                                source: None,
+                            })?;
+                        agent.call_response_body_chunk(&typed_event).await
+                    }
+                    _ => {
+                        // For unsupported event types, return error
+                        Err(SentinelError::Agent {
+                            agent: agent.id().to_string(),
+                            message: format!("V2 does not support event type {:?}", event_type),
+                            event: format!("{:?}", event_type),
+                            source: None,
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    /// Call agent with request headers event (v2-optimized).
+    pub async fn call_request_headers(
+        &self,
+        event: &RequestHeadersEvent,
+    ) -> SentinelResult<AgentResponse> {
+        match self {
+            UnifiedAgent::V1(agent) => agent.call_event(EventType::RequestHeaders, event).await,
+            UnifiedAgent::V2(agent) => agent.call_request_headers(event).await,
+        }
+    }
+
+    /// Call agent with request body chunk event (v2-optimized).
+    pub async fn call_request_body_chunk(
+        &self,
+        event: &RequestBodyChunkEvent,
+    ) -> SentinelResult<AgentResponse> {
+        match self {
+            UnifiedAgent::V1(agent) => agent.call_event(EventType::RequestBodyChunk, event).await,
+            UnifiedAgent::V2(agent) => agent.call_request_body_chunk(event).await,
+        }
+    }
+
+    /// Call agent with response headers event (v2-optimized).
+    pub async fn call_response_headers(
+        &self,
+        event: &ResponseHeadersEvent,
+    ) -> SentinelResult<AgentResponse> {
+        match self {
+            UnifiedAgent::V1(agent) => agent.call_event(EventType::ResponseHeaders, event).await,
+            UnifiedAgent::V2(agent) => agent.call_response_headers(event).await,
+        }
+    }
+
+    /// Call agent with response body chunk event (v2-optimized).
+    pub async fn call_response_body_chunk(
+        &self,
+        event: &ResponseBodyChunkEvent,
+    ) -> SentinelResult<AgentResponse> {
+        match self {
+            UnifiedAgent::V1(agent) => agent.call_event(EventType::ResponseBodyChunk, event).await,
+            UnifiedAgent::V2(agent) => agent.call_response_body_chunk(event).await,
+        }
+    }
+
+    /// Record successful call.
+    pub async fn record_success(&self, duration: Duration) {
+        match self {
+            UnifiedAgent::V1(agent) => agent.record_success(duration).await,
+            UnifiedAgent::V2(agent) => agent.record_success(duration),
+        }
+    }
+
+    /// Record failed call.
+    pub async fn record_failure(&self) {
+        match self {
+            UnifiedAgent::V1(agent) => agent.record_failure().await,
+            UnifiedAgent::V2(agent) => agent.record_failure(),
+        }
+    }
+
+    /// Record timeout.
+    pub async fn record_timeout(&self) {
+        match self {
+            UnifiedAgent::V1(agent) => agent.record_timeout().await,
+            UnifiedAgent::V2(agent) => agent.record_timeout(),
+        }
+    }
+
+    /// Shutdown agent.
+    pub async fn shutdown(&self) {
+        match self {
+            UnifiedAgent::V1(agent) => agent.shutdown().await,
+            UnifiedAgent::V2(agent) => agent.shutdown().await,
+        }
+    }
+
+    /// Check if this is a v2 agent.
+    pub fn is_v2(&self) -> bool {
+        matches!(self, UnifiedAgent::V2(_))
+    }
+}
+
 /// Agent manager handling all external agents.
+///
+/// Supports both v1 and v2 protocol agents. V1 agents use simple request/response,
+/// while v2 agents support bidirectional streaming with capabilities, health
+/// reporting, metrics export, and flow control.
 pub struct AgentManager {
-    /// Configured agents
-    agents: Arc<RwLock<HashMap<String, Arc<Agent>>>>,
-    /// Connection pools for agents
+    /// Configured agents (unified wrapper for v1 and v2)
+    agents: Arc<RwLock<HashMap<String, Arc<UnifiedAgent>>>>,
+    /// Connection pools for v1 agents only
     connection_pools: Arc<RwLock<HashMap<String, Arc<AgentConnectionPool>>>>,
-    /// Circuit breakers per agent
+    /// Circuit breakers per agent (v1 only - v2 has circuit breakers in pool)
     circuit_breakers: Arc<RwLock<HashMap<String, Arc<CircuitBreaker>>>>,
     /// Global agent metrics
     metrics: Arc<AgentMetrics>,
@@ -45,6 +265,8 @@ impl AgentManager {
     /// Each agent gets its own semaphore for queue isolation, preventing a slow
     /// agent from affecting other agents (noisy neighbor problem). The concurrency
     /// limit is configured per-agent via `max_concurrent_calls` in the agent config.
+    ///
+    /// Supports both v1 and v2 protocol agents based on the `protocol_version` field.
     pub async fn new(agents: Vec<AgentConfig>) -> SentinelResult<Self> {
         info!(agent_count = agents.len(), "Creating agent manager");
 
@@ -53,6 +275,9 @@ impl AgentManager {
         let mut breakers = HashMap::new();
         let mut semaphores = HashMap::new();
 
+        let mut v1_count = 0;
+        let mut v2_count = 0;
+
         for config in agents {
             debug!(
                 agent_id = %config.id,
@@ -60,51 +285,89 @@ impl AgentManager {
                 timeout_ms = config.timeout_ms,
                 failure_mode = ?config.failure_mode,
                 max_concurrent_calls = config.max_concurrent_calls,
+                protocol_version = ?config.protocol_version,
                 "Configuring agent"
             );
-
-            let pool = Arc::new(AgentConnectionPool::new(
-                10, // max connections
-                2,  // min idle
-                5,  // max idle
-                Duration::from_secs(60),
-            ));
-
-            let circuit_breaker = Arc::new(CircuitBreaker::new(
-                config
-                    .circuit_breaker
-                    .clone()
-                    .unwrap_or_else(CircuitBreakerConfig::default),
-            ));
 
             // Create per-agent semaphore for queue isolation
             let semaphore = Arc::new(Semaphore::new(config.max_concurrent_calls));
 
-            trace!(
-                agent_id = %config.id,
-                max_concurrent_calls = config.max_concurrent_calls,
-                "Creating agent instance with isolated queue"
-            );
+            let unified_agent = match config.protocol_version {
+                AgentProtocolVersion::V1 => {
+                    // V1: Create pool and circuit breaker externally
+                    let pool = Arc::new(AgentConnectionPool::new(
+                        10, // max connections
+                        2,  // min idle
+                        5,  // max idle
+                        Duration::from_secs(60),
+                    ));
 
-            let agent = Arc::new(Agent::new(
-                config.clone(),
-                Arc::clone(&pool),
-                Arc::clone(&circuit_breaker),
-            ));
+                    let circuit_breaker = Arc::new(CircuitBreaker::new(
+                        config
+                            .circuit_breaker
+                            .clone()
+                            .unwrap_or_else(CircuitBreakerConfig::default),
+                    ));
 
-            agent_map.insert(config.id.clone(), agent);
-            pools.insert(config.id.clone(), pool);
-            breakers.insert(config.id.clone(), circuit_breaker);
+                    trace!(
+                        agent_id = %config.id,
+                        max_concurrent_calls = config.max_concurrent_calls,
+                        "Creating v1 agent instance with isolated queue"
+                    );
+
+                    let agent = Arc::new(Agent::new(
+                        config.clone(),
+                        Arc::clone(&pool),
+                        Arc::clone(&circuit_breaker),
+                    ));
+
+                    pools.insert(config.id.clone(), pool);
+                    breakers.insert(config.id.clone(), circuit_breaker);
+                    v1_count += 1;
+
+                    Arc::new(UnifiedAgent::V1(agent))
+                }
+                AgentProtocolVersion::V2 => {
+                    // V2: Pool and circuit breaker are internal to AgentV2
+                    let circuit_breaker = Arc::new(CircuitBreaker::new(
+                        config
+                            .circuit_breaker
+                            .clone()
+                            .unwrap_or_else(CircuitBreakerConfig::default),
+                    ));
+
+                    trace!(
+                        agent_id = %config.id,
+                        max_concurrent_calls = config.max_concurrent_calls,
+                        pool_config = ?config.pool,
+                        "Creating v2 agent instance with internal pool"
+                    );
+
+                    let agent = Arc::new(AgentV2::new(
+                        config.clone(),
+                        circuit_breaker,
+                    ));
+
+                    v2_count += 1;
+
+                    Arc::new(UnifiedAgent::V2(agent))
+                }
+            };
+
+            agent_map.insert(config.id.clone(), unified_agent);
             semaphores.insert(config.id.clone(), semaphore);
 
             debug!(
                 agent_id = %config.id,
+                protocol_version = ?config.protocol_version,
                 "Agent configured successfully"
             );
         }
 
         info!(
             configured_agents = agent_map.len(),
+            v1_agents = v1_count,
+            v2_agents = v2_count,
             "Agent manager created successfully with per-agent queue isolation"
         );
 
@@ -144,7 +407,8 @@ impl AgentManager {
             headers: headers.clone(),
         };
 
-        self.process_event_with_failure_modes(EventType::RequestHeaders, &event, route_agents, ctx)
+        // Use parallel processing for better latency with multiple agents
+        self.process_event_parallel(EventType::RequestHeaders, &event, route_agents, ctx)
             .await
     }
 
@@ -310,7 +574,7 @@ impl AgentManager {
         // Process through each agent sequentially
         for agent in relevant_agents {
             // Check circuit breaker
-            if !agent.circuit_breaker().is_closed().await {
+            if !agent.circuit_breaker().is_closed() {
                 warn!(
                     agent_id = %agent.id(),
                     correlation_id = %event.correlation_id,
@@ -500,7 +764,7 @@ impl AgentManager {
             };
 
             // Check circuit breaker
-            if !agent.circuit_breaker().is_closed().await {
+            if !agent.circuit_breaker().is_closed() {
                 warn!(
                     agent_id = %agent.id(),
                     correlation_id = %ctx.correlation_id,
@@ -697,7 +961,7 @@ impl AgentManager {
             };
 
             // Check circuit breaker
-            if !agent.circuit_breaker().is_closed().await {
+            if !agent.circuit_breaker().is_closed() {
                 warn!(
                     agent_id = %agent.id(),
                     correlation_id = %ctx.correlation_id,
@@ -822,6 +1086,242 @@ impl AgentManager {
         Ok(combined_decision)
     }
 
+    /// Process an event through relevant agents in parallel.
+    ///
+    /// This method executes all agent calls concurrently using `join_all`, which
+    /// significantly improves latency when multiple agents are configured. The
+    /// tradeoff is that if one agent blocks, other agents may still complete
+    /// their work (slight resource waste in blocking scenarios).
+    ///
+    /// # Performance
+    ///
+    /// For N agents with latency L each:
+    /// - Sequential: O(N * L)
+    /// - Parallel: O(L) (assuming sufficient concurrency)
+    ///
+    /// This is the preferred method for most use cases.
+    async fn process_event_parallel<T: serde::Serialize + Sync>(
+        &self,
+        event_type: EventType,
+        event: &T,
+        route_agents: &[(String, FailureMode)],
+        ctx: &AgentCallContext,
+    ) -> SentinelResult<AgentDecision> {
+        trace!(
+            correlation_id = %ctx.correlation_id,
+            event_type = ?event_type,
+            route_agents = ?route_agents.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            "Starting parallel agent event processing"
+        );
+
+        // Get relevant agents for this route and event type
+        let agents = self.agents.read().await;
+        let semaphores = self.agent_semaphores.read().await;
+
+        // Collect agent info upfront to minimize lock duration
+        let agent_info: Vec<_> = route_agents
+            .iter()
+            .filter_map(|(id, failure_mode)| {
+                let agent = agents.get(id)?;
+                if !agent.handles_event(event_type) {
+                    return None;
+                }
+                let semaphore = semaphores.get(id).cloned();
+                Some((Arc::clone(agent), *failure_mode, semaphore))
+            })
+            .collect();
+
+        // Release locks early
+        drop(agents);
+        drop(semaphores);
+
+        if agent_info.is_empty() {
+            trace!(
+                correlation_id = %ctx.correlation_id,
+                event_type = ?event_type,
+                "No relevant agents for event, allowing request"
+            );
+            return Ok(AgentDecision::default_allow());
+        }
+
+        debug!(
+            correlation_id = %ctx.correlation_id,
+            event_type = ?event_type,
+            agent_count = agent_info.len(),
+            agent_ids = ?agent_info.iter().map(|(a, _, _)| a.id()).collect::<Vec<_>>(),
+            "Processing event through agents in parallel"
+        );
+
+        // Spawn all agent calls concurrently
+        let futures: Vec<_> = agent_info
+            .iter()
+            .map(|(agent, filter_failure_mode, semaphore)| {
+                let agent = Arc::clone(agent);
+                let filter_failure_mode = *filter_failure_mode;
+                let semaphore = semaphore.clone();
+                let correlation_id = ctx.correlation_id.clone();
+
+                async move {
+                    // Acquire per-agent semaphore permit (queue isolation)
+                    let _permit = if let Some(sem) = semaphore {
+                        match sem.acquire_owned().await {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    agent_id = %agent.id(),
+                                    "Failed to acquire agent semaphore permit"
+                                );
+                                return Err((
+                                    agent.id().to_string(),
+                                    filter_failure_mode,
+                                    "Failed to acquire permit".to_string(),
+                                ));
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Check circuit breaker
+                    if !agent.circuit_breaker().is_closed() {
+                        warn!(
+                            agent_id = %agent.id(),
+                            correlation_id = %correlation_id,
+                            filter_failure_mode = ?filter_failure_mode,
+                            "Circuit breaker open, skipping agent"
+                        );
+                        return Err((
+                            agent.id().to_string(),
+                            filter_failure_mode,
+                            "Circuit breaker open".to_string(),
+                        ));
+                    }
+
+                    // Call agent with timeout
+                    let start = Instant::now();
+                    let timeout_duration = Duration::from_millis(agent.timeout_ms());
+
+                    match timeout(timeout_duration, agent.call_event(event_type, event)).await {
+                        Ok(Ok(response)) => {
+                            let duration = start.elapsed();
+                            agent.record_success(duration).await;
+                            trace!(
+                                correlation_id = %correlation_id,
+                                agent_id = %agent.id(),
+                                duration_ms = duration.as_millis(),
+                                "Parallel agent call succeeded"
+                            );
+                            Ok((agent.id().to_string(), response))
+                        }
+                        Ok(Err(e)) => {
+                            agent.record_failure().await;
+                            error!(
+                                agent_id = %agent.id(),
+                                correlation_id = %correlation_id,
+                                error = %e,
+                                duration_ms = start.elapsed().as_millis(),
+                                filter_failure_mode = ?filter_failure_mode,
+                                "Parallel agent call failed"
+                            );
+                            Err((
+                                agent.id().to_string(),
+                                filter_failure_mode,
+                                format!("Agent error: {}", e),
+                            ))
+                        }
+                        Err(_) => {
+                            agent.record_timeout().await;
+                            warn!(
+                                agent_id = %agent.id(),
+                                correlation_id = %correlation_id,
+                                timeout_ms = agent.timeout_ms(),
+                                filter_failure_mode = ?filter_failure_mode,
+                                "Parallel agent call timed out"
+                            );
+                            Err((
+                                agent.id().to_string(),
+                                filter_failure_mode,
+                                "Timeout".to_string(),
+                            ))
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        // Execute all agent calls in parallel
+        let results = join_all(futures).await;
+
+        // Process results and merge decisions
+        let mut combined_decision = AgentDecision::default_allow();
+        let mut blocking_error: Option<AgentDecision> = None;
+
+        for result in results {
+            match result {
+                Ok((agent_id, response)) => {
+                    let decision: AgentDecision = response.into();
+
+                    // Check for blocking decision
+                    if !decision.is_allow() {
+                        debug!(
+                            correlation_id = %ctx.correlation_id,
+                            agent_id = %agent_id,
+                            decision = ?decision,
+                            "Agent returned blocking decision"
+                        );
+                        // Return first blocking decision immediately
+                        return Ok(decision);
+                    }
+
+                    combined_decision.merge(decision);
+                }
+                Err((agent_id, failure_mode, reason)) => {
+                    // Handle failure based on filter's failure mode
+                    if failure_mode == FailureMode::Closed && blocking_error.is_none() {
+                        debug!(
+                            correlation_id = %ctx.correlation_id,
+                            agent_id = %agent_id,
+                            reason = %reason,
+                            "Agent failure in fail-closed mode"
+                        );
+                        // Store blocking error but continue processing other results
+                        // in case another agent returned a more specific block
+                        let status = if reason.contains("Timeout") { 504 } else { 503 };
+                        let message = if reason.contains("Timeout") {
+                            "Gateway timeout"
+                        } else {
+                            "Service unavailable"
+                        };
+                        blocking_error = Some(AgentDecision::block(status, message));
+                    } else {
+                        // Fail-open: log and continue
+                        debug!(
+                            correlation_id = %ctx.correlation_id,
+                            agent_id = %agent_id,
+                            reason = %reason,
+                            "Agent failure in fail-open mode, continuing"
+                        );
+                    }
+                }
+            }
+        }
+
+        // If we have a fail-closed error and no explicit block, return the error
+        if let Some(error_decision) = blocking_error {
+            return Ok(error_decision);
+        }
+
+        trace!(
+            correlation_id = %ctx.correlation_id,
+            decision = ?combined_decision,
+            agents_processed = agent_info.len(),
+            "Parallel agent event processing completed"
+        );
+
+        Ok(combined_decision)
+    }
+
     /// Initialize agent connections.
     pub async fn initialize(&self) -> SentinelResult<()> {
         let agents = self.agents.read().await;
@@ -892,6 +1392,61 @@ impl AgentManager {
                 .collect()
         } else {
             Vec::new()
+        }
+    }
+
+    /// Get pool metrics collectors from all v2 agents.
+    ///
+    /// Returns a vector of (agent_id, MetricsCollector) pairs for all v2 agents.
+    /// These can be registered with the MetricsManager to include agent pool
+    /// metrics in the /metrics endpoint output.
+    pub async fn get_v2_pool_metrics(&self) -> Vec<(String, Arc<MetricsCollector>)> {
+        let agents = self.agents.read().await;
+        agents
+            .iter()
+            .filter_map(|(id, agent)| {
+                if let UnifiedAgent::V2(v2_agent) = agent.as_ref() {
+                    Some((id.clone(), v2_agent.pool_metrics_collector_arc()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Export prometheus metrics from all v2 agent pools.
+    ///
+    /// Returns the combined prometheus-formatted metrics from all v2 agent pools.
+    pub async fn export_v2_pool_metrics(&self) -> String {
+        let agents = self.agents.read().await;
+        let mut output = String::new();
+
+        for (id, agent) in agents.iter() {
+            if let UnifiedAgent::V2(v2_agent) = agent.as_ref() {
+                let pool_metrics = v2_agent.export_prometheus();
+                if !pool_metrics.is_empty() {
+                    output.push_str(&format!("\n# Agent pool metrics: {}\n", id));
+                    output.push_str(&pool_metrics);
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Get a v2 agent's metrics collector by ID.
+    ///
+    /// Returns None if the agent doesn't exist or is not a v2 agent.
+    pub async fn get_v2_metrics_collector(&self, agent_id: &str) -> Option<Arc<MetricsCollector>> {
+        let agents = self.agents.read().await;
+        if let Some(agent) = agents.get(agent_id) {
+            if let UnifiedAgent::V2(v2_agent) = agent.as_ref() {
+                Some(v2_agent.pool_metrics_collector_arc())
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 }

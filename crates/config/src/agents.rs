@@ -60,6 +60,105 @@ fn default_hybrid_threshold() -> usize {
 // Agent Configuration
 // ============================================================================
 
+/// Agent protocol version
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProtocolVersion {
+    /// Protocol v1 (default) - Simple request/response
+    #[default]
+    V1,
+    /// Protocol v2 - Bidirectional streaming with capabilities, health, metrics
+    V2,
+}
+
+/// V2-specific pool configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentPoolConfig {
+    /// Number of connections to maintain per agent (default: 4)
+    #[serde(default = "default_connections_per_agent")]
+    pub connections_per_agent: usize,
+
+    /// Load balancing strategy (default: round_robin)
+    #[serde(default)]
+    pub load_balance_strategy: LoadBalanceStrategy,
+
+    /// Connection timeout in milliseconds (default: 5000)
+    #[serde(default = "default_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+
+    /// Time between reconnection attempts in milliseconds (default: 5000)
+    #[serde(default = "default_reconnect_interval_ms")]
+    pub reconnect_interval_ms: u64,
+
+    /// Maximum reconnection attempts before marking unhealthy (default: 3)
+    #[serde(default = "default_max_reconnect_attempts")]
+    pub max_reconnect_attempts: usize,
+
+    /// Time to wait for in-flight requests during shutdown in milliseconds (default: 30000)
+    #[serde(default = "default_drain_timeout_ms")]
+    pub drain_timeout_ms: u64,
+
+    /// Maximum concurrent requests per connection (default: 100)
+    #[serde(default = "default_max_concurrent_per_connection")]
+    pub max_concurrent_per_connection: usize,
+
+    /// Health check interval in milliseconds (default: 10000)
+    #[serde(default = "default_health_check_interval_ms")]
+    pub health_check_interval_ms: u64,
+}
+
+impl Default for AgentPoolConfig {
+    fn default() -> Self {
+        Self {
+            connections_per_agent: default_connections_per_agent(),
+            load_balance_strategy: LoadBalanceStrategy::default(),
+            connect_timeout_ms: default_connect_timeout_ms(),
+            reconnect_interval_ms: default_reconnect_interval_ms(),
+            max_reconnect_attempts: default_max_reconnect_attempts(),
+            drain_timeout_ms: default_drain_timeout_ms(),
+            max_concurrent_per_connection: default_max_concurrent_per_connection(),
+            health_check_interval_ms: default_health_check_interval_ms(),
+        }
+    }
+}
+
+fn default_connections_per_agent() -> usize {
+    4
+}
+fn default_connect_timeout_ms() -> u64 {
+    5000
+}
+fn default_reconnect_interval_ms() -> u64 {
+    5000
+}
+fn default_max_reconnect_attempts() -> usize {
+    3
+}
+fn default_drain_timeout_ms() -> u64 {
+    30000
+}
+fn default_max_concurrent_per_connection() -> usize {
+    100
+}
+fn default_health_check_interval_ms() -> u64 {
+    10000
+}
+
+/// Load balancing strategy for v2 agent pool
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadBalanceStrategy {
+    /// Round-robin across all healthy connections
+    #[default]
+    RoundRobin,
+    /// Route to connection with fewest in-flight requests
+    LeastConnections,
+    /// Route based on health score (prefer healthier agents)
+    HealthBased,
+    /// Random selection
+    Random,
+}
+
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct AgentConfig {
@@ -75,6 +174,18 @@ pub struct AgentConfig {
 
     /// Events this agent handles
     pub events: Vec<AgentEvent>,
+
+    /// Protocol version (default: v1)
+    ///
+    /// - `v1`: Simple request/response protocol (backwards compatible)
+    /// - `v2`: Bidirectional streaming with capabilities, health reporting,
+    ///         metrics export, and flow control
+    #[serde(default)]
+    pub protocol_version: AgentProtocolVersion,
+
+    /// V2 pool configuration (only used when protocol_version is v2)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<AgentPoolConfig>,
 
     /// Timeout for agent calls
     #[serde(default = "default_agent_timeout")]

@@ -105,36 +105,42 @@ impl ScopedCircuitBreakerManager {
     /// Check if a request should be allowed for a scope and upstream.
     ///
     /// Returns `true` if the circuit breaker is closed or half-open.
+    /// This operation is lock-free and completes in O(1) time.
     pub async fn is_allowed(&self, scope: &Scope, upstream_id: &str) -> bool {
         let breaker = self.get_breaker(scope, upstream_id);
-        breaker.is_closed().await
+        breaker.is_closed() // Lock-free, no await needed
     }
 
     /// Record a successful request for a scope and upstream.
+    /// This operation is lock-free and completes in O(1) time.
     pub async fn record_success(&self, scope: &Scope, upstream_id: &str) {
         let breaker = self.get_breaker(scope, upstream_id);
-        breaker.record_success().await;
+        breaker.record_success(); // Lock-free, no await needed
     }
 
     /// Record a failed request for a scope and upstream.
+    /// This operation is lock-free and completes in O(1) time.
     pub async fn record_failure(&self, scope: &Scope, upstream_id: &str) {
         let breaker = self.get_breaker(scope, upstream_id);
-        breaker.record_failure().await;
+        breaker.record_failure(); // Lock-free, no await needed
     }
 
     /// Get the current state of a circuit breaker.
+    /// This operation is lock-free and completes in O(1) time.
     pub async fn state(&self, scope: &Scope, upstream_id: &str) -> CircuitBreakerState {
         let breaker = self.get_breaker(scope, upstream_id);
-        breaker.state().await
+        breaker.state() // Lock-free, no await needed
     }
 
     /// Reset a specific circuit breaker.
+    /// This operation is lock-free and completes in O(1) time.
     pub async fn reset(&self, scope: &Scope, upstream_id: &str) {
         let breaker = self.get_breaker(scope, upstream_id);
-        breaker.reset().await;
+        breaker.reset(); // Lock-free, no await needed
     }
 
     /// Reset all circuit breakers in a scope.
+    /// This operation is lock-free per breaker.
     pub async fn reset_scope(&self, scope: &Scope) {
         let prefix = format!("{}:", scope_to_label(scope));
         let keys_to_reset: Vec<String> = self
@@ -146,7 +152,7 @@ impl ScopedCircuitBreakerManager {
 
         for key in keys_to_reset {
             if let Some(breaker) = self.breakers.get(&key) {
-                breaker.reset().await;
+                breaker.reset(); // Lock-free, no await needed
             }
         }
     }
@@ -168,13 +174,14 @@ impl ScopedCircuitBreakerManager {
     }
 
     /// Get all circuit breakers with their states (for monitoring).
+    /// This operation is lock-free per breaker.
     pub async fn get_all_states(&self) -> Vec<ScopedBreakerStatus> {
         let mut statuses = Vec::with_capacity(self.breakers.len());
 
         for entry in self.breakers.iter() {
             let key = entry.key().clone();
             let breaker = entry.value().clone();
-            let state = breaker.state().await;
+            let state = breaker.state(); // Lock-free, no await needed
             let failures = breaker.consecutive_failures();
 
             // Parse key back to scope and upstream

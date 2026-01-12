@@ -1,0 +1,183 @@
+/// Sentinel Agent Protocol v2 - WebAssembly Interface
+///
+/// This interface defines how WASM agents interact with the Sentinel proxy.
+/// Agents implement these functions to process HTTP requests and responses.
+
+package sentinel:agent@2.0.0;
+
+/// Core types used throughout the agent interface
+interface types {
+    /// Request metadata passed to agents
+    record request-metadata {
+        /// Correlation ID for request tracking
+        correlation-id: string,
+        /// Unique request identifier
+        request-id: string,
+        /// Client IP address
+        client-ip: string,
+        /// Client port number
+        client-port: u16,
+        /// Server name (SNI or Host header)
+        server-name: option<string>,
+        /// HTTP protocol version (HTTP/1.1, HTTP/2, etc.)
+        protocol: string,
+        /// TLS version if encrypted
+        tls-version: option<string>,
+        /// Route ID that matched this request
+        route-id: option<string>,
+        /// Upstream ID selected for this request
+        upstream-id: option<string>,
+        /// Request timestamp (Unix milliseconds)
+        timestamp-ms: u64,
+        /// W3C Trace Context traceparent header
+        traceparent: option<string>,
+    }
+
+    /// HTTP header name-value pair
+    record header {
+        name: string,
+        value: string,
+    }
+
+    /// Header modification operation
+    variant header-op {
+        /// Set header (replaces existing)
+        set(header),
+        /// Add header (appends to existing)
+        add(header),
+        /// Remove header by name
+        remove(string),
+    }
+
+    /// Parameters for blocking a request
+    record block-params {
+        /// HTTP status code
+        status: u16,
+        /// Optional response body
+        body: option<string>,
+        /// Optional response headers
+        headers: list<header>,
+    }
+
+    /// Parameters for redirecting a request
+    record redirect-params {
+        /// Redirect URL
+        url: string,
+        /// HTTP status code (301, 302, 307, 308)
+        status: u16,
+    }
+
+    /// Agent decision for request/response
+    variant decision {
+        /// Allow request to proceed
+        allow,
+        /// Block request with error response
+        block(block-params),
+        /// Redirect request to another URL
+        redirect(redirect-params),
+    }
+
+    /// Audit metadata for logging and observability
+    record audit-metadata {
+        /// Tags for categorization
+        tags: list<string>,
+        /// Rule IDs that matched
+        rule-ids: list<string>,
+        /// Confidence score (0.0 to 1.0)
+        confidence: option<f32>,
+        /// Reason codes
+        reason-codes: list<string>,
+    }
+
+    /// Full agent response
+    record agent-response {
+        /// Decision (allow, block, redirect)
+        decision: decision,
+        /// Request header modifications
+        request-headers: list<header-op>,
+        /// Response header modifications
+        response-headers: list<header-op>,
+        /// Audit metadata
+        audit: audit-metadata,
+        /// Whether agent needs more data (for streaming)
+        needs-more: bool,
+    }
+
+    /// Agent capabilities for handshake
+    record agent-info {
+        /// Agent identifier
+        agent-id: string,
+        /// Human-readable name
+        name: string,
+        /// Version string
+        version: string,
+        /// Supported event types
+        supported-events: list<string>,
+        /// Maximum body size the agent can inspect
+        max-body-size: u64,
+        /// Whether agent supports streaming body inspection
+        supports-streaming: bool,
+    }
+}
+
+/// Agent handler interface - implement this in your WASM agent
+interface handler {
+    use types.{request-metadata, agent-response, header, agent-info};
+
+    /// Get agent information and capabilities
+    get-info: func() -> agent-info;
+
+    /// Called once when agent is loaded with configuration
+    /// Returns error string if configuration is invalid
+    configure: func(config: string) -> result<_, string>;
+
+    /// Process request headers
+    /// Called for every incoming request
+    on-request-headers: func(
+        metadata: request-metadata,
+        method: string,
+        uri: string,
+        headers: list<header>
+    ) -> agent-response;
+
+    /// Process request body chunk (optional)
+    /// Called if agent declared streaming support and body inspection is enabled
+    on-request-body: func(
+        correlation-id: string,
+        data: list<u8>,
+        chunk-index: u32,
+        is-last: bool
+    ) -> agent-response;
+
+    /// Process response headers (optional)
+    /// Called after upstream responds
+    on-response-headers: func(
+        correlation-id: string,
+        status: u16,
+        headers: list<header>
+    ) -> agent-response;
+
+    /// Process response body chunk (optional)
+    /// Called if response body inspection is enabled
+    on-response-body: func(
+        correlation-id: string,
+        data: list<u8>,
+        chunk-index: u32,
+        is-last: bool
+    ) -> agent-response;
+}
+
+/// Agent lifecycle interface
+interface lifecycle {
+    /// Health check - returns "healthy" or error message
+    health-check: func() -> result<string, string>;
+
+    /// Graceful shutdown notification
+    shutdown: func();
+}
+
+/// The complete WASM agent world
+world agent {
+    export handler;
+    export lifecycle;
+}

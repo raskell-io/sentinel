@@ -1,6 +1,6 @@
 //! Individual agent implementation.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,9 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::metrics::AgentMetrics;
 use super::pool::AgentConnectionPool;
+
+/// Sentinel value indicating no timestamp recorded (Option::None equivalent)
+const NO_TIMESTAMP: u64 = 0;
 
 /// Individual agent configuration and state.
 pub struct Agent {
@@ -25,8 +28,10 @@ pub struct Agent {
     pub(super) circuit_breaker: Arc<CircuitBreaker>,
     /// Agent-specific metrics
     pub(super) metrics: Arc<AgentMetrics>,
-    /// Last successful call
-    pub(super) last_success: Arc<RwLock<Option<Instant>>>,
+    /// Base instant for timestamp calculations
+    pub(super) base_instant: Instant,
+    /// Last successful call (nanoseconds since base_instant, 0 = never)
+    pub(super) last_success_ns: AtomicU64,
     /// Consecutive failures
     pub(super) consecutive_failures: AtomicU32,
 }
@@ -51,7 +56,8 @@ impl Agent {
             pool,
             circuit_breaker,
             metrics: Arc::new(AgentMetrics::default()),
-            last_success: Arc::new(RwLock::new(None)),
+            base_instant: Instant::now(),
+            last_success_ns: AtomicU64::new(NO_TIMESTAMP),
             consecutive_failures: AtomicU32::new(0),
         }
     }
@@ -391,6 +397,153 @@ impl Agent {
         }
     }
 
+    /// Create a new client connection (for pooling).
+    ///
+    /// This creates a new AgentClient without storing it in `self.client`.
+    /// Use this when you need a new connection for the pool.
+    async fn create_client(&self) -> SentinelResult<AgentClient> {
+        let timeout = Duration::from_millis(self.config.timeout_ms);
+
+        trace!(
+            agent_id = %self.config.id,
+            transport = ?self.config.transport,
+            "Creating new client connection for pool"
+        );
+
+        match &self.config.transport {
+            AgentTransport::UnixSocket { path } => {
+                AgentClient::unix_socket(&self.config.id, path, timeout)
+                    .await
+                    .map_err(|e| {
+                        error!(
+                            agent_id = %self.config.id,
+                            socket_path = %path.display(),
+                            error = %e,
+                            "Failed to create Unix socket client"
+                        );
+                        SentinelError::Agent {
+                            agent: self.config.id.clone(),
+                            message: format!("Failed to connect via Unix socket: {}", e),
+                            event: "create_client".to_string(),
+                            source: None,
+                        }
+                    })
+            }
+            AgentTransport::Grpc { address, tls } => {
+                match tls {
+                    Some(tls_config) => {
+                        let mut grpc_tls = GrpcTlsConfig::new();
+
+                        if let Some(ca_path) = &tls_config.ca_cert {
+                            grpc_tls = grpc_tls.with_ca_cert_file(ca_path).await.map_err(|e| {
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to load CA certificate: {}", e),
+                                    event: "create_client".to_string(),
+                                    source: None,
+                                }
+                            })?;
+                        }
+
+                        if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key) {
+                            grpc_tls = grpc_tls.with_client_cert_files(cert_path, key_path).await.map_err(|e| {
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to load client certificate: {}", e),
+                                    event: "create_client".to_string(),
+                                    source: None,
+                                }
+                            })?;
+                        }
+
+                        if tls_config.insecure_skip_verify {
+                            grpc_tls = grpc_tls.with_insecure_skip_verify();
+                        }
+
+                        AgentClient::grpc_tls(&self.config.id, address, timeout, grpc_tls)
+                            .await
+                            .map_err(|e| {
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to connect via gRPC TLS: {}", e),
+                                    event: "create_client".to_string(),
+                                    source: None,
+                                }
+                            })
+                    }
+                    None => {
+                        AgentClient::grpc(&self.config.id, address, timeout)
+                            .await
+                            .map_err(|e| {
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to connect via gRPC: {}", e),
+                                    event: "create_client".to_string(),
+                                    source: None,
+                                }
+                            })
+                    }
+                }
+            }
+            AgentTransport::Http { url, tls } => {
+                match tls {
+                    Some(tls_config) => {
+                        let mut http_tls = HttpTlsConfig::new();
+
+                        if let Some(ca_path) = &tls_config.ca_cert {
+                            http_tls = http_tls.with_ca_cert_file(ca_path).await.map_err(|e| {
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to load CA certificate: {}", e),
+                                    event: "create_client".to_string(),
+                                    source: None,
+                                }
+                            })?;
+                        }
+
+                        if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key) {
+                            http_tls = http_tls.with_client_cert_files(cert_path, key_path).await.map_err(|e| {
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to load client certificate: {}", e),
+                                    event: "create_client".to_string(),
+                                    source: None,
+                                }
+                            })?;
+                        }
+
+                        if tls_config.insecure_skip_verify {
+                            http_tls = http_tls.with_insecure_skip_verify();
+                        }
+
+                        AgentClient::http_tls(&self.config.id, url, timeout, http_tls)
+                            .await
+                            .map_err(|e| {
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to create HTTP TLS client: {}", e),
+                                    event: "create_client".to_string(),
+                                    source: None,
+                                }
+                            })
+                    }
+                    None => {
+                        AgentClient::http(&self.config.id, url, timeout)
+                            .await
+                            .map_err(|e| {
+                                SentinelError::Agent {
+                                    agent: self.config.id.clone(),
+                                    message: format!("Failed to create HTTP client: {}", e),
+                                    event: "create_client".to_string(),
+                                    source: None,
+                                }
+                            })
+                    }
+                }
+            }
+        }
+    }
+
     /// Send Configure event to agent if config is present.
     async fn send_configure_event(&self) -> SentinelResult<()> {
         // Only send Configure if agent has config
@@ -461,6 +614,9 @@ impl Agent {
     }
 
     /// Call agent with event.
+    ///
+    /// Uses connection pooling for concurrent request handling. Multiple requests
+    /// can execute simultaneously using different connections from the pool.
     pub async fn call_event<T: serde::Serialize>(
         &self,
         event_type: EventType,
@@ -472,13 +628,106 @@ impl Agent {
             "Preparing to call agent"
         );
 
-        // Get or create connection
+        // Try to get a connection from the pool (fast path)
+        let mut pooled_conn = self.pool.try_get();
+
+        // If no pooled connection, try to create a new one
+        if pooled_conn.is_none() {
+            if self.pool.can_create() {
+                trace!(
+                    agent_id = %self.config.id,
+                    "No pooled connection available, creating new connection"
+                );
+                match self.create_client().await {
+                    Ok(client) => {
+                        self.pool.register_created();
+                        pooled_conn = Some(super::pool::PooledConnection::new(client));
+                    }
+                    Err(e) => {
+                        error!(
+                            agent_id = %self.config.id,
+                            error = %e,
+                            "Failed to create new connection"
+                        );
+                        return Err(e);
+                    }
+                }
+            } else {
+                // Pool is at capacity, fall back to single client with lock
+                // This ensures we don't create unbounded connections
+                trace!(
+                    agent_id = %self.config.id,
+                    "Pool at capacity, using fallback client"
+                );
+                return self.call_event_fallback(event_type, event).await;
+            }
+        }
+
+        let mut conn = pooled_conn.expect("Connection should be available");
+
+        // Make the call
+        let call_num = self.metrics.calls_total.fetch_add(1, Ordering::Relaxed) + 1;
+
+        trace!(
+            agent_id = %self.config.id,
+            event_type = ?event_type,
+            call_num = call_num,
+            pool_active = self.pool.active_count(),
+            "Sending event to agent via pooled connection"
+        );
+
+        let result = conn.client.send_event(event_type, event).await;
+
+        // Handle result
+        match result {
+            Ok(response) => {
+                // Return connection to pool on success
+                self.pool.return_connection(conn);
+                Ok(response)
+            }
+            Err(e) => {
+                let error_str = e.to_string();
+                let is_connection_error = error_str.contains("Broken pipe")
+                    || error_str.contains("Connection reset")
+                    || error_str.contains("Connection refused")
+                    || error_str.contains("not connected")
+                    || error_str.contains("transport error");
+
+                error!(
+                    agent_id = %self.config.id,
+                    event_type = ?event_type,
+                    error = %e,
+                    is_connection_error = is_connection_error,
+                    "Agent call failed"
+                );
+
+                // Don't return connection to pool on error - mark it as failed
+                self.pool.mark_failed();
+                // Connection will be dropped here
+
+                Err(SentinelError::Agent {
+                    agent: self.config.id.clone(),
+                    message: e.to_string(),
+                    event: format!("{:?}", event_type),
+                    source: None,
+                })
+            }
+        }
+    }
+
+    /// Fallback call method using the single cached client (for when pool is exhausted).
+    async fn call_event_fallback<T: serde::Serialize>(
+        &self,
+        event_type: EventType,
+        event: &T,
+    ) -> SentinelResult<AgentResponse> {
+        // Get or create connection using the fallback single client
         let mut client_guard = self.client.write().await;
 
         if client_guard.is_none() {
             trace!(
                 agent_id = %self.config.id,
-                "No existing connection, initializing"
+                "No existing fallback connection, initializing"
             );
             drop(client_guard);
             self.initialize().await?;
@@ -506,12 +755,11 @@ impl Agent {
             agent_id = %self.config.id,
             event_type = ?event_type,
             call_num = call_num,
-            "Sending event to agent"
+            "Sending event to agent via fallback client"
         );
 
         let result = client.send_event(event_type, event).await;
 
-        // Handle result - clear stale connection on connection errors
         match result {
             Ok(response) => Ok(response),
             Err(e) => {
@@ -527,17 +775,15 @@ impl Agent {
                     event_type = ?event_type,
                     error = %e,
                     is_connection_error = is_connection_error,
-                    "Agent call failed"
+                    "Agent call failed (fallback)"
                 );
 
-                // Drop the client guard to release the lock
                 drop(client_guard);
 
-                // Clear cached client on connection errors to force reconnect on next call
                 if is_connection_error {
                     warn!(
                         agent_id = %self.config.id,
-                        "Clearing cached client due to connection error, next call will reconnect"
+                        "Clearing cached fallback client due to connection error"
                     );
                     *self.client.write().await = None;
                 }
@@ -552,14 +798,18 @@ impl Agent {
         }
     }
 
-    /// Record successful call.
+    /// Record successful call (lock-free).
     pub async fn record_success(&self, duration: Duration) {
         let success_count = self.metrics.calls_success.fetch_add(1, Ordering::Relaxed) + 1;
         self.metrics
             .duration_total_us
             .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
         self.consecutive_failures.store(0, Ordering::Relaxed);
-        *self.last_success.write().await = Some(Instant::now());
+        // Store timestamp as nanoseconds since base_instant (lock-free)
+        self.last_success_ns.store(
+            self.base_instant.elapsed().as_nanos() as u64,
+            Ordering::Relaxed,
+        );
 
         trace!(
             agent_id = %self.config.id,
@@ -568,7 +818,19 @@ impl Agent {
             "Recorded agent call success"
         );
 
-        self.circuit_breaker.record_success().await;
+        self.circuit_breaker.record_success(); // Lock-free
+    }
+
+    /// Get the time since last successful call (for monitoring).
+    /// Returns None if no successful call has been recorded.
+    #[inline]
+    pub fn time_since_last_success(&self) -> Option<Duration> {
+        let last_ns = self.last_success_ns.load(Ordering::Relaxed);
+        if last_ns == NO_TIMESTAMP {
+            return None;
+        }
+        let current_ns = self.base_instant.elapsed().as_nanos() as u64;
+        Some(Duration::from_nanos(current_ns.saturating_sub(last_ns)))
     }
 
     /// Record failed call.
@@ -583,7 +845,7 @@ impl Agent {
             "Recorded agent call failure"
         );
 
-        self.circuit_breaker.record_failure().await;
+        self.circuit_breaker.record_failure(); // Lock-free
     }
 
     /// Record timeout.
@@ -599,7 +861,7 @@ impl Agent {
             "Recorded agent call timeout"
         );
 
-        self.circuit_breaker.record_failure().await;
+        self.circuit_breaker.record_failure(); // Lock-free
     }
 
     /// Shutdown agent.

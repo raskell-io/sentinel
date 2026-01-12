@@ -233,6 +233,8 @@ mod tests {
             agent_type: AgentType::Custom("test".to_string()),
             transport,
             events: vec![AgentEvent::RequestHeaders],
+            protocol_version: Default::default(),
+            pool: None,
             timeout_ms: 1000,
             failure_mode: crate::FailureMode::default(),
             circuit_breaker: None,

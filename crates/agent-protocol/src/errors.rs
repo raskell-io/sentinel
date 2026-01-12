@@ -9,6 +9,9 @@ pub enum AgentProtocolError {
     #[error("Connection failed: {0}")]
     ConnectionFailed(String),
 
+    #[error("Connection closed")]
+    ConnectionClosed,
+
     #[error("Protocol version mismatch: expected {expected}, got {actual}")]
     VersionMismatch { expected: u32, actual: u32 },
 

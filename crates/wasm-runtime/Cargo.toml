@@ -1,0 +1,47 @@
+[package]
+name = "sentinel-wasm-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "WebAssembly agent runtime for Sentinel proxy"
+keywords = ["proxy", "wasm", "wasmtime", "agent", "extensibility"]
+categories = ["wasm", "network-programming"]
+
+[dependencies]
+# Local crates
+sentinel-agent-protocol = { path = "../agent-protocol", version = "0.3.0" }
+
+# Wasmtime runtime with component model
+wasmtime = { version = "28", features = ["component-model", "async", "cranelift"] }
+wasmtime-wasi = "28"
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+bytes = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile = "3"
+
+[build-dependencies]
+# For generating bindings from WIT files
+wasmtime = { version = "28", features = ["component-model"] }

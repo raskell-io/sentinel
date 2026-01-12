@@ -1,0 +1,525 @@
+// Sentinel Agent Protocol v2 - gRPC Definition
+//
+// Protocol v2 adds bidirectional streaming, health reporting, capability
+// negotiation, flow control, and metrics export.
+
+syntax = "proto3";
+package sentinel.agent.v2;
+
+// =============================================================================
+// Core Enums
+// =============================================================================
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_REQUEST_HEADERS = 1;
+  EVENT_TYPE_REQUEST_BODY_CHUNK = 2;
+  EVENT_TYPE_RESPONSE_HEADERS = 3;
+  EVENT_TYPE_RESPONSE_BODY_CHUNK = 4;
+  EVENT_TYPE_REQUEST_COMPLETE = 5;
+  EVENT_TYPE_WEBSOCKET_FRAME = 6;
+  EVENT_TYPE_GUARDRAIL_INSPECT = 7;
+  EVENT_TYPE_CONFIGURE = 8;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_HEALTHY = 1;
+  HEALTH_STATE_DEGRADED = 2;
+  HEALTH_STATE_DRAINING = 3;
+  HEALTH_STATE_UNHEALTHY = 4;
+}
+
+enum FlowAction {
+  FLOW_ACTION_UNSPECIFIED = 0;
+  FLOW_ACTION_PAUSE = 1;
+  FLOW_ACTION_RESUME = 2;
+  FLOW_ACTION_UPDATE_CAPACITY = 3;
+}
+
+enum CancelReason {
+  CANCEL_REASON_UNSPECIFIED = 0;
+  CANCEL_REASON_CLIENT_DISCONNECT = 1;
+  CANCEL_REASON_TIMEOUT = 2;
+  CANCEL_REASON_BLOCKED_BY_AGENT = 3;
+  CANCEL_REASON_UPSTREAM_ERROR = 4;
+  CANCEL_REASON_PROXY_SHUTDOWN = 5;
+  CANCEL_REASON_MANUAL = 6;
+}
+
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARN = 3;
+  LOG_LEVEL_ERROR = 4;
+}
+
+enum GuardrailContentType {
+  GUARDRAIL_CONTENT_TYPE_UNSPECIFIED = 0;
+  GUARDRAIL_CONTENT_TYPE_PROMPT = 1;
+  GUARDRAIL_CONTENT_TYPE_RESPONSE = 2;
+  GUARDRAIL_CONTENT_TYPE_SYSTEM = 3;
+  GUARDRAIL_CONTENT_TYPE_TOOL_CALL = 4;
+  GUARDRAIL_CONTENT_TYPE_TOOL_RESULT = 5;
+}
+
+// =============================================================================
+// Capability Negotiation
+// =============================================================================
+
+message AgentCapabilities {
+  uint32 protocol_version = 1;
+  string agent_id = 2;
+  string name = 3;
+  string version = 4;
+  repeated int32 supported_events = 5;
+  AgentFeatures features = 6;
+  AgentLimits limits = 7;
+  HealthConfig health_config = 8;
+}
+
+message AgentFeatures {
+  bool streaming_body = 1;
+  bool websocket = 2;
+  bool guardrails = 3;
+  bool config_push = 4;
+  bool metrics_export = 5;
+  uint32 concurrent_requests = 6;
+  bool cancellation = 7;
+  bool flow_control = 8;
+  bool health_reporting = 9;
+}
+
+message AgentLimits {
+  uint64 max_body_size = 1;
+  uint32 max_concurrency = 2;
+  uint64 preferred_chunk_size = 3;
+  optional uint64 max_memory = 4;
+  optional uint64 max_processing_time_ms = 5;
+}
+
+message HealthConfig {
+  uint32 report_interval_ms = 1;
+  bool include_load_metrics = 2;
+  bool include_resource_metrics = 3;
+}
+
+message HandshakeRequest {
+  repeated uint32 supported_versions = 1;
+  string proxy_id = 2;
+  string proxy_version = 3;
+  string config_json = 4;
+}
+
+message HandshakeResponse {
+  uint32 protocol_version = 1;
+  AgentCapabilities capabilities = 2;
+  bool success = 3;
+  optional string error = 4;
+}
+
+// =============================================================================
+// Health Reporting
+// =============================================================================
+
+message HealthStatus {
+  string agent_id = 1;
+  int32 state = 2;
+  optional string message = 3;
+  optional LoadMetrics load = 4;
+  optional ResourceMetrics resources = 5;
+  optional uint64 valid_until_ms = 6;
+  uint64 timestamp_ms = 7;
+  repeated string disabled_features = 10;
+  float timeout_multiplier = 11;
+  optional uint64 drain_eta_ms = 12;
+  optional string unhealthy_reason = 13;
+  bool recoverable = 14;
+}
+
+message LoadMetrics {
+  uint32 in_flight = 1;
+  uint32 queue_depth = 2;
+  float avg_latency_ms = 3;
+  float p50_latency_ms = 4;
+  float p95_latency_ms = 5;
+  float p99_latency_ms = 6;
+  uint64 requests_processed = 7;
+  uint64 requests_rejected = 8;
+  uint64 requests_timed_out = 9;
+}
+
+message ResourceMetrics {
+  optional float cpu_percent = 1;
+  optional uint64 memory_bytes = 2;
+  optional uint64 memory_limit = 3;
+  optional uint32 active_threads = 4;
+  optional uint32 open_fds = 5;
+  optional uint32 fd_limit = 6;
+  optional uint32 connections = 7;
+}
+
+// =============================================================================
+// Control Plane Messages
+// =============================================================================
+
+message CancelRequest {
+  string correlation_id = 1;
+  int32 reason = 2;
+  uint64 timestamp_ms = 3;
+  optional string blocking_agent_id = 4;
+  optional string manual_reason = 5;
+}
+
+message ConfigUpdateRequest {
+  string request_id = 1;
+  uint64 timestamp_ms = 2;
+  oneof update_type {
+    RequestReload request_reload = 10;
+    RuleUpdate rule_update = 11;
+    ListUpdate list_update = 12;
+    RestartRequired restart_required = 13;
+    ConfigError config_error = 14;
+  }
+}
+
+message RequestReload {}
+
+message RuleUpdate {
+  string rule_set = 1;
+  repeated RuleDefinition rules = 2;
+  repeated string remove_rules = 3;
+}
+
+message ListUpdate {
+  string list_id = 1;
+  repeated string add = 2;
+  repeated string remove = 3;
+}
+
+message RestartRequired {
+  string reason = 1;
+  uint64 grace_period_ms = 2;
+}
+
+message ConfigError {
+  string error = 1;
+  optional string field = 2;
+}
+
+message RuleDefinition {
+  string id = 1;
+  int32 priority = 2;
+  string definition_json = 3;
+  bool enabled = 4;
+  optional string description = 5;
+  repeated string tags = 6;
+}
+
+message ConfigUpdateResponse {
+  string request_id = 1;
+  bool accepted = 2;
+  optional string error = 3;
+  uint64 timestamp_ms = 4;
+}
+
+message ShutdownRequest {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_GRACEFUL = 1;
+    REASON_IMMEDIATE = 2;
+    REASON_CONFIG_RELOAD = 3;
+    REASON_UPGRADE = 4;
+  }
+  int32 reason = 1;
+  uint64 grace_period_ms = 2;
+  uint64 timestamp_ms = 3;
+}
+
+message DrainRequest {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_CONFIG_RELOAD = 1;
+    REASON_MAINTENANCE = 2;
+    REASON_HEALTH_CHECK_FAILED = 3;
+    REASON_MANUAL = 4;
+  }
+  uint64 duration_ms = 1;
+  int32 reason = 2;
+  uint64 timestamp_ms = 3;
+}
+
+message LogMessage {
+  int32 level = 1;
+  string message = 2;
+  optional string correlation_id = 3;
+  map<string, string> fields = 4;
+  uint64 timestamp_ms = 5;
+}
+
+// =============================================================================
+// Metrics Export
+// =============================================================================
+
+message MetricsReport {
+  string agent_id = 1;
+  uint64 timestamp_ms = 2;
+  uint64 interval_ms = 3;
+  repeated CounterMetric counters = 4;
+  repeated GaugeMetric gauges = 5;
+  repeated HistogramMetric histograms = 6;
+}
+
+message CounterMetric {
+  string name = 1;
+  optional string help = 2;
+  map<string, string> labels = 3;
+  uint64 value = 4;
+}
+
+message GaugeMetric {
+  string name = 1;
+  optional string help = 2;
+  map<string, string> labels = 3;
+  double value = 4;
+}
+
+message HistogramMetric {
+  string name = 1;
+  optional string help = 2;
+  map<string, string> labels = 3;
+  double sum = 4;
+  uint64 count = 5;
+  repeated HistogramBucket buckets = 6;
+}
+
+message HistogramBucket {
+  double le = 1;
+  uint64 count = 2;
+}
+
+// =============================================================================
+// Flow Control
+// =============================================================================
+
+message FlowControlSignal {
+  optional string correlation_id = 1;
+  int32 action = 2;
+  optional uint64 buffer_available = 3;
+  uint64 timestamp_ms = 4;
+}
+
+// =============================================================================
+// Streaming Event Types
+// =============================================================================
+
+message RequestMetadata {
+  string correlation_id = 1;
+  string request_id = 2;
+  string client_ip = 3;
+  uint32 client_port = 4;
+  optional string server_name = 5;
+  string protocol = 6;
+  optional string tls_version = 7;
+  optional string route_id = 8;
+  optional string upstream_id = 9;
+  uint64 timestamp_ms = 10;
+  optional string traceparent = 11;
+}
+
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+message HeaderOp {
+  oneof operation {
+    Header set = 1;
+    Header add = 2;
+    string remove = 3;
+  }
+}
+
+message RequestHeadersEvent {
+  RequestMetadata metadata = 1;
+  string method = 2;
+  string uri = 3;
+  string http_version = 4;
+  repeated Header headers = 5;
+}
+
+message ResponseHeadersEvent {
+  string correlation_id = 1;
+  uint32 status_code = 2;
+  repeated Header headers = 3;
+}
+
+message BodyChunkEvent {
+  string correlation_id = 1;
+  uint32 chunk_index = 2;
+  bytes data = 3;
+  bool is_last = 4;
+  optional uint64 total_size = 5;
+  uint64 bytes_transferred = 6;
+  uint64 proxy_buffer_available = 7;
+  uint64 timestamp_ms = 8;
+}
+
+message WebSocketFrameEvent {
+  string correlation_id = 1;
+  bool client_to_server = 2;
+  enum FrameType {
+    FRAME_TYPE_UNSPECIFIED = 0;
+    FRAME_TYPE_TEXT = 1;
+    FRAME_TYPE_BINARY = 2;
+    FRAME_TYPE_PING = 3;
+    FRAME_TYPE_PONG = 4;
+    FRAME_TYPE_CLOSE = 5;
+  }
+  int32 frame_type = 3;
+  bytes payload = 4;
+}
+
+message GuardrailInspectEvent {
+  string correlation_id = 1;
+  string content = 2;
+  int32 content_type = 3;
+  optional string model = 4;
+  string context_json = 5;
+}
+
+message RequestCompleteEvent {
+  string correlation_id = 1;
+  uint32 status_code = 2;
+  uint64 duration_ms = 3;
+  uint64 bytes_received = 4;
+  uint64 bytes_sent = 5;
+  optional string upstream = 6;
+  bool from_cache = 7;
+  optional string error = 8;
+}
+
+message ConfigureEvent {
+  string config_json = 1;
+  optional string config_version = 2;
+  bool is_initial = 3;
+  uint64 timestamp_ms = 4;
+}
+
+message Ping {
+  uint64 sequence = 1;
+  uint64 timestamp_ms = 2;
+}
+
+message Pong {
+  uint64 sequence = 1;
+  uint64 ping_timestamp_ms = 2;
+  uint64 timestamp_ms = 3;
+}
+
+// =============================================================================
+// Agent Decision Types
+// =============================================================================
+
+message AuditMetadata {
+  repeated string tags = 1;
+  repeated string rule_ids = 2;
+  optional float confidence = 3;
+  repeated string reason_codes = 4;
+  map<string, string> custom = 5;
+}
+
+message AllowDecision {}
+
+message BlockDecision {
+  uint32 status = 1;
+  optional string body = 2;
+  repeated Header headers = 3;
+}
+
+message RedirectDecision {
+  string url = 1;
+  uint32 status = 2;
+}
+
+message ChallengeDecision {
+  string challenge_type = 1;
+  map<string, string> params = 2;
+}
+
+// =============================================================================
+// Bidirectional Stream Messages
+// =============================================================================
+
+message ProxyToAgent {
+  oneof message {
+    HandshakeRequest handshake = 1;
+    RequestHeadersEvent request_headers = 2;
+    BodyChunkEvent request_body_chunk = 3;
+    ResponseHeadersEvent response_headers = 4;
+    BodyChunkEvent response_body_chunk = 5;
+    WebSocketFrameEvent websocket_frame = 6;
+    GuardrailInspectEvent guardrail = 7;
+    RequestCompleteEvent request_complete = 8;
+    CancelRequest cancel = 9;
+    ConfigureEvent configure = 10;
+    Ping ping = 11;
+  }
+}
+
+message AgentToProxy {
+  oneof message {
+    HandshakeResponse handshake = 1;
+    AgentResponse response = 2;
+    HealthStatus health = 3;
+    MetricsReport metrics = 4;
+    ConfigUpdateRequest config_update = 5;
+    FlowControlSignal flow_control = 6;
+    Pong pong = 7;
+    LogMessage log = 8;
+  }
+}
+
+message AgentResponse {
+  string correlation_id = 1;
+  oneof decision {
+    AllowDecision allow = 2;
+    BlockDecision block = 3;
+    RedirectDecision redirect = 4;
+    ChallengeDecision challenge = 5;
+  }
+  repeated HeaderOp request_headers = 10;
+  repeated HeaderOp response_headers = 11;
+  optional AuditMetadata audit = 12;
+  optional uint64 processing_time_ms = 13;
+  bool needs_more = 14;
+}
+
+message AgentControl {
+  oneof message {
+    HealthStatus health = 1;
+    MetricsReport metrics = 2;
+    ConfigUpdateRequest config_update = 3;
+    LogMessage log = 4;
+  }
+}
+
+message ProxyControl {
+  oneof message {
+    ConfigureEvent configure = 1;
+    ShutdownRequest shutdown = 2;
+    DrainRequest drain = 3;
+    ConfigUpdateResponse config_response = 4;
+  }
+}
+
+// =============================================================================
+// Service Definition
+// =============================================================================
+
+service AgentServiceV2 {
+  rpc ProcessStream(stream ProxyToAgent) returns (stream AgentToProxy);
+  rpc ControlStream(stream AgentControl) returns (stream ProxyControl);
+  rpc ProcessEvent(ProxyToAgent) returns (AgentToProxy);
+}

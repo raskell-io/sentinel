@@ -7,10 +7,17 @@
 //! # Architecture
 //!
 //! - [`AgentManager`]: Coordinates all agents, handles routing to appropriate agents
-//! - [`Agent`]: Individual agent with connection, circuit breaker, and metrics
-//! - [`AgentConnectionPool`]: Connection pooling for efficient connection reuse
+//! - [`Agent`]: Protocol v1 agent with connection, circuit breaker, and metrics
+//! - [`AgentV2`]: Protocol v2 agent with bidirectional streaming and pooling
+//! - [`AgentConnectionPool`]: Connection pooling for efficient connection reuse (v1)
 //! - [`AgentDecision`]: Combined result from processing through agents
 //! - [`AgentCallContext`]: Request context passed to agents
+//!
+//! # Protocol Versions
+//!
+//! - **V1**: Simple request/response protocol (backwards compatible)
+//! - **V2**: Bidirectional streaming with capabilities, health reporting,
+//!           metrics export, and flow control
 //!
 //! # Queue Isolation
 //!
@@ -34,6 +41,7 @@
 //! ```
 
 mod agent;
+mod agent_v2;
 mod context;
 mod decision;
 mod manager;
@@ -41,6 +49,7 @@ mod metrics;
 mod pool;
 
 pub use agent::Agent;
+pub use agent_v2::AgentV2;
 pub use context::AgentCallContext;
 pub use decision::{AgentAction, AgentDecision};
 pub use manager::AgentManager;
@@ -79,22 +88,22 @@ mod tests {
         };
 
         let breaker = CircuitBreaker::new(config);
-        assert!(breaker.is_closed().await);
+        assert!(breaker.is_closed()); // Lock-free
 
         // Record failures to open
         for _ in 0..3 {
-            breaker.record_failure().await;
+            breaker.record_failure(); // Lock-free
         }
-        assert!(!breaker.is_closed().await);
+        assert!(!breaker.is_closed()); // Lock-free
 
         // Wait for timeout
         tokio::time::sleep(Duration::from_secs(2)).await;
-        assert!(breaker.is_closed().await); // Should be half-open now
+        assert!(breaker.is_closed()); // Should be half-open now (lock-free)
     }
 
     #[tokio::test]
     async fn test_per_agent_queue_isolation_config() {
-        use sentinel_config::{AgentConfig, AgentTransport, AgentType, AgentEvent};
+        use sentinel_config::{AgentConfig, AgentTransport, AgentType, AgentEvent, AgentProtocolVersion};
         use std::path::PathBuf;
 
         // Verify the max_concurrent_calls field works in AgentConfig
@@ -105,6 +114,8 @@ mod tests {
                 path: PathBuf::from("/tmp/test.sock"),
             },
             events: vec![AgentEvent::RequestHeaders],
+            protocol_version: AgentProtocolVersion::V1,
+            pool: None,
             timeout_ms: 1000,
             failure_mode: Default::default(),
             circuit_breaker: None,
@@ -127,6 +138,8 @@ mod tests {
                 path: PathBuf::from("/tmp/default.sock"),
             },
             events: vec![AgentEvent::RequestHeaders],
+            protocol_version: AgentProtocolVersion::V1,
+            pool: None,
             timeout_ms: 1000,
             failure_mode: Default::default(),
             circuit_breaker: None,
@@ -140,5 +153,50 @@ mod tests {
         };
 
         assert_eq!(default_config.max_concurrent_calls, 100);
+    }
+
+    #[tokio::test]
+    async fn test_v2_agent_config() {
+        use sentinel_config::{
+            AgentConfig, AgentTransport, AgentType, AgentEvent,
+            AgentProtocolVersion, AgentPoolConfig, LoadBalanceStrategy,
+        };
+
+        let config = AgentConfig {
+            id: "v2-agent".to_string(),
+            agent_type: AgentType::Waf,
+            transport: AgentTransport::Grpc {
+                address: "localhost:50051".to_string(),
+                tls: None,
+            },
+            events: vec![AgentEvent::RequestHeaders, AgentEvent::RequestBody],
+            protocol_version: AgentProtocolVersion::V2,
+            pool: Some(AgentPoolConfig {
+                connections_per_agent: 8,
+                load_balance_strategy: LoadBalanceStrategy::LeastConnections,
+                connect_timeout_ms: 3000,
+                reconnect_interval_ms: 5000,
+                max_reconnect_attempts: 5,
+                drain_timeout_ms: 60000,
+                max_concurrent_per_connection: 200,
+                health_check_interval_ms: 5000,
+            }),
+            timeout_ms: 2000,
+            failure_mode: Default::default(),
+            circuit_breaker: None,
+            max_request_body_bytes: Some(1024 * 1024),
+            max_response_body_bytes: None,
+            request_body_mode: Default::default(),
+            response_body_mode: Default::default(),
+            chunk_timeout_ms: 5000,
+            config: None,
+            max_concurrent_calls: 100,
+        };
+
+        assert_eq!(config.protocol_version, AgentProtocolVersion::V2);
+        assert!(config.pool.is_some());
+        let pool = config.pool.unwrap();
+        assert_eq!(pool.connections_per_agent, 8);
+        assert_eq!(pool.load_balance_strategy, LoadBalanceStrategy::LeastConnections);
     }
 }
