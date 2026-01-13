@@ -70,7 +70,9 @@ jobs:
             echo "amd64=true" >> $GITHUB_OUTPUT
             chmod +x artifacts/linux-amd64/sentinel
             # Copy default config into artifact directory for Docker build
-            cp config/docker/default.kdl artifacts/linux-amd64/config.kdl
+            # Preserve directory structure expected by Dockerfile
+            mkdir -p artifacts/linux-amd64/config/docker
+            cp config/docker/default.kdl artifacts/linux-amd64/config/docker/default.kdl
           else
             echo "amd64=false" >> $GITHUB_OUTPUT
           fi
@@ -79,7 +81,8 @@ jobs:
             echo "arm64=true" >> $GITHUB_OUTPUT
             chmod +x artifacts/linux-arm64/sentinel
             # Copy default config into artifact directory for Docker build
-            cp config/docker/default.kdl artifacts/linux-arm64/config.kdl
+            mkdir -p artifacts/linux-arm64/config/docker
+            cp config/docker/default.kdl artifacts/linux-arm64/config/docker/default.kdl
           else
             echo "arm64=false" >> $GITHUB_OUTPUT
           fi
