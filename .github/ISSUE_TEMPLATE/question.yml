@@ -1,0 +1,49 @@
+name: Question
+description: Ask a question about Sentinel
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For general questions, consider using [GitHub Discussions](https://github.com/raskell-io/sentinel/discussions) instead.
+
+        This template is for specific technical questions.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to know?
+      placeholder: How do I...?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What are you trying to accomplish?
+      placeholder: I'm trying to set up...
+    validations:
+      required: false
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What I've Tried
+      description: What have you already attempted?
+      placeholder: |
+        - Checked the documentation at...
+        - Tried configuring...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched the [documentation](https://sentinel.raskell.io/docs)
+          required: true
+        - label: I have searched existing issues and discussions
+          required: true

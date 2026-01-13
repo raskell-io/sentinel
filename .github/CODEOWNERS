@@ -1,0 +1,20 @@
+# Default owners for everything in the repo
+* @raskell-io/sentinel-maintainers
+
+# Core proxy - requires careful review
+/crates/proxy/ @raskell-io/sentinel-maintainers
+
+# Configuration - affects all users
+/crates/config/ @raskell-io/sentinel-maintainers
+
+# Agent protocol - affects agent compatibility
+/crates/agent-protocol/ @raskell-io/sentinel-maintainers
+
+# Documentation
+/.claude/ @raskell-io/sentinel-maintainers
+/MANIFESTO.md @raskell-io/sentinel-maintainers
+/CONTRIBUTING.md @raskell-io/sentinel-maintainers
+
+# CI/CD and release
+/.github/workflows/ @raskell-io/sentinel-maintainers
+/Dockerfile @raskell-io/sentinel-maintainers
