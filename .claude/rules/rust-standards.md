@@ -1,9 +1,14 @@
 # Rust Coding Standards
 
 > Minimum Rust version: **1.92.0** (Edition 2021)
-> Last updated: 2026-01-10
+> Last updated: 2026-01-13
 
-These standards apply to all Rust code in this project. Rules are organized by category and include specific APIs available in our minimum supported Rust version.
+These standards apply to all Rust code in Sentinel. They enforce the [Manifesto](../../MANIFESTO.md) principles of **explicit behavior**, **bounded resources**, and **production correctness**.
+
+**Related rules:**
+- [project.md](project.md) — Sentinel-specific architecture rules
+- [patterns.md](patterns.md) — Code patterns for Pingora, agents, config
+- [workflow.md](workflow.md) — Commands and processes
 
 ---
 
@@ -475,4 +480,5 @@ let handler = async |request: Request| {
 
 | Date | Rust Version | Changes |
 |------|--------------|---------|
+| 2026-01-13 | 1.92.0 | Integrated with Sentinel rules structure |
 | 2026-01-10 | 1.92.0 | Initial standards, added div_ceil, or_default, RwLock::downgrade |
