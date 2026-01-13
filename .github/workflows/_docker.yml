@@ -33,6 +33,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  ECHO_IMAGE_NAME: ${{ github.repository }}-echo
 
 jobs:
   build-and-push:
@@ -144,6 +145,75 @@ jobs:
           # Determine which images to include
           IMAGES="$IMAGE:$VERSION-amd64"
           if [ "${{ steps.check-artifacts.outputs.arm64 }}" = "true" ]; then
+            IMAGES="$IMAGES $IMAGE:$VERSION-arm64"
+          fi
+
+          # Create and push version manifest
+          echo "Creating manifest for $IMAGE:$VERSION with: $IMAGES"
+          docker manifest create "$IMAGE:$VERSION" $IMAGES
+          docker manifest push "$IMAGE:$VERSION"
+
+          # Create and push latest manifest if requested
+          if [ "${{ inputs.latest }}" = "true" ]; then
+            echo "Creating manifest for $IMAGE:latest"
+            docker manifest create "$IMAGE:latest" $IMAGES
+            docker manifest push "$IMAGE:latest"
+          fi
+
+      # Check for echo-agent binary
+      - name: Check echo-agent artifacts
+        id: check-echo-artifacts
+        run: |
+          if [ -f "artifacts/linux-amd64/sentinel-echo-agent" ]; then
+            echo "echo-amd64=true" >> $GITHUB_OUTPUT
+            chmod +x artifacts/linux-amd64/sentinel-echo-agent
+          else
+            echo "echo-amd64=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -f "artifacts/linux-arm64/sentinel-echo-agent" ]; then
+            echo "echo-arm64=true" >> $GITHUB_OUTPUT
+            chmod +x artifacts/linux-arm64/sentinel-echo-agent
+          else
+            echo "echo-arm64=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Build and push Echo Agent AMD64 image
+      - name: Build and push Echo Agent AMD64 image
+        if: steps.check-echo-artifacts.outputs.echo-amd64 == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: artifacts/linux-amd64
+          file: ./Dockerfile
+          target: echo-agent-prebuilt
+          platforms: linux/amd64
+          push: ${{ inputs.push }}
+          tags: ${{ env.REGISTRY }}/${{ env.ECHO_IMAGE_NAME }}:${{ inputs.version }}-amd64
+          provenance: false
+
+      # Build and push Echo Agent ARM64 image
+      - name: Build and push Echo Agent ARM64 image
+        if: steps.check-echo-artifacts.outputs.echo-arm64 == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: artifacts/linux-arm64
+          file: ./Dockerfile
+          target: echo-agent-prebuilt
+          platforms: linux/arm64
+          push: ${{ inputs.push }}
+          tags: ${{ env.REGISTRY }}/${{ env.ECHO_IMAGE_NAME }}:${{ inputs.version }}-arm64
+          provenance: false
+
+      # Create and push Echo Agent multi-arch manifest
+      - name: Create Echo Agent multi-arch manifest
+        if: inputs.push && steps.check-echo-artifacts.outputs.echo-amd64 == 'true'
+        run: |
+          VERSION="${{ inputs.version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.ECHO_IMAGE_NAME }}"
+
+          # Determine which images to include
+          IMAGES="$IMAGE:$VERSION-amd64"
+          if [ "${{ steps.check-echo-artifacts.outputs.echo-arm64 }}" = "true" ]; then
             IMAGES="$IMAGES $IMAGE:$VERSION-arm64"
           fi
 

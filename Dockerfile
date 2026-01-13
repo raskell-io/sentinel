@@ -199,3 +199,20 @@ ENV RUST_LOG=info,sentinel_echo_agent=debug \
 USER nonroot:nonroot
 
 CMD ["/sentinel-echo-agent"]
+
+################################################################################
+# Echo agent pre-built stage (for CI multi-arch builds)
+################################################################################
+FROM gcr.io/distroless/cc-debian12:nonroot AS echo-agent-prebuilt
+
+COPY sentinel-echo-agent /sentinel-echo-agent
+
+LABEL org.opencontainers.image.title="Sentinel Echo Agent" \
+      org.opencontainers.image.description="Echo agent for Sentinel proxy testing"
+
+ENV RUST_LOG=info,sentinel_echo_agent=debug \
+    SOCKET_PATH=/var/run/sentinel/echo.sock
+
+USER nonroot:nonroot
+
+CMD ["/sentinel-echo-agent"]
