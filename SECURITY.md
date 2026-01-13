@@ -13,9 +13,11 @@ Sentinel is infrastructure that sits at the edge of the web. Security is foundat
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, report them via email to:
+Instead, report them privately via GitHub:
 
-**security@raskell.io**
+**[@raffaelschneider](https://github.com/raffaelschneider)**
+
+You can use [GitHub's private vulnerability reporting](https://github.com/raskell-io/sentinel/security/advisories/new) if enabled, or contact directly via GitHub.
 
 Please include:
 
