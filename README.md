@@ -54,11 +54,15 @@ sentinel --config sentinel.kdl
 | Feature | Description |
 |---------|-------------|
 | **KDL Configuration** | Human-readable config with hot reload |
-| **Agent Protocol v2** | External agents with connection pooling, gRPC, reverse connections |
-| **Service Types** | Optimized handling for APIs, static files, web apps |
+| **Service Types** | Web, API, Static, Builtin, and Inference (LLM/AI) |
+| **Load Balancing** | 14+ algorithms: round-robin, consistent hashing, Maglev, P2C, adaptive, and more |
+| **ACME** | Automatic TLS certificates via Let's Encrypt with auto-renewal |
+| **Agent Protocol** | External agents for WAF, auth, and custom logic with connection pooling |
 | **Observability** | Prometheus metrics, structured logging, distributed tracing |
-| **TLS** | Modern cipher suites, automatic certificate handling |
-| **Load Balancing** | Round-robin, least connections, weighted strategies |
+
+### Inference Gateway
+
+First-class support for LLM/AI workloads: token-based rate limiting, usage budgets, model-based routing with glob patterns (`gpt-4*`, `claude-*`), and guardrails for prompt injection and PII detection. Supports OpenAI, Anthropic, and generic providers out of the box.
 
 ## Why Sentinel
 
