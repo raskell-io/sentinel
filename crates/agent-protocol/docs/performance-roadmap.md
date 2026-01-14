@@ -14,7 +14,10 @@
 | P1 | Base64 body chunk encoding | **Complete** |
 | P2 | Flow control not enforced | **Complete** |
 | P2 | Buffer size mismatch (UDS vs gRPC) | **Complete** |
-| P2 | Header allocation patterns | Planned |
+| P2 | Header allocation patterns | **Complete** |
+| P3 | Metrics integration | **Complete** |
+| P3 | Connection affinity | **Complete** |
+| P3 | Zero-copy body streaming | **Complete** |
 
 ---
 
@@ -133,41 +136,105 @@ if !conn.client.can_accept_requests().await {
 | UDS | 1024 | 64 |
 | Reverse | 1024 | 64 |
 
----
-
-## Planned (P2) - High
-
 ### Header Allocation Patterns
 
-**Location:** `src/protocol.rs:203`, `src/v2/client.rs:836-845`
+**Date:** 2026-01-14
 
-**Problem:** Headers use allocation-heavy structures:
-```rust
-pub headers: HashMap<String, Vec<String>>,
-```
+**Solution:** SmallVec-based header types and iteration helpers
+- Added `smallvec` dependency with serde feature
+- `HeaderValues = SmallVec<[String; 1]>` stores single header values inline
+- `OptimizedHeaderMap = HashMap<String, HeaderValues>` for optimized storage
+- `iter_flat()` provides zero-allocation iteration for gRPC conversion
 
-Conversion to gRPC clones every header:
-```rust
-let headers: Vec<grpc_v2::Header> = event.headers.iter()
-    .flat_map(|(name, values)| {
-        values.iter().map(|v| grpc_v2::Header {
-            name: name.clone(),   // Clone!
-            value: v.clone(),     // Clone!
-        })
-    })
-    .collect();
-```
-
-**Impact:** ~40+ allocations for typical 20-header request.
-
-**Proposed Solution:**
+**Types:**
 ```rust
 use smallvec::SmallVec;
-use std::borrow::Cow;
 
-// Most headers have single value - inline it
-pub headers: Vec<(Cow<'static, str>, SmallVec<[Cow<'_, str>; 1]>)>,
+/// Single-value headers stored inline (no heap allocation)
+pub type HeaderValues = SmallVec<[String; 1]>;
+
+/// Optimized header map
+pub type OptimizedHeaderMap = HashMap<String, HeaderValues>;
+
+/// Zero-allocation iteration
+pub fn iter_flat(headers: &HashMap<String, Vec<String>>) -> impl Iterator<Item = (&str, &str)>;
 ```
+
+---
+
+## Completed (P3)
+
+### Metrics Integration
+
+**Date:** 2026-01-14
+
+**Solution:** Protocol-level metrics with atomic counters and histograms
+- `ProtocolMetrics` struct with counters, gauges, and histograms
+- Counters for requests, responses, timeouts, errors, flow control events
+- Gauges for in-flight requests, buffer utilization, healthy/paused connections
+- Histograms for serialization time and request duration (μs precision)
+- Prometheus export format support
+
+**Usage:**
+```rust
+// Access metrics from AgentPool
+let metrics = pool.protocol_metrics();
+
+// Get snapshot
+let snapshot = metrics.snapshot();
+
+// Export to Prometheus format
+let prometheus_text = metrics.to_prometheus("agent_protocol");
+```
+
+### Connection Affinity
+
+**Date:** 2026-01-14
+
+**Solution:** Correlation ID to connection mapping for streaming consistency
+- `correlation_affinity: DashMap<String, Arc<PooledConnection>>` in AgentPool
+- `send_request_headers` stores connection for correlation_id
+- `send_request_body_chunk` looks up affinity before falling back to selection
+- Lock-free concurrent access via DashMap
+
+**Usage:**
+```rust
+// Body chunks automatically routed to same connection as headers
+pool.send_request_body_chunk("waf", "correlation-123", &chunk).await?;
+
+// Cleanup after request completes
+pool.clear_correlation_affinity("correlation-123");
+```
+
+### Zero-Copy Body Streaming
+
+**Date:** 2026-01-14
+
+**Solution:** Binary body chunk methods that avoid base64 encoding
+- `send_request_body_chunk_binary()` takes `BinaryRequestBodyChunkEvent`
+- `send_response_body_chunk_binary()` takes `BinaryResponseBodyChunkEvent`
+- MessagePack path: raw bytes via `serde_bytes` (no base64)
+- JSON path: base64 encoding for JSON compatibility
+
+**Usage:**
+```rust
+use sentinel_agent_protocol::{BinaryRequestBodyChunkEvent, Bytes};
+
+// Create binary body chunk
+let chunk = BinaryRequestBodyChunkEvent::new(
+    "correlation-123",
+    Bytes::from_static(b"binary data"),
+    0,  // chunk_index
+    false,  // is_last
+);
+
+// Send via UDS (uses raw bytes with MessagePack encoding)
+client.send_request_body_chunk_binary(&chunk).await?;
+```
+
+**Performance:**
+- MessagePack serialization is ~33% more compact than JSON+base64 for binary data
+- No CPU-intensive base64 encode/decode in hot path when using MessagePack
 
 ---
 

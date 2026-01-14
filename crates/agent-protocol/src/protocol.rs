@@ -3,6 +3,7 @@
 //! This module defines the wire protocol types for communication between
 //! the proxy dataplane and external processing agents.
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -252,6 +253,200 @@ pub struct ResponseBodyChunkEvent {
     /// Bytes sent so far (cumulative)
     #[serde(default)]
     pub bytes_sent: usize,
+}
+
+// ============================================================================
+// Binary Body Chunk Events (Zero-Copy)
+// ============================================================================
+
+/// Binary request body chunk event.
+///
+/// This type uses `Bytes` for zero-copy body streaming, avoiding the base64
+/// encode/decode overhead of `RequestBodyChunkEvent`. Use this type for:
+/// - Binary UDS transport (with `binary-uds` feature)
+/// - gRPC transport (protobuf already uses bytes)
+/// - Any transport that supports raw binary data
+///
+/// For JSON transport, use `RequestBodyChunkEvent` with base64-encoded data.
+#[derive(Debug, Clone)]
+pub struct BinaryRequestBodyChunkEvent {
+    /// Correlation ID
+    pub correlation_id: String,
+    /// Body chunk data (raw bytes, no encoding)
+    pub data: Bytes,
+    /// Is this the last chunk?
+    pub is_last: bool,
+    /// Total body size if known
+    pub total_size: Option<usize>,
+    /// Chunk index for ordering (0-based)
+    pub chunk_index: u32,
+    /// Bytes received so far (cumulative)
+    pub bytes_received: usize,
+}
+
+/// Binary response body chunk event.
+///
+/// This type uses `Bytes` for zero-copy body streaming, avoiding the base64
+/// encode/decode overhead of `ResponseBodyChunkEvent`. Use this type for:
+/// - Binary UDS transport (with `binary-uds` feature)
+/// - gRPC transport (protobuf already uses bytes)
+/// - Any transport that supports raw binary data
+///
+/// For JSON transport, use `ResponseBodyChunkEvent` with base64-encoded data.
+#[derive(Debug, Clone)]
+pub struct BinaryResponseBodyChunkEvent {
+    /// Correlation ID
+    pub correlation_id: String,
+    /// Body chunk data (raw bytes, no encoding)
+    pub data: Bytes,
+    /// Is this the last chunk?
+    pub is_last: bool,
+    /// Total body size if known
+    pub total_size: Option<usize>,
+    /// Chunk index for ordering (0-based)
+    pub chunk_index: u32,
+    /// Bytes sent so far (cumulative)
+    pub bytes_sent: usize,
+}
+
+impl BinaryRequestBodyChunkEvent {
+    /// Create a new binary request body chunk event.
+    pub fn new(
+        correlation_id: impl Into<String>,
+        data: impl Into<Bytes>,
+        chunk_index: u32,
+        is_last: bool,
+    ) -> Self {
+        let data = data.into();
+        Self {
+            correlation_id: correlation_id.into(),
+            bytes_received: data.len(),
+            data,
+            is_last,
+            total_size: None,
+            chunk_index,
+        }
+    }
+
+    /// Set the total body size.
+    pub fn with_total_size(mut self, size: usize) -> Self {
+        self.total_size = Some(size);
+        self
+    }
+
+    /// Set cumulative bytes received.
+    pub fn with_bytes_received(mut self, bytes: usize) -> Self {
+        self.bytes_received = bytes;
+        self
+    }
+}
+
+impl BinaryResponseBodyChunkEvent {
+    /// Create a new binary response body chunk event.
+    pub fn new(
+        correlation_id: impl Into<String>,
+        data: impl Into<Bytes>,
+        chunk_index: u32,
+        is_last: bool,
+    ) -> Self {
+        let data = data.into();
+        Self {
+            correlation_id: correlation_id.into(),
+            bytes_sent: data.len(),
+            data,
+            is_last,
+            total_size: None,
+            chunk_index,
+        }
+    }
+
+    /// Set the total body size.
+    pub fn with_total_size(mut self, size: usize) -> Self {
+        self.total_size = Some(size);
+        self
+    }
+
+    /// Set cumulative bytes sent.
+    pub fn with_bytes_sent(mut self, bytes: usize) -> Self {
+        self.bytes_sent = bytes;
+        self
+    }
+}
+
+// ============================================================================
+// Conversions between String (base64) and Binary body chunk types
+// ============================================================================
+
+impl From<BinaryRequestBodyChunkEvent> for RequestBodyChunkEvent {
+    /// Convert binary body chunk to base64-encoded JSON-compatible type.
+    fn from(event: BinaryRequestBodyChunkEvent) -> Self {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        Self {
+            correlation_id: event.correlation_id,
+            data: STANDARD.encode(&event.data),
+            is_last: event.is_last,
+            total_size: event.total_size,
+            chunk_index: event.chunk_index,
+            bytes_received: event.bytes_received,
+        }
+    }
+}
+
+impl From<&RequestBodyChunkEvent> for BinaryRequestBodyChunkEvent {
+    /// Convert base64-encoded body chunk to binary type.
+    ///
+    /// If base64 decoding fails, falls back to treating data as raw UTF-8 bytes.
+    fn from(event: &RequestBodyChunkEvent) -> Self {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let data = STANDARD
+            .decode(&event.data)
+            .map(Bytes::from)
+            .unwrap_or_else(|_| Bytes::copy_from_slice(event.data.as_bytes()));
+        Self {
+            correlation_id: event.correlation_id.clone(),
+            data,
+            is_last: event.is_last,
+            total_size: event.total_size,
+            chunk_index: event.chunk_index,
+            bytes_received: event.bytes_received,
+        }
+    }
+}
+
+impl From<BinaryResponseBodyChunkEvent> for ResponseBodyChunkEvent {
+    /// Convert binary body chunk to base64-encoded JSON-compatible type.
+    fn from(event: BinaryResponseBodyChunkEvent) -> Self {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        Self {
+            correlation_id: event.correlation_id,
+            data: STANDARD.encode(&event.data),
+            is_last: event.is_last,
+            total_size: event.total_size,
+            chunk_index: event.chunk_index,
+            bytes_sent: event.bytes_sent,
+        }
+    }
+}
+
+impl From<&ResponseBodyChunkEvent> for BinaryResponseBodyChunkEvent {
+    /// Convert base64-encoded body chunk to binary type.
+    ///
+    /// If base64 decoding fails, falls back to treating data as raw UTF-8 bytes.
+    fn from(event: &ResponseBodyChunkEvent) -> Self {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let data = STANDARD
+            .decode(&event.data)
+            .map(Bytes::from)
+            .unwrap_or_else(|_| Bytes::copy_from_slice(event.data.as_bytes()));
+        Self {
+            correlation_id: event.correlation_id.clone(),
+            data,
+            is_last: event.is_last,
+            total_size: event.total_size,
+            chunk_index: event.chunk_index,
+            bytes_sent: event.bytes_sent,
+        }
+    }
 }
 
 /// Request complete event (for logging/audit)

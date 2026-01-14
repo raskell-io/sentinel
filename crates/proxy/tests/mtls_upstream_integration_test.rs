@@ -14,7 +14,7 @@ use std::sync::{Arc, Once};
 use std::thread;
 use std::time::Duration;
 
-use rcgen::{CertificateParams, CertifiedIssuer, DistinguishedName, DnType, KeyPair};
+use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
@@ -46,7 +46,7 @@ fn fixtures_path() -> PathBuf {
 // ============================================================================
 
 /// Generate a CA certificate and key pair for testing
-fn generate_ca() -> CertifiedIssuer<'static, KeyPair> {
+fn generate_ca() -> (Certificate, KeyPair) {
     let mut params = CertificateParams::default();
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
@@ -56,13 +56,12 @@ fn generate_ca() -> CertifiedIssuer<'static, KeyPair> {
     params.distinguished_name = dn;
 
     let key_pair = KeyPair::generate().unwrap();
-    CertifiedIssuer::self_signed(params, key_pair).unwrap()
+    let cert = params.self_signed(&key_pair).unwrap();
+    (cert, key_pair)
 }
 
 /// Generate a server certificate signed by the CA
-fn generate_server_cert(
-    ca: &CertifiedIssuer<'static, KeyPair>,
-) -> (rcgen::Certificate, KeyPair) {
+fn generate_server_cert(ca_cert: &Certificate, ca_key: &KeyPair) -> (Certificate, KeyPair) {
     let mut params = CertificateParams::default();
 
     let mut dn = DistinguishedName::new();
@@ -76,14 +75,13 @@ fn generate_server_cert(
     ];
 
     let key_pair = KeyPair::generate().unwrap();
-    let cert = params.signed_by(&key_pair, ca).unwrap();
+    let issuer = ca_cert.issuer().chain(ca_key);
+    let cert = params.signed_by(&key_pair, &issuer).unwrap();
     (cert, key_pair)
 }
 
 /// Generate a client certificate signed by the CA
-fn generate_client_cert(
-    ca: &CertifiedIssuer<'static, KeyPair>,
-) -> (rcgen::Certificate, KeyPair) {
+fn generate_client_cert(ca_cert: &Certificate, ca_key: &KeyPair) -> (Certificate, KeyPair) {
     let mut params = CertificateParams::default();
 
     let mut dn = DistinguishedName::new();
@@ -94,7 +92,8 @@ fn generate_client_cert(
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
 
     let key_pair = KeyPair::generate().unwrap();
-    let cert = params.signed_by(&key_pair, ca).unwrap();
+    let issuer = ca_cert.issuer().chain(ca_key);
+    let cert = params.signed_by(&key_pair, &issuer).unwrap();
     (cert, key_pair)
 }
 
@@ -237,10 +236,9 @@ mod integration {
         ensure_crypto_provider();
 
         // Generate certificates
-        let ca = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca);
-        let (client_cert, client_key) = generate_client_cert(&ca);
-        let ca_cert = ca.as_ref();
+        let (ca_cert, ca_key) = generate_ca();
+        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
+        let (client_cert, client_key) = generate_client_cert(&ca_cert, &ca_key);
 
         // Start mTLS server
         let server = MtlsServer::start(
@@ -313,9 +311,8 @@ mod integration {
         ensure_crypto_provider();
 
         // Generate certificates
-        let ca = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca);
-        let ca_cert = ca.as_ref();
+        let (ca_cert, ca_key) = generate_ca();
+        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
 
         // Start mTLS server
         let server = MtlsServer::start(
@@ -387,13 +384,13 @@ mod integration {
         ensure_crypto_provider();
 
         // Generate server CA and certs
-        let ca = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca);
-        let ca_cert = ca.as_ref();
+        let (ca_cert, ca_key) = generate_ca();
+        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
 
         // Generate a DIFFERENT CA for client cert (untrusted)
-        let untrusted_ca = generate_ca();
-        let (client_cert, client_key) = generate_client_cert(&untrusted_ca);
+        let (untrusted_ca_cert, untrusted_ca_key) = generate_ca();
+        let (client_cert, client_key) =
+            generate_client_cert(&untrusted_ca_cert, &untrusted_ca_key);
 
         // Start mTLS server (only trusts the first CA)
         let server = MtlsServer::start(
@@ -555,8 +552,8 @@ mod load_client_cert_key_tests {
         ensure_crypto_provider();
 
         // Generate CA and client cert
-        let ca = generate_ca();
-        let (client_cert, client_key) = generate_client_cert(&ca);
+        let (ca_cert, ca_key) = generate_ca();
+        let (client_cert, client_key) = generate_client_cert(&ca_cert, &ca_key);
 
         // Write to temp files
         let temp_dir = tempfile::tempdir().unwrap();
@@ -591,10 +588,9 @@ mod async_tests {
         ensure_crypto_provider();
 
         // Generate certificates
-        let ca = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca);
-        let (client_cert, client_key) = generate_client_cert(&ca);
-        let ca_cert = ca.as_ref();
+        let (ca_cert, ca_key) = generate_ca();
+        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
+        let (client_cert, client_key) = generate_client_cert(&ca_cert, &ca_key);
 
         // Start mTLS server (runs in a thread)
         let server = MtlsServer::start(
@@ -659,9 +655,8 @@ mod async_tests {
         ensure_crypto_provider();
 
         // Generate certificates
-        let ca = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca);
-        let ca_cert = ca.as_ref();
+        let (ca_cert, ca_key) = generate_ca();
+        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
 
         // Start mTLS server
         let server = MtlsServer::start(

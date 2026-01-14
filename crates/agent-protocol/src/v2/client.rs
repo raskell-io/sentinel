@@ -12,6 +12,8 @@ use tonic::transport::Channel;
 use tracing::{debug, info, trace, warn};
 
 use crate::grpc_v2::{self, agent_service_v2_client::AgentServiceV2Client, ProxyToAgent};
+use crate::headers::iter_flat;
+use crate::v2::pool::CHANNEL_BUFFER_SIZE;
 use crate::v2::{AgentCapabilities, PROTOCOL_VERSION_2};
 use crate::{AgentProtocolError, AgentResponse, Decision, EventType, HeaderOp};
 
@@ -171,7 +173,7 @@ impl AgentClientV2 {
         let mut client = AgentServiceV2Client::new(self.channel.clone());
 
         // Create bidirectional stream
-        let (tx, rx) = mpsc::channel::<ProxyToAgent>(32);
+        let (tx, rx) = mpsc::channel::<ProxyToAgent>(CHANNEL_BUFFER_SIZE);
         let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
 
         let response_stream = client
@@ -833,14 +835,11 @@ fn convert_request_headers_to_grpc(event: &crate::RequestHeadersEvent) -> grpc_v
         traceparent: event.metadata.traceparent.clone(),
     });
 
-    let headers: Vec<grpc_v2::Header> = event
-        .headers
-        .iter()
-        .flat_map(|(name, values)| {
-            values.iter().map(|v| grpc_v2::Header {
-                name: name.clone(),
-                value: v.clone(),
-            })
+    // Use iter_flat helper for cleaner iteration over flattened headers
+    let headers: Vec<grpc_v2::Header> = iter_flat(&event.headers)
+        .map(|(name, value)| grpc_v2::Header {
+            name: name.to_string(),
+            value: value.to_string(),
         })
         .collect();
 
@@ -854,15 +853,19 @@ fn convert_request_headers_to_grpc(event: &crate::RequestHeadersEvent) -> grpc_v
 }
 
 fn convert_body_chunk_to_grpc(event: &crate::RequestBodyChunkEvent) -> grpc_v2::BodyChunkEvent {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    // Convert through binary type to centralize the base64 decode logic
+    let binary: crate::BinaryRequestBodyChunkEvent = event.into();
+    convert_binary_body_chunk_to_grpc(&binary)
+}
 
-    // Decode base64 data if needed (the protocol struct uses base64 for JSON transport)
-    let data = STANDARD.decode(&event.data).unwrap_or_else(|_| event.data.as_bytes().to_vec());
-
+/// Convert binary body chunk directly to gRPC (no base64 decode needed).
+///
+/// This is the efficient path for binary transports (UDS binary mode, direct Bytes).
+fn convert_binary_body_chunk_to_grpc(event: &crate::BinaryRequestBodyChunkEvent) -> grpc_v2::BodyChunkEvent {
     grpc_v2::BodyChunkEvent {
         correlation_id: event.correlation_id.clone(),
         chunk_index: event.chunk_index,
-        data,
+        data: event.data.to_vec(), // Bytes → Vec<u8> (single copy, no decode)
         is_last: event.is_last,
         total_size: event.total_size.map(|s| s as u64),
         bytes_transferred: event.bytes_received as u64,
@@ -872,14 +875,11 @@ fn convert_body_chunk_to_grpc(event: &crate::RequestBodyChunkEvent) -> grpc_v2::
 }
 
 fn convert_response_headers_to_grpc(event: &crate::ResponseHeadersEvent) -> grpc_v2::ResponseHeadersEvent {
-    let headers: Vec<grpc_v2::Header> = event
-        .headers
-        .iter()
-        .flat_map(|(name, values)| {
-            values.iter().map(|v| grpc_v2::Header {
-                name: name.clone(),
-                value: v.clone(),
-            })
+    // Use iter_flat helper for cleaner iteration over flattened headers
+    let headers: Vec<grpc_v2::Header> = iter_flat(&event.headers)
+        .map(|(name, value)| grpc_v2::Header {
+            name: name.to_string(),
+            value: value.to_string(),
         })
         .collect();
 
@@ -891,15 +891,19 @@ fn convert_response_headers_to_grpc(event: &crate::ResponseHeadersEvent) -> grpc
 }
 
 fn convert_response_body_chunk_to_grpc(event: &crate::ResponseBodyChunkEvent) -> grpc_v2::BodyChunkEvent {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    // Convert through binary type to centralize the base64 decode logic
+    let binary: crate::BinaryResponseBodyChunkEvent = event.into();
+    convert_binary_response_body_chunk_to_grpc(&binary)
+}
 
-    // Decode base64 data if needed
-    let data = STANDARD.decode(&event.data).unwrap_or_else(|_| event.data.as_bytes().to_vec());
-
+/// Convert binary response body chunk directly to gRPC (no base64 decode needed).
+///
+/// This is the efficient path for binary transports (UDS binary mode, direct Bytes).
+fn convert_binary_response_body_chunk_to_grpc(event: &crate::BinaryResponseBodyChunkEvent) -> grpc_v2::BodyChunkEvent {
     grpc_v2::BodyChunkEvent {
         correlation_id: event.correlation_id.clone(),
         chunk_index: event.chunk_index,
-        data,
+        data: event.data.to_vec(), // Bytes → Vec<u8> (single copy, no decode)
         is_last: event.is_last,
         total_size: event.total_size.map(|s| s as u64),
         bytes_transferred: event.bytes_sent as u64,

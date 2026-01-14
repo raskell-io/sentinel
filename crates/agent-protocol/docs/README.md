@@ -21,6 +21,7 @@ The v2 protocol is the recommended version for new deployments. It provides:
 | [pooling.md](./v2/pooling.md) | Connection pooling and load balancing |
 | [transports.md](./v2/transports.md) | Transport options (gRPC, UDS, Reverse) |
 | [reverse-connections.md](./v2/reverse-connections.md) | Reverse connection setup |
+| [performance-roadmap.md](./performance-roadmap.md) | Performance bottlenecks and optimization plans |
 
 ### [v1 (Legacy)](./v1/) - Agent Protocol 1.0
 
@@ -47,10 +48,12 @@ See [architecture.md](./architecture.md) for system architecture diagrams coveri
 | Bidirectional streaming | Limited | Full support |
 | Metrics export | No | Prometheus format |
 | Config push | No | Yes |
-| Health tracking | Basic | Comprehensive |
+| Health tracking | Basic | Comprehensive (cached) |
 | Flow control | No | Yes |
 | Request cancellation | No | Yes |
 | Max message size | 10 MB | 16 MB (UDS) |
+| Lock-free agent lookup | N/A | Yes (DashMap) |
+| Hot-path sync points | N/A | 2 per request |
 
 ## Migration Guide
 
@@ -124,3 +127,4 @@ let response = client.send_event(EventType::RequestHeaders, &event).await?;
 
 - [Release Notes v0.3.0](../../../RELEASE_NOTES_v0.3.0.md) - Agent Protocol 2.0 announcement
 - [Sentinel CLAUDE.md](../../../.claude/CLAUDE.md) - Overall project documentation
+- [Performance Roadmap](./performance-roadmap.md) - Bottleneck analysis and optimization plans

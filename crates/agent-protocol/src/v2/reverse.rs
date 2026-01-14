@@ -37,7 +37,9 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
+use crate::v2::client::FlowState;
 use crate::v2::uds::{read_message, write_message, MessageType, UdsCapabilities};
+use crate::v2::pool::CHANNEL_BUFFER_SIZE;
 use crate::v2::{AgentCapabilities, AgentPool, PROTOCOL_VERSION_2};
 use crate::{AgentProtocolError, AgentResponse};
 
@@ -369,6 +371,8 @@ pub struct ReverseConnectionClient {
     connected: RwLock<bool>,
     timeout: Duration,
     in_flight: std::sync::atomic::AtomicU64,
+    /// Flow control state - tracks if agent has requested pause
+    flow_state: Arc<RwLock<FlowState>>,
 }
 
 impl ReverseConnectionClient {
@@ -389,7 +393,7 @@ impl ReverseConnectionClient {
             Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         // Create message channel
-        let (tx, mut rx) = mpsc::channel::<(MessageType, Vec<u8>)>(1024);
+        let (tx, mut rx) = mpsc::channel::<(MessageType, Vec<u8>)>(CHANNEL_BUFFER_SIZE);
 
         // Spawn writer task
         let agent_id_clone = agent_id.clone();
@@ -456,6 +460,7 @@ impl ReverseConnectionClient {
             connected: RwLock::new(true),
             timeout,
             in_flight: std::sync::atomic::AtomicU64::new(0),
+            flow_state: Arc::new(RwLock::new(FlowState::Normal)),
         }
     }
 
@@ -477,6 +482,21 @@ impl ReverseConnectionClient {
     /// Get capabilities.
     pub async fn capabilities(&self) -> Option<AgentCapabilities> {
         self.capabilities.read().await.clone()
+    }
+
+    /// Check if the agent has requested flow control pause.
+    ///
+    /// Returns true if the agent sent a `FlowAction::Pause` signal,
+    /// indicating it cannot accept more requests.
+    pub async fn is_paused(&self) -> bool {
+        matches!(*self.flow_state.read().await, FlowState::Paused)
+    }
+
+    /// Check if the transport can accept new requests.
+    ///
+    /// Returns false if the agent has requested a flow control pause.
+    pub async fn can_accept_requests(&self) -> bool {
+        !self.is_paused().await
     }
 
     /// Send a request headers event.

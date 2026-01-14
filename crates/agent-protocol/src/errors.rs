@@ -35,4 +35,7 @@ pub enum AgentProtocolError {
 
     #[error("Wrong connection type: {0}")]
     WrongConnectionType(String),
+
+    #[error("Flow control paused: agent '{agent_id}' requested backpressure")]
+    FlowControlPaused { agent_id: String },
 }

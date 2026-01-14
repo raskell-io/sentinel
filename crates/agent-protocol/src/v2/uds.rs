@@ -45,6 +45,7 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
+use crate::v2::pool::CHANNEL_BUFFER_SIZE;
 use crate::v2::{AgentCapabilities, AgentFeatures, AgentLimits, HealthConfig, PROTOCOL_VERSION_2};
 use crate::{AgentProtocolError, AgentResponse, EventType};
 
@@ -52,6 +53,71 @@ use super::client::{ConfigUpdateCallback, FlowState, MetricsCallback};
 
 /// Maximum message size for UDS transport (16 MB).
 pub const MAX_UDS_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+
+/// Payload encoding for UDS transport.
+///
+/// Negotiated during handshake. The proxy sends its supported encodings,
+/// and the agent responds with the chosen encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UdsEncoding {
+    /// JSON encoding (default, always supported)
+    #[default]
+    Json,
+    /// MessagePack binary encoding (requires `binary-uds` feature)
+    #[serde(rename = "msgpack")]
+    MessagePack,
+}
+
+impl UdsEncoding {
+    /// Serialize a value using this encoding.
+    ///
+    /// Returns the serialized bytes, or an error if serialization fails.
+    #[inline]
+    pub fn serialize<T: serde::Serialize>(&self, value: &T) -> Result<Vec<u8>, AgentProtocolError> {
+        match self {
+            UdsEncoding::Json => {
+                serde_json::to_vec(value)
+                    .map_err(|e| AgentProtocolError::Serialization(e.to_string()))
+            }
+            #[cfg(feature = "binary-uds")]
+            UdsEncoding::MessagePack => {
+                rmp_serde::to_vec(value)
+                    .map_err(|e| AgentProtocolError::Serialization(e.to_string()))
+            }
+            #[cfg(not(feature = "binary-uds"))]
+            UdsEncoding::MessagePack => {
+                // Fall back to JSON if binary-uds feature is not enabled
+                serde_json::to_vec(value)
+                    .map_err(|e| AgentProtocolError::Serialization(e.to_string()))
+            }
+        }
+    }
+
+    /// Deserialize a value using this encoding.
+    ///
+    /// Returns the deserialized value, or an error if deserialization fails.
+    #[inline]
+    pub fn deserialize<'a, T: serde::Deserialize<'a>>(&self, bytes: &'a [u8]) -> Result<T, AgentProtocolError> {
+        match self {
+            UdsEncoding::Json => {
+                serde_json::from_slice(bytes)
+                    .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))
+            }
+            #[cfg(feature = "binary-uds")]
+            UdsEncoding::MessagePack => {
+                rmp_serde::from_slice(bytes)
+                    .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))
+            }
+            #[cfg(not(feature = "binary-uds"))]
+            UdsEncoding::MessagePack => {
+                // Fall back to JSON if binary-uds feature is not enabled
+                serde_json::from_slice(bytes)
+                    .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))
+            }
+        }
+    }
+}
 
 /// Message type identifiers for the binary protocol.
 #[repr(u8)]
@@ -124,6 +190,10 @@ pub struct UdsHandshakeRequest {
     pub proxy_id: String,
     pub proxy_version: String,
     pub config: Option<serde_json::Value>,
+    /// Supported payload encodings (in order of preference).
+    /// If empty or missing, only JSON is supported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_encodings: Vec<UdsEncoding>,
 }
 
 /// Handshake response from agent to proxy over UDS.
@@ -133,6 +203,10 @@ pub struct UdsHandshakeResponse {
     pub capabilities: UdsCapabilities,
     pub success: bool,
     pub error: Option<String>,
+    /// Negotiated encoding for subsequent messages.
+    /// If missing, defaults to JSON for backwards compatibility.
+    #[serde(default)]
+    pub encoding: UdsEncoding,
 }
 
 /// Agent capabilities for UDS protocol.
@@ -233,6 +307,8 @@ pub struct AgentClientV2Uds {
     capabilities: RwLock<Option<AgentCapabilities>>,
     /// Negotiated protocol version
     protocol_version: AtomicU64,
+    /// Negotiated payload encoding
+    encoding: RwLock<UdsEncoding>,
     /// Pending requests by correlation ID
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<AgentResponse>>>>,
     /// Sender for outbound messages
@@ -276,6 +352,7 @@ impl AgentClientV2Uds {
             timeout,
             capabilities: RwLock::new(None),
             protocol_version: AtomicU64::new(0),
+            encoding: RwLock::new(UdsEncoding::Json),
             pending: Arc::new(Mutex::new(HashMap::new())),
             outbound_tx: Mutex::new(None),
             ping_sequence: AtomicU64::new(0),
@@ -286,6 +363,25 @@ impl AgentClientV2Uds {
             metrics_callback: None,
             config_update_callback: None,
         })
+    }
+
+    /// Returns the list of supported encodings for this client.
+    ///
+    /// When compiled with `binary-uds` feature, MessagePack is preferred.
+    fn supported_encodings() -> Vec<UdsEncoding> {
+        #[cfg(feature = "binary-uds")]
+        {
+            vec![UdsEncoding::MessagePack, UdsEncoding::Json]
+        }
+        #[cfg(not(feature = "binary-uds"))]
+        {
+            vec![UdsEncoding::Json]
+        }
+    }
+
+    /// Get the current negotiated encoding.
+    pub async fn encoding(&self) -> UdsEncoding {
+        *self.encoding.read().await
     }
 
     /// Set the metrics callback.
@@ -321,20 +417,22 @@ impl AgentClientV2Uds {
         let mut reader = BufReader::new(read_half);
         let mut writer = BufWriter::new(write_half);
 
-        // Send handshake request
+        // Send handshake request with supported encodings
         let handshake_req = UdsHandshakeRequest {
             supported_versions: vec![PROTOCOL_VERSION_2 as u32],
             proxy_id: "sentinel-proxy".to_string(),
             proxy_version: env!("CARGO_PKG_VERSION").to_string(),
             config: None,
+            supported_encodings: Self::supported_encodings(),
         };
 
+        // Handshake always uses JSON (before encoding is negotiated)
         let payload = serde_json::to_vec(&handshake_req)
             .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?;
 
         write_message(&mut writer, MessageType::HandshakeRequest, &payload).await?;
 
-        // Read handshake response
+        // Read handshake response (always JSON)
         let (msg_type, response_bytes) = read_message(&mut reader).await?;
 
         if msg_type != MessageType::HandshakeResponse {
@@ -353,20 +451,25 @@ impl AgentClientV2Uds {
             ));
         }
 
-        // Store capabilities
+        // Store capabilities and negotiated encoding
         let capabilities: AgentCapabilities = response.capabilities.into();
         *self.capabilities.write().await = Some(capabilities);
         self.protocol_version
             .store(response.protocol_version as u64, Ordering::SeqCst);
 
+        // Store the negotiated encoding for subsequent messages
+        let negotiated_encoding = response.encoding;
+        *self.encoding.write().await = negotiated_encoding;
+
         info!(
             agent_id = %self.agent_id,
             protocol_version = response.protocol_version,
+            encoding = ?negotiated_encoding,
             "UDS v2 handshake successful"
         );
 
         // Create message channel
-        let (tx, mut rx) = mpsc::channel::<(MessageType, Vec<u8>)>(1024);
+        let (tx, mut rx) = mpsc::channel::<(MessageType, Vec<u8>)>(CHANNEL_BUFFER_SIZE);
         *self.outbound_tx.lock().await = Some(tx);
         *self.connected.write().await = true;
 
@@ -386,7 +489,7 @@ impl AgentClientV2Uds {
             debug!(agent_id = %agent_id_clone, "UDS writer task ended");
         });
 
-        // Spawn reader task
+        // Spawn reader task with the negotiated encoding
         let pending = Arc::clone(&self.pending);
         let agent_id = self.agent_id.clone();
         let flow_state = Arc::new(RwLock::new(FlowState::Normal));
@@ -395,6 +498,8 @@ impl AgentClientV2Uds {
         let health_state_clone = Arc::clone(&health_state);
         let metrics_callback = self.metrics_callback.clone();
         let config_update_callback = self.config_update_callback.clone();
+        // Encoding is fixed after handshake, so we can copy it
+        let reader_encoding = negotiated_encoding;
 
         tokio::spawn(async move {
             loop {
@@ -402,7 +507,7 @@ impl AgentClientV2Uds {
                     Ok((msg_type, payload)) => {
                         match msg_type {
                             MessageType::AgentResponse => {
-                                match serde_json::from_slice::<AgentResponse>(&payload) {
+                                match reader_encoding.deserialize::<AgentResponse>(&payload) {
                                     Ok(response) => {
                                         // Extract correlation ID from the response
                                         // For UDS, we include correlation_id in the response
@@ -414,28 +519,38 @@ impl AgentClientV2Uds {
                                         warn!(
                                             agent_id = %agent_id,
                                             error = %e,
+                                            encoding = ?reader_encoding,
                                             "Failed to parse agent response"
                                         );
                                     }
                                 }
                             }
                             MessageType::HealthStatus => {
-                                if let Ok(health) = serde_json::from_slice::<serde_json::Value>(&payload) {
-                                    if let Some(state) = health.get("state").and_then(|s| s.as_i64()) {
+                                // Health status uses a simple struct, try both encodings for robustness
+                                #[derive(serde::Deserialize)]
+                                struct HealthStatusMsg {
+                                    state: Option<i64>,
+                                }
+                                if let Ok(health) = reader_encoding.deserialize::<HealthStatusMsg>(&payload) {
+                                    if let Some(state) = health.state {
                                         *health_state_clone.write().await = state as i32;
                                     }
                                 }
                             }
                             MessageType::MetricsReport => {
                                 if let Some(ref callback) = metrics_callback {
-                                    if let Ok(report) = serde_json::from_slice(&payload) {
+                                    if let Ok(report) = reader_encoding.deserialize(&payload) {
                                         callback(report);
                                     }
                                 }
                             }
                             MessageType::FlowControl => {
-                                if let Ok(fc) = serde_json::from_slice::<serde_json::Value>(&payload) {
-                                    let action = fc.get("action").and_then(|a| a.as_i64()).unwrap_or(0);
+                                #[derive(serde::Deserialize)]
+                                struct FlowControlMsg {
+                                    action: Option<i64>,
+                                }
+                                if let Ok(fc) = reader_encoding.deserialize::<FlowControlMsg>(&payload) {
+                                    let action = fc.action.unwrap_or(0);
                                     let new_state = match action {
                                         1 => FlowState::Paused,
                                         2 => FlowState::Normal,
@@ -446,7 +561,7 @@ impl AgentClientV2Uds {
                             }
                             MessageType::ConfigUpdateRequest => {
                                 if let Some(ref callback) = config_update_callback {
-                                    if let Ok(request) = serde_json::from_slice(&payload) {
+                                    if let Ok(request) = reader_encoding.deserialize(&payload) {
                                         let _response = callback(agent_id.clone(), request);
                                     }
                                 }
@@ -527,6 +642,154 @@ impl AgentClientV2Uds {
         self.send_event(MessageType::ResponseBodyChunk, correlation_id, event).await
     }
 
+    /// Send a binary request body chunk event (zero-copy path).
+    ///
+    /// This method avoids base64 encoding when using MessagePack encoding,
+    /// sending raw bytes directly over the wire for better throughput.
+    ///
+    /// # Performance
+    ///
+    /// When MessagePack encoding is negotiated:
+    /// - Bytes are serialized directly (no base64 encode/decode)
+    /// - Reduces CPU usage and latency for large bodies
+    ///
+    /// When JSON encoding is used:
+    /// - Falls back to base64 encoding for JSON compatibility
+    pub async fn send_request_body_chunk_binary(
+        &self,
+        event: &crate::BinaryRequestBodyChunkEvent,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        let correlation_id = &event.correlation_id;
+        self.send_binary_body_chunk(
+            MessageType::RequestBodyChunk,
+            correlation_id,
+            &event.data,
+            event.is_last,
+            event.total_size,
+            event.chunk_index,
+            Some(event.bytes_received),
+            None,
+        ).await
+    }
+
+    /// Send a binary response body chunk event (zero-copy path).
+    ///
+    /// This method avoids base64 encoding when using MessagePack encoding,
+    /// sending raw bytes directly over the wire for better throughput.
+    pub async fn send_response_body_chunk_binary(
+        &self,
+        event: &crate::BinaryResponseBodyChunkEvent,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        let correlation_id = &event.correlation_id;
+        self.send_binary_body_chunk(
+            MessageType::ResponseBodyChunk,
+            correlation_id,
+            &event.data,
+            event.is_last,
+            event.total_size,
+            event.chunk_index,
+            None,
+            Some(event.bytes_sent),
+        ).await
+    }
+
+    /// Internal helper to send binary body chunks with encoding-aware serialization.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_binary_body_chunk(
+        &self,
+        msg_type: MessageType,
+        correlation_id: &str,
+        data: &bytes::Bytes,
+        is_last: bool,
+        total_size: Option<usize>,
+        chunk_index: u32,
+        bytes_received: Option<usize>,
+        bytes_sent: Option<usize>,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        // Create response channel
+        let (tx, rx) = oneshot::channel();
+        self.pending
+            .lock()
+            .await
+            .insert(correlation_id.to_string(), tx);
+
+        // Get the current encoding
+        let encoding = *self.encoding.read().await;
+
+        // Serialize body chunk using encoding-optimized format
+        let payload_bytes = match encoding {
+            UdsEncoding::Json => {
+                // JSON path: must use base64 encoding for binary data
+                use base64::{engine::general_purpose::STANDARD, Engine as _};
+                let json = serde_json::json!({
+                    "correlation_id": correlation_id,
+                    "data": STANDARD.encode(data),
+                    "is_last": is_last,
+                    "total_size": total_size,
+                    "chunk_index": chunk_index,
+                    "bytes_received": bytes_received,
+                    "bytes_sent": bytes_sent,
+                });
+                serde_json::to_vec(&json)
+                    .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?
+            }
+            UdsEncoding::MessagePack => {
+                // MessagePack path: raw bytes via serde_bytes for zero-copy serialization
+                #[derive(serde::Serialize)]
+                struct BinaryBodyChunk<'a> {
+                    correlation_id: &'a str,
+                    #[serde(with = "serde_bytes")]
+                    data: &'a [u8],
+                    is_last: bool,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    total_size: Option<usize>,
+                    chunk_index: u32,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    bytes_received: Option<usize>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    bytes_sent: Option<usize>,
+                }
+                let chunk = BinaryBodyChunk {
+                    correlation_id,
+                    data: data.as_ref(),
+                    is_last,
+                    total_size,
+                    chunk_index,
+                    bytes_received,
+                    bytes_sent,
+                };
+                encoding.serialize(&chunk)?
+            }
+        };
+
+        // Send message
+        {
+            let outbound = self.outbound_tx.lock().await;
+            if let Some(tx) = outbound.as_ref() {
+                tx.send((msg_type, payload_bytes))
+                    .await
+                    .map_err(|_| AgentProtocolError::ConnectionClosed)?;
+            } else {
+                return Err(AgentProtocolError::ConnectionClosed);
+            }
+        }
+
+        self.in_flight.fetch_add(1, Ordering::Relaxed);
+
+        // Wait for response with timeout
+        let response = tokio::time::timeout(self.timeout, rx)
+            .await
+            .map_err(|_| {
+                self.pending.try_lock().ok().map(|mut p| p.remove(correlation_id));
+                AgentProtocolError::Timeout(self.timeout)
+            })?
+            .map_err(|_| AgentProtocolError::ConnectionClosed)?;
+
+        self.in_flight.fetch_sub(1, Ordering::Relaxed);
+
+        Ok(response)
+    }
+
     /// Send an event and wait for response.
     async fn send_event<T: serde::Serialize>(
         &self,
@@ -541,19 +804,39 @@ impl AgentClientV2Uds {
             .await
             .insert(correlation_id.to_string(), tx);
 
-        // Serialize event with correlation ID
-        let mut payload = serde_json::to_value(event)
-            .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?;
+        // Get the current encoding
+        let encoding = *self.encoding.read().await;
 
-        if let Some(obj) = payload.as_object_mut() {
-            obj.insert(
-                "correlation_id".to_string(),
-                serde_json::Value::String(correlation_id.to_string()),
-            );
-        }
-
-        let payload_bytes = serde_json::to_vec(&payload)
-            .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?;
+        // Serialize event using negotiated encoding
+        let payload_bytes = match encoding {
+            UdsEncoding::Json => {
+                // JSON path: use Value mutation for backwards compatibility
+                let mut payload = serde_json::to_value(event)
+                    .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?;
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.insert(
+                        "correlation_id".to_string(),
+                        serde_json::Value::String(correlation_id.to_string()),
+                    );
+                }
+                serde_json::to_vec(&payload)
+                    .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?
+            }
+            UdsEncoding::MessagePack => {
+                // MessagePack path: use wrapper struct for efficient serialization
+                #[derive(serde::Serialize)]
+                struct EventWithCorrelation<'a, T: serde::Serialize> {
+                    correlation_id: &'a str,
+                    #[serde(flatten)]
+                    event: &'a T,
+                }
+                let wrapped = EventWithCorrelation {
+                    correlation_id,
+                    event,
+                };
+                encoding.serialize(&wrapped)?
+            }
+        };
 
         // Send message
         {
@@ -662,6 +945,21 @@ impl AgentClientV2Uds {
     /// Get agent ID.
     pub fn agent_id(&self) -> &str {
         &self.agent_id
+    }
+
+    /// Check if the agent has requested flow control pause.
+    ///
+    /// Returns true if the agent sent a `FlowAction::Pause` signal,
+    /// indicating it cannot accept more requests.
+    pub async fn is_paused(&self) -> bool {
+        matches!(*self.flow_state.read().await, FlowState::Paused)
+    }
+
+    /// Check if the transport can accept new requests.
+    ///
+    /// Returns false if the agent has requested a flow control pause.
+    pub async fn can_accept_requests(&self) -> bool {
+        !self.is_paused().await
     }
 }
 
@@ -779,6 +1077,7 @@ mod tests {
             proxy_id: "test-proxy".to_string(),
             proxy_version: "1.0.0".to_string(),
             config: None,
+            supported_encodings: vec![],
         };
 
         let json = serde_json::to_string(&req).unwrap();
@@ -804,5 +1103,103 @@ mod tests {
         let (msg_type, data) = read_message(&mut server).await.unwrap();
         assert_eq!(msg_type, MessageType::Ping);
         assert_eq!(data, payload);
+    }
+
+    #[test]
+    fn test_binary_body_chunk_json_serialization() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let data = bytes::Bytes::from_static(b"test binary data with \x00 null bytes");
+        let correlation_id = "test-123";
+
+        // JSON encoding must use base64
+        let json = serde_json::json!({
+            "correlation_id": correlation_id,
+            "data": STANDARD.encode(&data),
+            "is_last": true,
+            "total_size": 100usize,
+            "chunk_index": 0u32,
+            "bytes_received": 100usize,
+        });
+
+        let serialized = serde_json::to_vec(&json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&serialized).unwrap();
+
+        // Verify base64 can be decoded back to original
+        let data_field = parsed["data"].as_str().unwrap();
+        let decoded = STANDARD.decode(data_field).unwrap();
+        assert_eq!(decoded, data.as_ref());
+    }
+
+    #[test]
+    #[cfg(feature = "binary-uds")]
+    fn test_binary_body_chunk_msgpack_serialization() {
+        let data = bytes::Bytes::from_static(b"test binary data with \x00 null bytes");
+        let correlation_id = "test-123";
+
+        // MessagePack uses serde_bytes for efficient serialization
+        #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+        struct BinaryBodyChunk {
+            correlation_id: String,
+            #[serde(with = "serde_bytes")]
+            data: Vec<u8>,
+            is_last: bool,
+            chunk_index: u32,
+        }
+
+        let chunk = BinaryBodyChunk {
+            correlation_id: correlation_id.to_string(),
+            data: data.to_vec(),
+            is_last: true,
+            chunk_index: 0,
+        };
+
+        // Serialize with MessagePack
+        let serialized = rmp_serde::to_vec(&chunk).unwrap();
+
+        // Deserialize and verify
+        let parsed: BinaryBodyChunk = rmp_serde::from_slice(&serialized).unwrap();
+        assert_eq!(parsed.correlation_id, correlation_id);
+        assert_eq!(parsed.data, data.as_ref());
+        assert!(parsed.is_last);
+
+        // Verify MessagePack is more compact than JSON+base64 for binary data
+        use base64::Engine as _;
+        let json_size = serde_json::to_vec(&serde_json::json!({
+            "correlation_id": correlation_id,
+            "data": base64::engine::general_purpose::STANDARD.encode(&data),
+            "is_last": true,
+            "chunk_index": 0u32,
+        })).unwrap().len();
+
+        // MessagePack should be smaller (raw bytes vs base64 ~33% overhead)
+        assert!(serialized.len() < json_size,
+            "MessagePack ({}) should be smaller than JSON+base64 ({})",
+            serialized.len(), json_size);
+    }
+
+    #[test]
+    fn test_uds_encoding_default() {
+        assert_eq!(UdsEncoding::default(), UdsEncoding::Json);
+    }
+
+    #[test]
+    fn test_uds_encoding_serialize_json() {
+        let encoding = UdsEncoding::Json;
+        let value = serde_json::json!({"key": "value"});
+        let serialized = encoding.serialize(&value).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&serialized).unwrap();
+        assert_eq!(parsed, value);
+    }
+
+    #[test]
+    #[cfg(feature = "binary-uds")]
+    fn test_uds_encoding_serialize_msgpack() {
+        let encoding = UdsEncoding::MessagePack;
+        let value = serde_json::json!({"key": "value"});
+        let serialized = encoding.serialize(&value).unwrap();
+        // Verify it's valid MessagePack by deserializing
+        let parsed: serde_json::Value = rmp_serde::from_slice(&serialized).unwrap();
+        assert_eq!(parsed, value);
     }
 }

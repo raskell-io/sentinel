@@ -20,6 +20,7 @@ use tracing::{debug, info, trace, warn};
 use crate::v2::client::{AgentClientV2, CancelReason, ConfigUpdateCallback, MetricsCallback};
 use crate::v2::control::ConfigUpdateType;
 use crate::v2::observability::{ConfigPusher, ConfigUpdateHandler, MetricsCollector};
+use crate::v2::protocol_metrics::ProtocolMetrics;
 use crate::v2::reverse::ReverseConnectionClient;
 use crate::v2::uds::AgentClientV2Uds;
 use crate::v2::AgentCapabilities;
@@ -27,6 +28,17 @@ use crate::{
     AgentProtocolError, AgentResponse, RequestBodyChunkEvent, RequestHeadersEvent,
     ResponseBodyChunkEvent, ResponseHeadersEvent,
 };
+
+/// Channel buffer size for all transports.
+///
+/// This is aligned across UDS, gRPC, and reverse connections to ensure
+/// consistent backpressure behavior. A smaller buffer (64 vs 1024) means
+/// backpressure kicks in earlier, preventing memory buildup under load.
+///
+/// The value 64 balances:
+/// - Small enough to apply backpressure before memory issues
+/// - Large enough to handle burst traffic without blocking
+pub const CHANNEL_BUFFER_SIZE: usize = 64;
 
 /// Load balancing strategy for the connection pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -104,11 +116,13 @@ impl V2Transport {
     }
 
     /// Check if the transport can accept new requests.
+    ///
+    /// Returns false if the agent has sent a flow control pause signal.
     pub async fn can_accept_requests(&self) -> bool {
         match self {
             V2Transport::Grpc(client) => client.can_accept_requests().await,
-            V2Transport::Uds(_) => true, // UDS uses channel backpressure
-            V2Transport::Reverse(_) => true, // Reverse uses channel backpressure
+            V2Transport::Uds(client) => client.can_accept_requests().await,
+            V2Transport::Reverse(client) => client.can_accept_requests().await,
         }
     }
 
@@ -391,6 +405,11 @@ pub struct AgentPool {
     config_update_handler: Arc<ConfigUpdateHandler>,
     /// Callback used to handle config updates from clients
     config_update_callback: ConfigUpdateCallback,
+    /// Protocol-level metrics (proxy-side instrumentation)
+    protocol_metrics: Arc<ProtocolMetrics>,
+    /// Connection affinity: correlation_id → connection used for headers.
+    /// Ensures body chunks go to the same connection as headers for streaming.
+    correlation_affinity: DashMap<String, Arc<PooledConnection>>,
 }
 
 impl AgentPool {
@@ -434,7 +453,19 @@ impl AgentPool {
             config_pusher,
             config_update_handler,
             config_update_callback,
+            protocol_metrics: Arc::new(ProtocolMetrics::new()),
+            correlation_affinity: DashMap::new(),
         }
+    }
+
+    /// Get the protocol metrics for accessing proxy-side instrumentation.
+    pub fn protocol_metrics(&self) -> &ProtocolMetrics {
+        &self.protocol_metrics
+    }
+
+    /// Get an Arc to the protocol metrics.
+    pub fn protocol_metrics_arc(&self) -> Arc<ProtocolMetrics> {
+        Arc::clone(&self.protocol_metrics)
     }
 
     /// Get the metrics collector for accessing aggregated agent metrics.
@@ -452,6 +483,22 @@ impl AgentPool {
     /// Export all agent metrics in Prometheus format.
     pub fn export_prometheus(&self) -> String {
         self.metrics_collector.export_prometheus()
+    }
+
+    /// Clear connection affinity for a correlation ID.
+    ///
+    /// Call this when a request is complete (after receiving final response)
+    /// to free the affinity mapping. Not strictly necessary (affinities are
+    /// cheap), but good practice for long-running proxies.
+    pub fn clear_correlation_affinity(&self, correlation_id: &str) {
+        self.correlation_affinity.remove(correlation_id);
+    }
+
+    /// Get the number of active correlation affinities.
+    ///
+    /// This is useful for monitoring and debugging.
+    pub fn correlation_affinity_count(&self) -> usize {
+        self.correlation_affinity.len()
     }
 
     /// Get the config pusher for pushing configuration updates to agents.
@@ -684,33 +731,67 @@ impl AgentPool {
         correlation_id: &str,
         event: &RequestHeadersEvent,
     ) -> Result<AgentResponse, AgentProtocolError> {
+        let start = Instant::now();
         self.total_requests.fetch_add(1, Ordering::Relaxed);
+        self.protocol_metrics.inc_requests();
+        self.protocol_metrics.inc_in_flight();
 
         let conn = self.select_connection(agent_id)?;
+
+        // Check flow control before sending
+        if !conn.client.can_accept_requests().await {
+            self.protocol_metrics.dec_in_flight();
+            self.protocol_metrics.record_flow_rejection();
+            return Err(AgentProtocolError::FlowControlPaused {
+                agent_id: agent_id.to_string(),
+            });
+        }
 
         // Acquire concurrency permit
         let _permit = conn
             .concurrency_limiter
             .acquire()
             .await
-            .map_err(|_| AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string()))?;
+            .map_err(|_| {
+                self.protocol_metrics.dec_in_flight();
+                self.protocol_metrics.inc_connection_errors();
+                AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
+            })?;
 
         conn.in_flight.fetch_add(1, Ordering::Relaxed);
         conn.touch(); // Atomic, no lock
+
+        // Store connection affinity for body chunk routing
+        self.correlation_affinity.insert(correlation_id.to_string(), Arc::clone(&conn));
 
         let result = conn.client.send_request_headers(correlation_id, event).await;
 
         conn.in_flight.fetch_sub(1, Ordering::Relaxed);
         conn.request_count.fetch_add(1, Ordering::Relaxed);
+        self.protocol_metrics.dec_in_flight();
+        self.protocol_metrics.record_request_duration(start.elapsed());
 
         match &result {
             Ok(_) => {
                 conn.consecutive_errors.store(0, Ordering::Relaxed);
+                self.protocol_metrics.inc_responses();
             }
             Err(e) => {
                 conn.error_count.fetch_add(1, Ordering::Relaxed);
                 let consecutive = conn.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
                 self.total_errors.fetch_add(1, Ordering::Relaxed);
+
+                // Record error type
+                match e {
+                    AgentProtocolError::Timeout(_) => self.protocol_metrics.inc_timeouts(),
+                    AgentProtocolError::ConnectionFailed(_) | AgentProtocolError::ConnectionClosed => {
+                        self.protocol_metrics.inc_connection_errors();
+                    }
+                    AgentProtocolError::Serialization(_) => {
+                        self.protocol_metrics.inc_serialization_errors();
+                    }
+                    _ => {}
+                }
 
                 // Mark unhealthy immediately on repeated failures (fast feedback)
                 if consecutive >= 3 {
@@ -726,7 +807,7 @@ impl AgentPool {
     /// Send a request body chunk to an agent.
     ///
     /// The pool uses correlation_id to route the chunk to the same connection
-    /// that received the request headers (for connection affinity).
+    /// that received the request headers (connection affinity).
     pub async fn send_request_body_chunk(
         &self,
         agent_id: &str,
@@ -735,7 +816,21 @@ impl AgentPool {
     ) -> Result<AgentResponse, AgentProtocolError> {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
 
-        let conn = self.select_connection(agent_id)?;
+        // Try to use affinity (same connection as headers), fall back to selection
+        let conn = if let Some(affinity_conn) = self.correlation_affinity.get(correlation_id) {
+            Arc::clone(&affinity_conn)
+        } else {
+            // No affinity found, use normal selection (shouldn't happen in normal flow)
+            trace!(correlation_id = %correlation_id, "No affinity found for body chunk, using selection");
+            self.select_connection(agent_id)?
+        };
+
+        // Check flow control before sending body chunks (critical for backpressure)
+        if !conn.client.can_accept_requests().await {
+            return Err(AgentProtocolError::FlowControlPaused {
+                agent_id: agent_id.to_string(),
+            });
+        }
 
         let _permit = conn
             .concurrency_limiter
@@ -826,6 +921,13 @@ impl AgentPool {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
 
         let conn = self.select_connection(agent_id)?;
+
+        // Check flow control before sending body chunks (critical for backpressure)
+        if !conn.client.can_accept_requests().await {
+            return Err(AgentProtocolError::FlowControlPaused {
+                agent_id: agent_id.to_string(),
+            });
+        }
 
         let _permit = conn
             .concurrency_limiter

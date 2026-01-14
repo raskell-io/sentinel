@@ -395,7 +395,7 @@ impl AgentV2 {
     }
 
     /// Check if agent is healthy.
-    pub fn is_healthy(&self) -> bool {
+    pub async fn is_healthy(&self) -> bool {
         self.pool.is_agent_healthy(&self.config.id)
     }
 

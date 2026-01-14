@@ -8,9 +8,24 @@
 //! - Header iteration: O(n) with zero allocations
 //! - Header lookup: O(1) average (borrowed from source HashMap)
 //! - Conversion to owned: Only allocates when actually needed
+//! - SmallVec for values: Inline storage for single-value headers (most common)
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+
+use smallvec::SmallVec;
+
+/// Header values using SmallVec for inline storage.
+///
+/// Most HTTP headers have a single value. Using SmallVec<[String; 1]>
+/// avoids heap allocation for the Vec in the common case.
+pub type HeaderValues = SmallVec<[String; 1]>;
+
+/// Optimized header map using SmallVec for values.
+///
+/// This reduces allocations for typical requests where most headers
+/// have only one value.
+pub type OptimizedHeaderMap = HashMap<String, HeaderValues>;
 
 /// Zero-copy header reference.
 ///
@@ -251,6 +266,47 @@ pub mod names {
     pub const X_CORRELATION_ID: &str = "x-correlation-id";
 }
 
+/// Convert standard headers to optimized format.
+///
+/// This is useful when receiving headers from external sources (JSON, gRPC)
+/// and converting them for internal processing.
+#[inline]
+pub fn to_optimized(headers: HashMap<String, Vec<String>>) -> OptimizedHeaderMap {
+    headers
+        .into_iter()
+        .map(|(name, values)| (name, HeaderValues::from_vec(values)))
+        .collect()
+}
+
+/// Convert optimized headers back to standard format.
+///
+/// This is useful when serializing headers for external transmission.
+#[inline]
+pub fn from_optimized(headers: OptimizedHeaderMap) -> HashMap<String, Vec<String>> {
+    headers
+        .into_iter()
+        .map(|(name, values)| (name, values.into_vec()))
+        .collect()
+}
+
+/// Iterate over headers yielding (name, value) pairs without allocation.
+///
+/// This is the most efficient way to convert headers to gRPC format.
+#[inline]
+pub fn iter_flat(headers: &HashMap<String, Vec<String>>) -> impl Iterator<Item = (&str, &str)> {
+    headers
+        .iter()
+        .flat_map(|(name, values)| values.iter().map(move |v| (name.as_str(), v.as_str())))
+}
+
+/// Iterate over optimized headers yielding (name, value) pairs.
+#[inline]
+pub fn iter_flat_optimized(headers: &OptimizedHeaderMap) -> impl Iterator<Item = (&str, &str)> {
+    headers
+        .iter()
+        .flat_map(|(name, values)| values.iter().map(move |v| (name.as_str(), v.as_str())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,5 +399,82 @@ mod tests {
         assert_eq!(CONTENT_TYPE, "content-type");
         assert_eq!(AUTHORIZATION, "authorization");
         assert_eq!(X_FORWARDED_FOR, "x-forwarded-for");
+    }
+
+    #[test]
+    fn test_optimized_header_map() {
+        let mut optimized: OptimizedHeaderMap = HashMap::new();
+
+        // Single value - stored inline (no Vec allocation)
+        optimized.insert("content-type".to_string(), HeaderValues::from_iter(["application/json".to_string()]));
+
+        // Multiple values
+        optimized.insert("accept".to_string(), HeaderValues::from_iter([
+            "text/html".to_string(),
+            "application/json".to_string(),
+        ]));
+
+        assert_eq!(optimized.get("content-type").map(|v| v.len()), Some(1));
+        assert_eq!(optimized.get("accept").map(|v| v.len()), Some(2));
+    }
+
+    #[test]
+    fn test_to_from_optimized() {
+        let headers = sample_headers();
+
+        // Convert to optimized
+        let optimized = to_optimized(headers.clone());
+        assert_eq!(optimized.len(), headers.len());
+
+        // Convert back
+        let back = from_optimized(optimized);
+        assert_eq!(back, headers);
+    }
+
+    #[test]
+    fn test_iter_flat_helper() {
+        let headers = sample_headers();
+        let pairs: Vec<_> = iter_flat(&headers).collect();
+
+        // Should have 4 pairs (1 content-type + 2 accept + 1 x-custom)
+        assert_eq!(pairs.len(), 4);
+        assert!(pairs.contains(&("content-type", "application/json")));
+        assert!(pairs.contains(&("accept", "text/html")));
+        assert!(pairs.contains(&("accept", "application/json")));
+        assert!(pairs.contains(&("x-custom", "value")));
+    }
+
+    #[test]
+    fn test_iter_flat_optimized_helper() {
+        let headers = sample_headers();
+        let optimized = to_optimized(headers);
+        let pairs: Vec<_> = iter_flat_optimized(&optimized).collect();
+
+        assert_eq!(pairs.len(), 4);
+        assert!(pairs.contains(&("content-type", "application/json")));
+    }
+
+    #[test]
+    fn test_smallvec_single_value_inline() {
+        // Verify SmallVec stores single value inline
+        let values: HeaderValues = HeaderValues::from_iter(["single".to_string()]);
+
+        // SmallVec<[String; 1]> should not spill to heap for single value
+        assert!(!values.spilled());
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], "single");
+    }
+
+    #[test]
+    fn test_smallvec_multiple_values_spill() {
+        // Verify SmallVec spills to heap for multiple values
+        let values: HeaderValues = HeaderValues::from_iter([
+            "first".to_string(),
+            "second".to_string(),
+        ]);
+
+        // SmallVec<[String; 1]> should spill for 2+ values
+        assert!(values.spilled());
+        assert_eq!(values.len(), 2);
     }
 }

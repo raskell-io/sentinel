@@ -16,6 +16,7 @@ use crate::grpc_v2::{
     self, agent_service_v2_server::AgentServiceV2, agent_service_v2_server::AgentServiceV2Server,
     AgentToProxy, ProxyToAgent,
 };
+use crate::v2::pool::CHANNEL_BUFFER_SIZE;
 use crate::v2::{
     AgentCapabilities, HandshakeRequest, HandshakeResponse, HealthStatus,
 };
@@ -187,7 +188,7 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
         request: Request<Streaming<ProxyToAgent>>,
     ) -> Result<Response<Self::ProcessStreamStream>, Status> {
         let mut inbound = request.into_inner();
-        let (tx, rx) = mpsc::channel(32);
+        let (tx, rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         let handler = Arc::clone(&self.handler);
         let agent_id = self.id.clone();
 

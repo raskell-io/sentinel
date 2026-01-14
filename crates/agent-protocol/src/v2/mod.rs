@@ -15,6 +15,7 @@ mod health;
 mod metrics;
 pub mod observability;
 pub mod pool;
+pub mod protocol_metrics;
 pub mod reverse;
 pub mod server;
 mod streaming;
@@ -22,7 +23,7 @@ pub mod uds;
 
 pub use capabilities::*;
 pub use client::{AgentClientV2, CancelReason, ConfigUpdateCallback, FlowState, MetricsCallback};
-pub use uds::{AgentClientV2Uds, MessageType, UdsCapabilities, UdsFeatures, UdsHandshakeRequest, UdsHandshakeResponse, UdsLimits, MAX_UDS_MESSAGE_SIZE};
+pub use uds::{AgentClientV2Uds, MessageType, UdsCapabilities, UdsEncoding, UdsFeatures, UdsHandshakeRequest, UdsHandshakeResponse, UdsLimits, MAX_UDS_MESSAGE_SIZE};
 pub use reverse::{RegistrationRequest, RegistrationResponse, ReverseConnectionClient, ReverseConnectionConfig, ReverseConnectionListener};
 pub use control::*;
 pub use observability::{
@@ -32,6 +33,7 @@ pub use observability::{
 pub use health::*;
 pub use metrics::*;
 pub use pool::{AgentPool, AgentPoolConfig, AgentPoolStats, LoadBalanceStrategy, V2Transport};
+pub use protocol_metrics::{ProtocolMetrics, ProtocolMetricsSnapshot, HistogramMetric, HistogramSnapshot};
 pub use server::{AgentHandlerV2, DrainReason, GrpcAgentHandlerV2, GrpcAgentServerV2, ShutdownReason};
 pub use streaming::*;
 
