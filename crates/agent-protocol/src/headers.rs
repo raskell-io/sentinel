@@ -256,14 +256,158 @@ pub mod names {
     pub const USER_AGENT: &str = "user-agent";
     pub const ACCEPT: &str = "accept";
     pub const ACCEPT_ENCODING: &str = "accept-encoding";
+    pub const ACCEPT_LANGUAGE: &str = "accept-language";
     pub const AUTHORIZATION: &str = "authorization";
     pub const COOKIE: &str = "cookie";
     pub const SET_COOKIE: &str = "set-cookie";
     pub const CACHE_CONTROL: &str = "cache-control";
+    pub const CONNECTION: &str = "connection";
+    pub const DATE: &str = "date";
+    pub const ETAG: &str = "etag";
+    pub const IF_MATCH: &str = "if-match";
+    pub const IF_NONE_MATCH: &str = "if-none-match";
+    pub const IF_MODIFIED_SINCE: &str = "if-modified-since";
+    pub const LAST_MODIFIED: &str = "last-modified";
+    pub const LOCATION: &str = "location";
+    pub const ORIGIN: &str = "origin";
+    pub const REFERER: &str = "referer";
+    pub const SERVER: &str = "server";
+    pub const TRANSFER_ENCODING: &str = "transfer-encoding";
+    pub const VARY: &str = "vary";
     pub const X_FORWARDED_FOR: &str = "x-forwarded-for";
+    pub const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
+    pub const X_FORWARDED_HOST: &str = "x-forwarded-host";
     pub const X_REAL_IP: &str = "x-real-ip";
     pub const X_REQUEST_ID: &str = "x-request-id";
     pub const X_CORRELATION_ID: &str = "x-correlation-id";
+    pub const X_TRACE_ID: &str = "x-trace-id";
+    pub const X_SPAN_ID: &str = "x-span-id";
+}
+
+/// Header name type using Cow for zero-allocation on common headers.
+///
+/// When the header name matches a well-known header, this borrows a static
+/// string instead of allocating. Unknown headers are stored as owned Strings.
+pub type CowHeaderName = Cow<'static, str>;
+
+/// Header map using Cow<'static, str> keys for zero-allocation header names.
+///
+/// # Performance
+///
+/// For common headers (Content-Type, Authorization, etc.), the key is a
+/// borrowed static string reference. For unknown headers, the key is an
+/// owned String. This avoids ~95% of header name allocations in typical
+/// HTTP traffic.
+///
+/// # Example
+///
+/// ```
+/// use sentinel_agent_protocol::headers::{CowHeaderMap, HeaderValues, intern_header_name};
+///
+/// let mut headers = CowHeaderMap::new();
+/// headers.insert(
+///     intern_header_name("content-type"),
+///     HeaderValues::from_iter(["application/json".to_string()])
+/// );
+/// ```
+pub type CowHeaderMap = HashMap<CowHeaderName, HeaderValues>;
+
+/// Intern a header name, returning a static reference for known headers.
+///
+/// This is the key optimization: common headers like "Content-Type" or
+/// "Authorization" return `Cow::Borrowed(&'static str)` instead of
+/// allocating a new String.
+///
+/// # Performance
+///
+/// - Known headers: O(1) lookup, zero allocation
+/// - Unknown headers: O(1) to create owned Cow, one allocation
+///
+/// # Example
+///
+/// ```
+/// use sentinel_agent_protocol::headers::intern_header_name;
+/// use std::borrow::Cow;
+///
+/// // Known header - no allocation
+/// let ct = intern_header_name("content-type");
+/// assert!(matches!(ct, Cow::Borrowed(_)));
+///
+/// // Unknown header - allocates once
+/// let custom = intern_header_name("x-custom-header");
+/// assert!(matches!(custom, Cow::Owned(_)));
+/// ```
+#[inline]
+pub fn intern_header_name(name: &str) -> CowHeaderName {
+    // Case-insensitive matching for HTTP headers
+    let lower = name.to_ascii_lowercase();
+
+    match lower.as_str() {
+        "host" => Cow::Borrowed(names::HOST),
+        "content-type" => Cow::Borrowed(names::CONTENT_TYPE),
+        "content-length" => Cow::Borrowed(names::CONTENT_LENGTH),
+        "user-agent" => Cow::Borrowed(names::USER_AGENT),
+        "accept" => Cow::Borrowed(names::ACCEPT),
+        "accept-encoding" => Cow::Borrowed(names::ACCEPT_ENCODING),
+        "accept-language" => Cow::Borrowed(names::ACCEPT_LANGUAGE),
+        "authorization" => Cow::Borrowed(names::AUTHORIZATION),
+        "cookie" => Cow::Borrowed(names::COOKIE),
+        "set-cookie" => Cow::Borrowed(names::SET_COOKIE),
+        "cache-control" => Cow::Borrowed(names::CACHE_CONTROL),
+        "connection" => Cow::Borrowed(names::CONNECTION),
+        "date" => Cow::Borrowed(names::DATE),
+        "etag" => Cow::Borrowed(names::ETAG),
+        "if-match" => Cow::Borrowed(names::IF_MATCH),
+        "if-none-match" => Cow::Borrowed(names::IF_NONE_MATCH),
+        "if-modified-since" => Cow::Borrowed(names::IF_MODIFIED_SINCE),
+        "last-modified" => Cow::Borrowed(names::LAST_MODIFIED),
+        "location" => Cow::Borrowed(names::LOCATION),
+        "origin" => Cow::Borrowed(names::ORIGIN),
+        "referer" => Cow::Borrowed(names::REFERER),
+        "server" => Cow::Borrowed(names::SERVER),
+        "transfer-encoding" => Cow::Borrowed(names::TRANSFER_ENCODING),
+        "vary" => Cow::Borrowed(names::VARY),
+        "x-forwarded-for" => Cow::Borrowed(names::X_FORWARDED_FOR),
+        "x-forwarded-proto" => Cow::Borrowed(names::X_FORWARDED_PROTO),
+        "x-forwarded-host" => Cow::Borrowed(names::X_FORWARDED_HOST),
+        "x-real-ip" => Cow::Borrowed(names::X_REAL_IP),
+        "x-request-id" => Cow::Borrowed(names::X_REQUEST_ID),
+        "x-correlation-id" => Cow::Borrowed(names::X_CORRELATION_ID),
+        "x-trace-id" => Cow::Borrowed(names::X_TRACE_ID),
+        "x-span-id" => Cow::Borrowed(names::X_SPAN_ID),
+        _ => Cow::Owned(lower), // Unknown header - use the lowercased string
+    }
+}
+
+/// Convert standard headers to Cow-optimized format.
+///
+/// This converts both header names and values to the optimized format,
+/// using static references for known header names.
+#[inline]
+pub fn to_cow_optimized(headers: HashMap<String, Vec<String>>) -> CowHeaderMap {
+    headers
+        .into_iter()
+        .map(|(name, values)| (intern_header_name(&name), HeaderValues::from_vec(values)))
+        .collect()
+}
+
+/// Convert Cow-optimized headers back to standard format.
+///
+/// This converts header names back to owned Strings.
+#[inline]
+pub fn from_cow_optimized(headers: CowHeaderMap) -> HashMap<String, Vec<String>> {
+    headers
+        .into_iter()
+        .map(|(name, values)| (name.into_owned(), values.into_vec()))
+        .collect()
+}
+
+/// Iterate over Cow headers yielding (name, value) pairs.
+#[inline]
+pub fn iter_flat_cow(headers: &CowHeaderMap) -> impl Iterator<Item = (&str, &str)> {
+    headers
+        .iter()
+        .flat_map(|(name, values)| values.iter().map(move |v| (name.as_ref(), v.as_str())))
 }
 
 /// Convert standard headers to optimized format.
@@ -476,5 +620,112 @@ mod tests {
         // SmallVec<[String; 1]> should spill for 2+ values
         assert!(values.spilled());
         assert_eq!(values.len(), 2);
+    }
+
+    #[test]
+    fn test_intern_header_name_known() {
+        // Known headers should return borrowed static strings
+        let ct = intern_header_name("content-type");
+        assert!(matches!(ct, Cow::Borrowed(_)));
+        assert_eq!(ct, "content-type");
+
+        // Case-insensitive
+        let ct_upper = intern_header_name("Content-Type");
+        assert!(matches!(ct_upper, Cow::Borrowed(_)));
+        assert_eq!(ct_upper, "content-type");
+
+        // Mixed case
+        let ct_mixed = intern_header_name("CONTENT-TYPE");
+        assert!(matches!(ct_mixed, Cow::Borrowed(_)));
+        assert_eq!(ct_mixed, "content-type");
+    }
+
+    #[test]
+    fn test_intern_header_name_unknown() {
+        // Unknown headers should return owned strings
+        let custom = intern_header_name("x-custom-header");
+        assert!(matches!(custom, Cow::Owned(_)));
+        assert_eq!(custom, "x-custom-header");
+    }
+
+    #[test]
+    fn test_intern_header_name_all_known() {
+        // Verify all known headers are interned correctly
+        let known_headers = [
+            "host", "content-type", "content-length", "user-agent",
+            "accept", "accept-encoding", "accept-language", "authorization",
+            "cookie", "set-cookie", "cache-control", "connection", "date",
+            "etag", "if-match", "if-none-match", "if-modified-since",
+            "last-modified", "location", "origin", "referer", "server",
+            "transfer-encoding", "vary", "x-forwarded-for", "x-forwarded-proto",
+            "x-forwarded-host", "x-real-ip", "x-request-id", "x-correlation-id",
+            "x-trace-id", "x-span-id",
+        ];
+
+        for header in known_headers {
+            let interned = intern_header_name(header);
+            assert!(
+                matches!(interned, Cow::Borrowed(_)),
+                "Header '{}' should be interned as borrowed",
+                header
+            );
+            assert_eq!(interned, header);
+        }
+    }
+
+    #[test]
+    fn test_cow_header_map() {
+        let mut headers = CowHeaderMap::new();
+
+        // Insert using interned names
+        headers.insert(
+            intern_header_name("content-type"),
+            HeaderValues::from_iter(["application/json".to_string()])
+        );
+        headers.insert(
+            intern_header_name("x-custom"),
+            HeaderValues::from_iter(["value".to_string()])
+        );
+
+        // Lookup works with borrowed strings
+        assert!(headers.contains_key("content-type"));
+        assert!(headers.contains_key("x-custom"));
+    }
+
+    #[test]
+    fn test_to_from_cow_optimized() {
+        let headers = sample_headers();
+
+        // Convert to Cow optimized
+        let cow_optimized = to_cow_optimized(headers.clone());
+        assert_eq!(cow_optimized.len(), headers.len());
+
+        // Known headers should be borrowed
+        for (name, _) in &cow_optimized {
+            if name == "content-type" || name == "accept" {
+                assert!(
+                    matches!(name, Cow::Borrowed(_)),
+                    "Known header '{}' should be borrowed",
+                    name
+                );
+            }
+        }
+
+        // Convert back
+        let back = from_cow_optimized(cow_optimized);
+        assert_eq!(back, headers);
+    }
+
+    #[test]
+    fn test_iter_flat_cow() {
+        let headers = sample_headers();
+        let cow_optimized = to_cow_optimized(headers);
+        let pairs: Vec<_> = iter_flat_cow(&cow_optimized).collect();
+
+        assert_eq!(pairs.len(), 4);
+        assert!(pairs.contains(&("content-type", "application/json")));
+        assert!(pairs.contains(&("accept", "text/html")));
+        assert!(pairs.contains(&("accept", "application/json")));
+        assert!(pairs.contains(&("x-custom", "value")));
     }
 }

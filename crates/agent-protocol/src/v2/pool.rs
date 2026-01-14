@@ -54,6 +54,59 @@ pub enum LoadBalanceStrategy {
     Random,
 }
 
+/// Flow control behavior when an agent signals it cannot accept requests.
+///
+/// When an agent sends a flow control "pause" signal, this determines
+/// whether requests should fail immediately or be allowed through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FlowControlMode {
+    /// Fail requests when agent is paused (default, safer).
+    ///
+    /// Returns `AgentProtocolError::FlowControlPaused` immediately.
+    /// Use this when you want strict backpressure and can handle
+    /// the error at the caller (e.g., return 503 to client).
+    #[default]
+    FailClosed,
+
+    /// Allow requests through even when agent is paused.
+    ///
+    /// Requests proceed without agent processing. Use this when
+    /// agent processing is optional (e.g., logging, analytics)
+    /// and you prefer availability over consistency.
+    FailOpen,
+
+    /// Queue requests briefly, then fail if still paused.
+    ///
+    /// Waits up to `flow_control_wait_timeout` for the agent to
+    /// resume before failing. Useful for transient pauses.
+    WaitAndRetry,
+}
+
+/// A sticky session entry tracking connection affinity for long-lived streams.
+///
+/// Used for WebSocket connections, Server-Sent Events, long-polling, and other
+/// streaming scenarios where the same agent connection should be used for the
+/// entire stream lifetime.
+struct StickySession {
+    /// The connection to use for this session
+    connection: Arc<PooledConnection>,
+    /// Agent ID for this session
+    agent_id: String,
+    /// When the session was created
+    created_at: Instant,
+    /// When the session was last accessed
+    last_accessed: AtomicU64,
+}
+
+impl std::fmt::Debug for StickySession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StickySession")
+            .field("agent_id", &self.agent_id)
+            .field("created_at", &self.created_at)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Configuration for the agent connection pool.
 #[derive(Debug, Clone)]
 pub struct AgentPoolConfig {
@@ -75,6 +128,33 @@ pub struct AgentPoolConfig {
     pub max_concurrent_per_connection: usize,
     /// Health check interval
     pub health_check_interval: Duration,
+    /// Channel buffer size for all transports.
+    ///
+    /// Controls backpressure behavior. Smaller values (16-64) apply
+    /// backpressure earlier, preventing memory buildup. Larger values
+    /// (128-256) handle burst traffic better but use more memory.
+    ///
+    /// Default: 64
+    pub channel_buffer_size: usize,
+    /// Flow control behavior when an agent signals it cannot accept requests.
+    ///
+    /// Default: `FlowControlMode::FailClosed`
+    pub flow_control_mode: FlowControlMode,
+    /// Timeout for `FlowControlMode::WaitAndRetry` before failing.
+    ///
+    /// Only used when `flow_control_mode` is `WaitAndRetry`.
+    /// Default: 100ms
+    pub flow_control_wait_timeout: Duration,
+    /// Timeout for sticky sessions before they expire.
+    ///
+    /// Sticky sessions are used for long-lived streaming connections
+    /// (WebSocket, SSE, long-polling) to ensure the same agent connection
+    /// is used for the entire stream lifetime.
+    ///
+    /// Set to None to disable automatic expiry (sessions only cleared explicitly).
+    ///
+    /// Default: 5 minutes
+    pub sticky_session_timeout: Option<Duration>,
 }
 
 impl Default for AgentPoolConfig {
@@ -89,7 +169,36 @@ impl Default for AgentPoolConfig {
             drain_timeout: Duration::from_secs(30),
             max_concurrent_per_connection: 100,
             health_check_interval: Duration::from_secs(10),
+            channel_buffer_size: CHANNEL_BUFFER_SIZE,
+            flow_control_mode: FlowControlMode::FailClosed,
+            flow_control_wait_timeout: Duration::from_millis(100),
+            sticky_session_timeout: Some(Duration::from_secs(5 * 60)), // 5 minutes
         }
+    }
+}
+
+impl StickySession {
+    fn new(agent_id: String, connection: Arc<PooledConnection>) -> Self {
+        Self {
+            connection,
+            agent_id,
+            created_at: Instant::now(),
+            last_accessed: AtomicU64::new(0),
+        }
+    }
+
+    fn touch(&self) {
+        let offset = self.created_at.elapsed().as_millis() as u64;
+        self.last_accessed.store(offset, Ordering::Relaxed);
+    }
+
+    fn last_accessed(&self) -> Instant {
+        let offset_ms = self.last_accessed.load(Ordering::Relaxed);
+        self.created_at + Duration::from_millis(offset_ms)
+    }
+
+    fn is_expired(&self, timeout: Duration) -> bool {
+        self.last_accessed().elapsed() > timeout
     }
 }
 
@@ -410,6 +519,9 @@ pub struct AgentPool {
     /// Connection affinity: correlation_id → connection used for headers.
     /// Ensures body chunks go to the same connection as headers for streaming.
     correlation_affinity: DashMap<String, Arc<PooledConnection>>,
+    /// Sticky sessions: session_id → session info for long-lived streams.
+    /// Used for WebSocket, SSE, and long-polling connections.
+    sticky_sessions: DashMap<String, StickySession>,
 }
 
 impl AgentPool {
@@ -455,6 +567,7 @@ impl AgentPool {
             config_update_callback,
             protocol_metrics: Arc::new(ProtocolMetrics::new()),
             correlation_affinity: DashMap::new(),
+            sticky_sessions: DashMap::new(),
         }
     }
 
@@ -499,6 +612,239 @@ impl AgentPool {
     /// This is useful for monitoring and debugging.
     pub fn correlation_affinity_count(&self) -> usize {
         self.correlation_affinity.len()
+    }
+
+    // =========================================================================
+    // Sticky Sessions
+    // =========================================================================
+
+    /// Create a sticky session for a long-lived streaming connection.
+    ///
+    /// Sticky sessions ensure that all requests for a given session use the
+    /// same agent connection. This is essential for:
+    /// - WebSocket connections
+    /// - Server-Sent Events (SSE)
+    /// - Long-polling
+    /// - Any streaming scenario requiring connection affinity
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - A unique identifier for this session (e.g., WebSocket connection ID)
+    /// * `agent_id` - The agent to bind this session to
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the session was created, or an error if the agent
+    /// is not found or has no healthy connections.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // When a WebSocket is established
+    /// pool.create_sticky_session("ws-12345", "waf-agent").await?;
+    ///
+    /// // All subsequent messages use the same connection
+    /// pool.send_request_with_sticky_session("ws-12345", &event).await?;
+    ///
+    /// // When the WebSocket closes
+    /// pool.clear_sticky_session("ws-12345");
+    /// ```
+    pub fn create_sticky_session(
+        &self,
+        session_id: impl Into<String>,
+        agent_id: &str,
+    ) -> Result<(), AgentProtocolError> {
+        let session_id = session_id.into();
+        let conn = self.select_connection(agent_id)?;
+
+        let session = StickySession::new(agent_id.to_string(), conn);
+        session.touch();
+
+        self.sticky_sessions.insert(session_id.clone(), session);
+
+        debug!(
+            session_id = %session_id,
+            agent_id = %agent_id,
+            "Created sticky session"
+        );
+
+        Ok(())
+    }
+
+    /// Get the connection for a sticky session (internal use).
+    ///
+    /// Returns the connection bound to this session, or None if the session
+    /// doesn't exist or has expired.
+    fn get_sticky_session_conn(&self, session_id: &str) -> Option<Arc<PooledConnection>> {
+        let entry = self.sticky_sessions.get(session_id)?;
+
+        // Check expiration if configured
+        if let Some(timeout) = self.config.sticky_session_timeout {
+            if entry.is_expired(timeout) {
+                drop(entry); // Release the reference before removing
+                self.sticky_sessions.remove(session_id);
+                debug!(session_id = %session_id, "Sticky session expired");
+                return None;
+            }
+        }
+
+        entry.touch();
+        Some(Arc::clone(&entry.connection))
+    }
+
+    /// Refresh a sticky session, updating its last-accessed time.
+    ///
+    /// Returns true if the session exists and was refreshed, false otherwise.
+    pub fn refresh_sticky_session(&self, session_id: &str) -> bool {
+        self.get_sticky_session_conn(session_id).is_some()
+    }
+
+    /// Check if a sticky session exists and is valid.
+    pub fn has_sticky_session(&self, session_id: &str) -> bool {
+        self.get_sticky_session_conn(session_id).is_some()
+    }
+
+    /// Clear a sticky session.
+    ///
+    /// Call this when a long-lived stream ends (WebSocket closed, SSE ended, etc.)
+    pub fn clear_sticky_session(&self, session_id: &str) {
+        if self.sticky_sessions.remove(session_id).is_some() {
+            debug!(session_id = %session_id, "Cleared sticky session");
+        }
+    }
+
+    /// Get the number of active sticky sessions.
+    ///
+    /// Useful for monitoring and debugging.
+    pub fn sticky_session_count(&self) -> usize {
+        self.sticky_sessions.len()
+    }
+
+    /// Get the agent ID bound to a sticky session.
+    pub fn sticky_session_agent(&self, session_id: &str) -> Option<String> {
+        self.sticky_sessions.get(session_id).map(|s| s.agent_id.clone())
+    }
+
+    /// Send a request using a sticky session.
+    ///
+    /// If the session exists and is valid, uses the bound connection.
+    /// If the session doesn't exist or has expired, falls back to normal
+    /// connection selection.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (response, used_sticky_session).
+    pub async fn send_request_headers_with_sticky_session(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        correlation_id: &str,
+        event: &RequestHeadersEvent,
+    ) -> Result<(AgentResponse, bool), AgentProtocolError> {
+        let start = Instant::now();
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
+        self.protocol_metrics.inc_requests();
+        self.protocol_metrics.inc_in_flight();
+
+        // Try sticky session first
+        let (conn, used_sticky) = if let Some(sticky_conn) = self.get_sticky_session_conn(session_id) {
+            (sticky_conn, true)
+        } else {
+            (self.select_connection(agent_id)?, false)
+        };
+
+        // Check flow control
+        match self.check_flow_control(&conn, agent_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                self.protocol_metrics.dec_in_flight();
+                return Ok((AgentResponse::default_allow(), used_sticky));
+            }
+            Err(e) => {
+                self.protocol_metrics.dec_in_flight();
+                return Err(e);
+            }
+        }
+
+        // Acquire concurrency permit
+        let _permit = conn
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|_| {
+                self.protocol_metrics.dec_in_flight();
+                self.protocol_metrics.inc_connection_errors();
+                AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
+            })?;
+
+        conn.in_flight.fetch_add(1, Ordering::Relaxed);
+        conn.touch();
+
+        // Store correlation affinity
+        self.correlation_affinity.insert(correlation_id.to_string(), Arc::clone(&conn));
+
+        let result = conn.client.send_request_headers(correlation_id, event).await;
+
+        conn.in_flight.fetch_sub(1, Ordering::Relaxed);
+        conn.request_count.fetch_add(1, Ordering::Relaxed);
+        self.protocol_metrics.dec_in_flight();
+        self.protocol_metrics.record_request_duration(start.elapsed());
+
+        match &result {
+            Ok(_) => {
+                conn.consecutive_errors.store(0, Ordering::Relaxed);
+                self.protocol_metrics.inc_responses();
+            }
+            Err(e) => {
+                conn.error_count.fetch_add(1, Ordering::Relaxed);
+                let consecutive = conn.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
+                self.total_errors.fetch_add(1, Ordering::Relaxed);
+
+                match e {
+                    AgentProtocolError::Timeout(_) => self.protocol_metrics.inc_timeouts(),
+                    AgentProtocolError::ConnectionFailed(_) | AgentProtocolError::ConnectionClosed => {
+                        self.protocol_metrics.inc_connection_errors();
+                    }
+                    AgentProtocolError::Serialization(_) => {
+                        self.protocol_metrics.inc_serialization_errors();
+                    }
+                    _ => {}
+                }
+
+                if consecutive >= 3 {
+                    conn.healthy_cached.store(false, Ordering::Release);
+                }
+            }
+        }
+
+        result.map(|r| (r, used_sticky))
+    }
+
+    /// Clean up expired sticky sessions.
+    ///
+    /// Called automatically by the maintenance task, but can also be called
+    /// manually to immediately reclaim resources.
+    pub fn cleanup_expired_sessions(&self) -> usize {
+        let Some(timeout) = self.config.sticky_session_timeout else {
+            return 0;
+        };
+
+        let mut removed = 0;
+        self.sticky_sessions.retain(|session_id, session| {
+            if session.is_expired(timeout) {
+                debug!(session_id = %session_id, "Removing expired sticky session");
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+
+        if removed > 0 {
+            trace!(removed = removed, "Cleaned up expired sticky sessions");
+        }
+
+        removed
     }
 
     /// Get the config pusher for pushing configuration updates to agents.
@@ -715,6 +1061,52 @@ impl AgentPool {
         Ok(())
     }
 
+    /// Check flow control and handle according to configured mode.
+    ///
+    /// Returns `Ok(true)` if request should proceed normally.
+    /// Returns `Ok(false)` if request should skip agent (FailOpen mode).
+    /// Returns `Err` if request should fail (FailClosed or WaitAndRetry timeout).
+    async fn check_flow_control(
+        &self,
+        conn: &PooledConnection,
+        agent_id: &str,
+    ) -> Result<bool, AgentProtocolError> {
+        if conn.client.can_accept_requests().await {
+            return Ok(true);
+        }
+
+        match self.config.flow_control_mode {
+            FlowControlMode::FailClosed => {
+                self.protocol_metrics.record_flow_rejection();
+                Err(AgentProtocolError::FlowControlPaused {
+                    agent_id: agent_id.to_string(),
+                })
+            }
+            FlowControlMode::FailOpen => {
+                // Log but allow through
+                debug!(agent_id = %agent_id, "Flow control: agent paused, allowing request (fail-open mode)");
+                self.protocol_metrics.record_flow_rejection();
+                Ok(false) // Signal to skip agent processing
+            }
+            FlowControlMode::WaitAndRetry => {
+                // Wait briefly for agent to resume
+                let deadline = Instant::now() + self.config.flow_control_wait_timeout;
+                while Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    if conn.client.can_accept_requests().await {
+                        trace!(agent_id = %agent_id, "Flow control: agent resumed after wait");
+                        return Ok(true);
+                    }
+                }
+                // Timeout - fail the request
+                self.protocol_metrics.record_flow_rejection();
+                Err(AgentProtocolError::FlowControlPaused {
+                    agent_id: agent_id.to_string(),
+                })
+            }
+        }
+    }
+
     /// Send a request headers event to an agent.
     ///
     /// The pool selects the best connection based on the load balancing strategy.
@@ -738,13 +1130,18 @@ impl AgentPool {
 
         let conn = self.select_connection(agent_id)?;
 
-        // Check flow control before sending
-        if !conn.client.can_accept_requests().await {
-            self.protocol_metrics.dec_in_flight();
-            self.protocol_metrics.record_flow_rejection();
-            return Err(AgentProtocolError::FlowControlPaused {
-                agent_id: agent_id.to_string(),
-            });
+        // Check flow control before sending (respects flow_control_mode config)
+        match self.check_flow_control(&conn, agent_id).await {
+            Ok(true) => {} // Proceed normally
+            Ok(false) => {
+                // FailOpen mode: skip agent, return allow response
+                self.protocol_metrics.dec_in_flight();
+                return Ok(AgentResponse::default_allow());
+            }
+            Err(e) => {
+                self.protocol_metrics.dec_in_flight();
+                return Err(e);
+            }
         }
 
         // Acquire concurrency permit
@@ -826,10 +1223,13 @@ impl AgentPool {
         };
 
         // Check flow control before sending body chunks (critical for backpressure)
-        if !conn.client.can_accept_requests().await {
-            return Err(AgentProtocolError::FlowControlPaused {
-                agent_id: agent_id.to_string(),
-            });
+        match self.check_flow_control(&conn, agent_id).await {
+            Ok(true) => {} // Proceed normally
+            Ok(false) => {
+                // FailOpen mode: skip agent, return allow response
+                return Ok(AgentResponse::default_allow());
+            }
+            Err(e) => return Err(e),
         }
 
         let _permit = conn
@@ -923,10 +1323,13 @@ impl AgentPool {
         let conn = self.select_connection(agent_id)?;
 
         // Check flow control before sending body chunks (critical for backpressure)
-        if !conn.client.can_accept_requests().await {
-            return Err(AgentProtocolError::FlowControlPaused {
-                agent_id: agent_id.to_string(),
-            });
+        match self.check_flow_control(&conn, agent_id).await {
+            Ok(true) => {} // Proceed normally
+            Ok(false) => {
+                // FailOpen mode: skip agent, return allow response
+                return Ok(AgentResponse::default_allow());
+            }
+            Err(e) => return Err(e),
         }
 
         let _permit = conn
@@ -1124,6 +1527,9 @@ impl AgentPool {
 
         loop {
             interval.tick().await;
+
+            // Clean up expired sticky sessions
+            self.cleanup_expired_sessions();
 
             // Iterate without holding a long-lived lock
             let agent_ids: Vec<String> = self.agents.iter().map(|e| e.key().clone()).collect();
@@ -1434,5 +1840,95 @@ mod tests {
         assert!(!is_uds_endpoint("http://localhost:8080"));
         assert!(!is_uds_endpoint("localhost:50051"));
         assert!(!is_uds_endpoint("127.0.0.1:8080"));
+    }
+
+    #[test]
+    fn test_flow_control_mode_default() {
+        assert_eq!(FlowControlMode::default(), FlowControlMode::FailClosed);
+    }
+
+    #[test]
+    fn test_pool_config_flow_control_defaults() {
+        let config = AgentPoolConfig::default();
+        assert_eq!(config.channel_buffer_size, CHANNEL_BUFFER_SIZE);
+        assert_eq!(config.flow_control_mode, FlowControlMode::FailClosed);
+        assert_eq!(config.flow_control_wait_timeout, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_pool_config_custom_flow_control() {
+        let config = AgentPoolConfig {
+            channel_buffer_size: 128,
+            flow_control_mode: FlowControlMode::FailOpen,
+            flow_control_wait_timeout: Duration::from_millis(500),
+            ..Default::default()
+        };
+        assert_eq!(config.channel_buffer_size, 128);
+        assert_eq!(config.flow_control_mode, FlowControlMode::FailOpen);
+        assert_eq!(config.flow_control_wait_timeout, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_pool_config_wait_and_retry() {
+        let config = AgentPoolConfig {
+            flow_control_mode: FlowControlMode::WaitAndRetry,
+            flow_control_wait_timeout: Duration::from_millis(250),
+            ..Default::default()
+        };
+        assert_eq!(config.flow_control_mode, FlowControlMode::WaitAndRetry);
+        assert_eq!(config.flow_control_wait_timeout, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn test_pool_config_sticky_session_default() {
+        let config = AgentPoolConfig::default();
+        assert_eq!(
+            config.sticky_session_timeout,
+            Some(Duration::from_secs(5 * 60))
+        );
+    }
+
+    #[test]
+    fn test_pool_config_sticky_session_custom() {
+        let config = AgentPoolConfig {
+            sticky_session_timeout: Some(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        assert_eq!(config.sticky_session_timeout, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_pool_config_sticky_session_disabled() {
+        let config = AgentPoolConfig {
+            sticky_session_timeout: None,
+            ..Default::default()
+        };
+        assert!(config.sticky_session_timeout.is_none());
+    }
+
+    #[test]
+    fn test_sticky_session_count_empty() {
+        let pool = AgentPool::new();
+        assert_eq!(pool.sticky_session_count(), 0);
+    }
+
+    #[test]
+    fn test_sticky_session_has_nonexistent() {
+        let pool = AgentPool::new();
+        assert!(!pool.has_sticky_session("nonexistent"));
+    }
+
+    #[test]
+    fn test_sticky_session_clear_nonexistent() {
+        let pool = AgentPool::new();
+        // Should not panic
+        pool.clear_sticky_session("nonexistent");
+    }
+
+    #[test]
+    fn test_cleanup_expired_sessions_empty() {
+        let pool = AgentPool::new();
+        let removed = pool.cleanup_expired_sessions();
+        assert_eq!(removed, 0);
     }
 }

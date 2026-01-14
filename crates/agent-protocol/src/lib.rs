@@ -123,6 +123,8 @@ pub mod buffer_pool;
 mod client;
 mod errors;
 pub mod headers;
+#[cfg(feature = "mmap-buffers")]
+pub mod mmap_buffer;
 mod protocol;
 mod server;
 

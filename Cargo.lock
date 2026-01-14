@@ -4854,6 +4854,7 @@ dependencies = [
  "dashmap",
  "futures",
  "http 1.4.0",
+ "memmap2",
  "parking_lot",
  "proptest",
  "prost",
