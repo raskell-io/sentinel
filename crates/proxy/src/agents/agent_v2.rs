@@ -71,6 +71,7 @@ impl AgentV2 {
             drain_timeout: Duration::from_millis(p.drain_timeout_ms),
             max_concurrent_per_connection: p.max_concurrent_per_connection,
             health_check_interval: Duration::from_millis(p.health_check_interval_ms),
+            ..Default::default()
         }).unwrap_or_default();
 
         let pool = Arc::new(AgentPool::with_config(pool_config));
