@@ -233,6 +233,7 @@ pub(super) fn parse_upstream(node: &KdlNode) -> Result<(String, UpstreamConfig)>
                     _ => crate::LoadBalancingAlgorithm::RoundRobin,
                 })
                 .unwrap_or(crate::LoadBalancingAlgorithm::RoundRobin),
+            sticky_session: None,
             health_check: None,
             connection_pool: crate::ConnectionPoolConfig::default(),
             timeouts: crate::UpstreamTimeouts::default(),

@@ -109,6 +109,12 @@ pub struct SentinelProxy {
     pub(super) warmth_tracker: Arc<crate::health::WarmthTracker>,
     /// Guardrail processor for semantic inspection (prompt injection, PII detection)
     pub(super) guardrail_processor: Arc<crate::inference::GuardrailProcessor>,
+    /// ACME challenge manager for HTTP-01 challenge handling
+    /// Present only when ACME is configured for at least one listener
+    pub acme_challenges: Option<Arc<crate::acme::ChallengeManager>>,
+    /// ACME client for certificate management
+    /// Present only when ACME is configured
+    pub acme_client: Option<Arc<crate::acme::AcmeClient>>,
 }
 
 impl SentinelProxy {
@@ -348,6 +354,9 @@ impl SentinelProxy {
             inference_rate_limit_manager,
             warmth_tracker,
             guardrail_processor,
+            // ACME challenge manager - initialized later if ACME is configured
+            acme_challenges: None,
+            acme_client: None,
         })
     }
 

@@ -6,7 +6,12 @@ use tracing::{debug, trace};
 
 use sentinel_common::types::{TlsVersion, TraceIdFormat};
 
-use crate::server::*;
+use crate::server::{
+    default_acme_storage, default_graceful_shutdown_timeout, default_keepalive_timeout,
+    default_max_concurrent_streams, default_max_connections, default_renewal_days,
+    default_request_timeout, default_worker_threads, AcmeConfig, ListenerConfig,
+    ListenerProtocol, ServerConfig, SniCertificate, TlsConfig,
+};
 
 use super::helpers::{get_bool_entry, get_first_arg_string, get_int_entry, get_string_entry};
 
@@ -139,6 +144,7 @@ pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
 /// Example KDL:
 /// ```kdl
 /// tls {
+///     // Option A: Manual certificates
 ///     cert-file "/etc/certs/server.crt"
 ///     key-file "/etc/certs/server.key"
 ///     ca-file "/etc/certs/ca.crt"  // Optional, for mTLS
@@ -151,29 +157,43 @@ pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
 ///         cert-file "/etc/certs/example.crt"
 ///         key-file "/etc/certs/example.key"
 ///     }
+///
+///     // Option B: ACME automatic certificates
+///     acme {
+///         email "admin@example.com"
+///         domains "example.com" "www.example.com"
+///         staging false
+///         storage "/var/lib/sentinel/acme"
+///         renew-before-days 30
+///     }
 /// }
 /// ```
 pub fn parse_tls_config(node: &kdl::KdlNode, listener_id: &str) -> Result<TlsConfig> {
     debug!(listener_id = %listener_id, "Parsing TLS configuration");
 
-    // Get required cert and key files
-    let cert_file = get_string_entry(node, "cert-file")
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "TLS configuration for listener '{}' requires 'cert-file'",
-                listener_id
-            )
-        })?;
+    // Parse ACME configuration if present
+    let acme = if let Some(children) = node.children() {
+        children
+            .nodes()
+            .iter()
+            .find(|n| n.name().value() == "acme")
+            .map(|acme_node| parse_acme_config(acme_node, listener_id))
+            .transpose()?
+    } else {
+        None
+    };
 
-    let key_file = get_string_entry(node, "key-file")
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "TLS configuration for listener '{}' requires 'key-file'",
-                listener_id
-            )
-        })?;
+    // cert-file and key-file are required unless ACME is configured
+    let cert_file = get_string_entry(node, "cert-file").map(PathBuf::from);
+    let key_file = get_string_entry(node, "key-file").map(PathBuf::from);
+
+    // Validate that either manual certs or ACME is configured
+    if acme.is_none() && (cert_file.is_none() || key_file.is_none()) {
+        return Err(anyhow::anyhow!(
+            "TLS configuration for listener '{}' requires either 'cert-file' and 'key-file', or an 'acme' block",
+            listener_id
+        ));
+    }
 
     // Optional CA file for client verification (mTLS)
     let ca_file = get_string_entry(node, "ca-file").map(PathBuf::from);
@@ -218,7 +238,8 @@ pub fn parse_tls_config(node: &kdl::KdlNode, listener_id: &str) -> Result<TlsCon
 
     debug!(
         listener_id = %listener_id,
-        cert_file = %cert_file.display(),
+        has_cert_file = cert_file.is_some(),
+        has_acme = acme.is_some(),
         has_ca = ca_file.is_some(),
         client_auth = client_auth,
         sni_cert_count = additional_certs.len(),
@@ -236,6 +257,81 @@ pub fn parse_tls_config(node: &kdl::KdlNode, listener_id: &str) -> Result<TlsCon
         client_auth,
         ocsp_stapling,
         session_resumption,
+        acme,
+    })
+}
+
+/// Parse ACME configuration block
+///
+/// Example KDL:
+/// ```kdl
+/// acme {
+///     email "admin@example.com"
+///     domains "example.com" "www.example.com"
+///     staging false
+///     storage "/var/lib/sentinel/acme"
+///     renew-before-days 30
+/// }
+/// ```
+fn parse_acme_config(node: &kdl::KdlNode, listener_id: &str) -> Result<AcmeConfig> {
+    debug!(listener_id = %listener_id, "Parsing ACME configuration");
+
+    // Required: email
+    let email = get_string_entry(node, "email").ok_or_else(|| {
+        anyhow::anyhow!(
+            "ACME configuration for listener '{}' requires 'email'",
+            listener_id
+        )
+    })?;
+
+    // Required: domains (at least one)
+    let domains: Vec<String> = if let Some(children) = node.children() {
+        children
+            .nodes()
+            .iter()
+            .filter(|n| n.name().value() == "domains")
+            .flat_map(|n| {
+                n.entries()
+                    .iter()
+                    .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    if domains.is_empty() {
+        return Err(anyhow::anyhow!(
+            "ACME configuration for listener '{}' requires at least one domain in 'domains'",
+            listener_id
+        ));
+    }
+
+    // Optional with defaults
+    let staging = get_bool_entry(node, "staging").unwrap_or(false);
+    let storage = get_string_entry(node, "storage")
+        .map(PathBuf::from)
+        .unwrap_or_else(default_acme_storage);
+    let renew_before_days = get_int_entry(node, "renew-before-days")
+        .map(|v| v as u32)
+        .unwrap_or_else(default_renewal_days);
+
+    debug!(
+        listener_id = %listener_id,
+        email = %email,
+        domain_count = domains.len(),
+        staging = staging,
+        storage = %storage.display(),
+        renew_before_days = renew_before_days,
+        "Parsed ACME configuration"
+    );
+
+    Ok(AcmeConfig {
+        email,
+        domains,
+        staging,
+        storage,
+        renew_before_days,
     })
 }
 

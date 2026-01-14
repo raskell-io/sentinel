@@ -403,6 +403,7 @@ mod tests {
                 metadata: HashMap::new(),
             }],
             load_balancing: LoadBalancingAlgorithm::RoundRobin,
+            sticky_session: None,
             health_check: Some(HealthCheckConfig {
                 check_type: HealthCheckType::Http {
                     path: "/health".to_string(),

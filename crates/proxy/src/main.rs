@@ -459,35 +459,76 @@ fn run_server(
             sentinel_config::ListenerProtocol::Https => {
                 match &listener.tls {
                     Some(tls_config) => {
-                        let cert_path = tls_config.cert_file.to_string_lossy();
-                        let key_path = tls_config.key_file.to_string_lossy();
+                        // Determine certificate paths: manual or ACME-managed
+                        let (cert_path, key_path) = if let (Some(ref cert), Some(ref key)) =
+                            (&tls_config.cert_file, &tls_config.key_file)
+                        {
+                            // Manual certificates specified
+                            (cert.clone(), key.clone())
+                        } else if let Some(ref acme_config) = tls_config.acme {
+                            // ACME-managed certificates
+                            let acme_storage = &acme_config.storage;
+                            let primary_domain = acme_config.domains.first().ok_or_else(|| {
+                                error!(
+                                    listener_id = %listener.id,
+                                    "ACME configuration has no domains"
+                                );
+                            }).unwrap_or(&"default".to_string()).clone();
 
-                        // Validate certificate files exist
-                        if !tls_config.cert_file.exists() {
+                            let cert_path = acme_storage.join("domains").join(&primary_domain).join("cert.pem");
+                            let key_path = acme_storage.join("domains").join(&primary_domain).join("key.pem");
+
+                            // If ACME certificates don't exist yet, skip for now
+                            // The ACME manager will obtain them and trigger a reload
+                            if !cert_path.exists() || !key_path.exists() {
+                                info!(
+                                    listener_id = %listener.id,
+                                    address = %listener.address,
+                                    domains = ?acme_config.domains,
+                                    "ACME certificates not yet available, will be obtained on startup"
+                                );
+                                continue;
+                            }
+
+                            (cert_path, key_path)
+                        } else {
                             error!(
                                 listener_id = %listener.id,
-                                cert_file = %cert_path,
+                                "TLS configuration requires either cert-file/key-file or acme block"
+                            );
+                            continue;
+                        };
+
+                        let cert_path_str = cert_path.to_string_lossy();
+                        let key_path_str = key_path.to_string_lossy();
+
+                        // Validate certificate files exist
+                        if !cert_path.exists() {
+                            error!(
+                                listener_id = %listener.id,
+                                cert_file = %cert_path_str,
                                 "TLS certificate file not found"
                             );
                             continue;
                         }
-                        if !tls_config.key_file.exists() {
+                        if !key_path.exists() {
                             error!(
                                 listener_id = %listener.id,
-                                key_file = %key_path,
+                                key_file = %key_path_str,
                                 "TLS key file not found"
                             );
                             continue;
                         }
 
-                        match proxy_service.add_tls(&listener.address, &cert_path, &key_path) {
+                        match proxy_service.add_tls(&listener.address, &cert_path_str, &key_path_str) {
                             Ok(()) => {
                                 info!(
                                     listener_id = %listener.id,
                                     address = %listener.address,
-                                    cert_file = %cert_path,
+                                    cert_file = %cert_path_str,
                                     min_tls_version = ?tls_config.min_version,
                                     client_auth = tls_config.client_auth,
+                                    acme_enabled = tls_config.acme.is_some(),
                                     "HTTPS listening on: {}", listener.address
                                 );
                             }

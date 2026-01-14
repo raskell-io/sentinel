@@ -115,10 +115,12 @@ pub enum ListenerProtocol {
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct TlsConfig {
     /// Default certificate file path (used when no SNI match)
-    pub cert_file: PathBuf,
+    /// Optional when ACME is configured
+    pub cert_file: Option<PathBuf>,
 
     /// Default private key file path
-    pub key_file: PathBuf,
+    /// Optional when ACME is configured
+    pub key_file: Option<PathBuf>,
 
     /// Additional certificates for SNI support
     /// Maps hostname patterns to certificate configurations
@@ -150,6 +152,58 @@ pub struct TlsConfig {
     /// Session resumption
     #[serde(default = "default_session_resumption")]
     pub session_resumption: bool,
+
+    /// ACME automatic certificate management
+    /// When configured, cert_file and key_file become optional
+    pub acme: Option<AcmeConfig>,
+}
+
+/// ACME automatic certificate configuration
+///
+/// Enables zero-config TLS via Let's Encrypt and compatible CAs.
+/// When configured, Sentinel will automatically obtain, renew, and
+/// manage TLS certificates for the specified domains.
+///
+/// # Example
+///
+/// ```kdl
+/// tls {
+///     acme {
+///         email "admin@example.com"
+///         domains "example.com" "www.example.com"
+///         staging false
+///         storage "/var/lib/sentinel/acme"
+///         renew-before-days 30
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct AcmeConfig {
+    /// Contact email for Let's Encrypt account
+    /// Required for account registration and recovery
+    #[validate(email)]
+    pub email: String,
+
+    /// Domain names to obtain certificates for
+    /// At least one domain is required
+    #[validate(length(min = 1, message = "at least one domain is required"))]
+    pub domains: Vec<String>,
+
+    /// Use Let's Encrypt staging environment
+    /// Set to true for testing to avoid rate limits
+    #[serde(default)]
+    pub staging: bool,
+
+    /// Directory for storing certificates and account keys
+    /// Defaults to /var/lib/sentinel/acme
+    #[serde(default = "default_acme_storage")]
+    pub storage: PathBuf,
+
+    /// Days before expiry to trigger renewal
+    /// Let's Encrypt certificates are valid for 90 days
+    /// Default is 30 days before expiry
+    #[serde(default = "default_renewal_days")]
+    pub renew_before_days: u32,
 }
 
 /// SNI certificate configuration
@@ -203,4 +257,12 @@ fn default_ocsp_stapling() -> bool {
 
 fn default_session_resumption() -> bool {
     true
+}
+
+pub(crate) fn default_acme_storage() -> PathBuf {
+    PathBuf::from("/var/lib/sentinel/acme")
+}
+
+pub(crate) fn default_renewal_days() -> u32 {
+    30
 }

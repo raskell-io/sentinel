@@ -85,6 +85,43 @@ impl ProxyHttp for SentinelProxy {
             .and_then(|h| h.to_str().ok())
             .unwrap_or("");
 
+        // Handle ACME HTTP-01 challenges before any other processing
+        if let Some(ref challenge_manager) = self.acme_challenges {
+            if let Some(token) = crate::acme::ChallengeManager::extract_token(path) {
+                if let Some(key_authorization) = challenge_manager.get_response(token) {
+                    debug!(
+                        token = %token,
+                        "Serving ACME HTTP-01 challenge response"
+                    );
+
+                    // Build response
+                    let mut resp = ResponseHeader::build(200, None)?;
+                    resp.insert_header("Content-Type", "text/plain")?;
+                    resp.insert_header("Content-Length", key_authorization.len().to_string())?;
+
+                    // Send response
+                    session
+                        .write_response_header(Box::new(resp), false)
+                        .await?;
+                    session
+                        .write_response_body(Some(Bytes::from(key_authorization)), true)
+                        .await?;
+
+                    // Return error to signal request is complete
+                    return Err(Error::explain(
+                        ErrorType::InternalError,
+                        "ACME challenge served",
+                    ));
+                } else {
+                    // Token not found - could be a stale request or attack
+                    warn!(
+                        token = %token,
+                        "ACME challenge token not found"
+                    );
+                }
+            }
+        }
+
         ctx.method = method.to_string();
         ctx.path = path.to_string();
         ctx.host = Some(host.to_string());
@@ -577,18 +614,37 @@ impl ProxyHttp for SentinelProxy {
                 "Attempting to select upstream peer"
             );
 
-            match pool.select_peer(None).await {
-                Ok(peer) => {
+            match pool.select_peer_with_metadata(None).await {
+                Ok((peer, metadata)) => {
                     let selection_duration = selection_start.elapsed();
                     // Store selected peer address for feedback reporting in logging()
                     let peer_addr = peer.address().to_string();
                     ctx.selected_upstream_address = Some(peer_addr.clone());
+
+                    // Copy sticky session metadata to context for response_filter
+                    if metadata.get("sticky_session_new").is_some() {
+                        ctx.sticky_session_new_assignment = true;
+                        ctx.sticky_session_set_cookie =
+                            metadata.get("sticky_set_cookie_header").cloned();
+                        ctx.sticky_target_index = metadata
+                            .get("sticky_target_index")
+                            .and_then(|s| s.parse().ok());
+
+                        trace!(
+                            correlation_id = %ctx.trace_id,
+                            sticky_target_index = ?ctx.sticky_target_index,
+                            "New sticky session assignment, will set cookie"
+                        );
+                    }
+
                     debug!(
                         correlation_id = %ctx.trace_id,
                         upstream = %upstream_name,
                         peer_address = %peer_addr,
                         attempt = attempt,
                         selection_duration_us = selection_duration.as_micros(),
+                        sticky_session_hit = metadata.get("sticky_session_hit").is_some(),
+                        sticky_session_new = ctx.sticky_session_new_assignment,
                         "Selected upstream peer"
                     );
                     return Ok(Box::new(peer));
@@ -1643,6 +1699,18 @@ impl ProxyHttp for SentinelProxy {
         // Add GeoIP country header if geo lookup was performed
         if let Some(ref country_code) = ctx.geo_country_code {
             upstream_response.insert_header("X-GeoIP-Country", country_code)?;
+        }
+
+        // Add sticky session cookie if a new assignment was made
+        if ctx.sticky_session_new_assignment {
+            if let Some(ref set_cookie_header) = ctx.sticky_session_set_cookie {
+                upstream_response.insert_header("Set-Cookie", set_cookie_header)?;
+                trace!(
+                    correlation_id = %ctx.trace_id,
+                    sticky_target_index = ?ctx.sticky_target_index,
+                    "Added sticky session Set-Cookie header"
+                );
+            }
         }
 
         // Add guardrail warning header if prompt injection was detected (warn mode)

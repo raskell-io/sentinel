@@ -42,6 +42,7 @@
 // Module Declarations
 // ============================================================================
 
+pub mod acme;
 pub mod agents;
 pub mod app;
 pub mod builtin_handlers;

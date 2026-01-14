@@ -27,8 +27,8 @@ fn fixtures_path() -> PathBuf {
 fn minimal_tls_config() -> TlsConfig {
     let fixtures = fixtures_path();
     TlsConfig {
-        cert_file: fixtures.join("server-default.crt"),
-        key_file: fixtures.join("server-default.key"),
+        cert_file: Some(fixtures.join("server-default.crt")),
+        key_file: Some(fixtures.join("server-default.key")),
         additional_certs: vec![],
         ca_file: None,
         min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -37,6 +37,7 @@ fn minimal_tls_config() -> TlsConfig {
         client_auth: false,
         ocsp_stapling: false,
         session_resumption: true,
+        acme: None,
     }
 }
 
@@ -44,8 +45,8 @@ fn minimal_tls_config() -> TlsConfig {
 fn multi_sni_tls_config() -> TlsConfig {
     let fixtures = fixtures_path();
     TlsConfig {
-        cert_file: fixtures.join("server-default.crt"),
-        key_file: fixtures.join("server-default.key"),
+        cert_file: Some(fixtures.join("server-default.crt")),
+        key_file: Some(fixtures.join("server-default.key")),
         additional_certs: vec![
             SniCertificate {
                 hostnames: vec!["api.example.com".to_string()],
@@ -65,6 +66,7 @@ fn multi_sni_tls_config() -> TlsConfig {
         client_auth: false,
         ocsp_stapling: false,
         session_resumption: true,
+        acme: None,
     }
 }
 
@@ -72,8 +74,8 @@ fn multi_sni_tls_config() -> TlsConfig {
 fn wildcard_tls_config() -> TlsConfig {
     let fixtures = fixtures_path();
     TlsConfig {
-        cert_file: fixtures.join("server-default.crt"),
-        key_file: fixtures.join("server-default.key"),
+        cert_file: Some(fixtures.join("server-default.crt")),
+        key_file: Some(fixtures.join("server-default.key")),
         additional_certs: vec![SniCertificate {
             hostnames: vec!["*.example.com".to_string()],
             cert_file: fixtures.join("server-wildcard.crt"),
@@ -86,6 +88,7 @@ fn wildcard_tls_config() -> TlsConfig {
         client_auth: false,
         ocsp_stapling: false,
         session_resumption: true,
+        acme: None,
     }
 }
 
@@ -93,8 +96,8 @@ fn wildcard_tls_config() -> TlsConfig {
 fn mtls_tls_config() -> TlsConfig {
     let fixtures = fixtures_path();
     TlsConfig {
-        cert_file: fixtures.join("server-default.crt"),
-        key_file: fixtures.join("server-default.key"),
+        cert_file: Some(fixtures.join("server-default.crt")),
+        key_file: Some(fixtures.join("server-default.key")),
         additional_certs: vec![],
         ca_file: Some(fixtures.join("ca.crt")),
         min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -103,6 +106,7 @@ fn mtls_tls_config() -> TlsConfig {
         client_auth: true,
         ocsp_stapling: false,
         session_resumption: true,
+        acme: None,
     }
 }
 
@@ -238,8 +242,8 @@ mod sni_resolver {
         let fixtures = fixtures_path();
         // Create a config with both exact and wildcard for the same domain
         let config = TlsConfig {
-            cert_file: fixtures.join("server-default.crt"),
-            key_file: fixtures.join("server-default.key"),
+            cert_file: Some(fixtures.join("server-default.crt")),
+            key_file: Some(fixtures.join("server-default.key")),
             additional_certs: vec![
                 SniCertificate {
                     hostnames: vec!["*.example.com".to_string()],
@@ -259,6 +263,7 @@ mod sni_resolver {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let resolver = SniResolver::from_config(&config).unwrap();
@@ -279,8 +284,8 @@ mod sni_resolver {
     fn test_error_on_missing_cert_file() {
         let fixtures = fixtures_path();
         let config = TlsConfig {
-            cert_file: fixtures.join("nonexistent.crt"),
-            key_file: fixtures.join("server-default.key"),
+            cert_file: Some(fixtures.join("nonexistent.crt")),
+            key_file: Some(fixtures.join("server-default.key")),
             additional_certs: vec![],
             ca_file: None,
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -289,6 +294,7 @@ mod sni_resolver {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let result = SniResolver::from_config(&config);
@@ -303,8 +309,8 @@ mod sni_resolver {
     fn test_error_on_missing_key_file() {
         let fixtures = fixtures_path();
         let config = TlsConfig {
-            cert_file: fixtures.join("server-default.crt"),
-            key_file: fixtures.join("nonexistent.key"),
+            cert_file: Some(fixtures.join("server-default.crt")),
+            key_file: Some(fixtures.join("nonexistent.key")),
             additional_certs: vec![],
             ca_file: None,
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -313,6 +319,7 @@ mod sni_resolver {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let result = SniResolver::from_config(&config);
@@ -327,8 +334,8 @@ mod sni_resolver {
     fn test_error_on_missing_sni_cert_file() {
         let fixtures = fixtures_path();
         let config = TlsConfig {
-            cert_file: fixtures.join("server-default.crt"),
-            key_file: fixtures.join("server-default.key"),
+            cert_file: Some(fixtures.join("server-default.crt")),
+            key_file: Some(fixtures.join("server-default.key")),
             additional_certs: vec![SniCertificate {
                 hostnames: vec!["api.example.com".to_string()],
                 cert_file: fixtures.join("nonexistent.crt"),
@@ -341,6 +348,7 @@ mod sni_resolver {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let result = SniResolver::from_config(&config);
@@ -435,8 +443,8 @@ mod hot_reload {
 
         // Create resolver with initial certs
         let config = TlsConfig {
-            cert_file: cert_path.clone(),
-            key_file: key_path.clone(),
+            cert_file: Some(cert_path.clone()),
+            key_file: Some(key_path.clone()),
             additional_certs: vec![],
             ca_file: None,
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -445,6 +453,7 @@ mod hot_reload {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let resolver = HotReloadableSniResolver::from_config(config).unwrap();
@@ -483,8 +492,8 @@ mod hot_reload {
         std::fs::copy(fixtures.join("server-default.key"), &key_path).unwrap();
 
         let config = TlsConfig {
-            cert_file: cert_path.clone(),
-            key_file: key_path.clone(),
+            cert_file: Some(cert_path.clone()),
+            key_file: Some(key_path.clone()),
             additional_certs: vec![],
             ca_file: None,
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -493,6 +502,7 @@ mod hot_reload {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let resolver = HotReloadableSniResolver::from_config(config).unwrap();
@@ -525,8 +535,8 @@ mod hot_reload {
         std::fs::copy(fixtures.join("server-default.key"), &key_path).unwrap();
 
         let config = TlsConfig {
-            cert_file: cert_path.clone(),
-            key_file: key_path.clone(),
+            cert_file: Some(cert_path.clone()),
+            key_file: Some(key_path.clone()),
             additional_certs: vec![],
             ca_file: None,
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -535,6 +545,7 @@ mod hot_reload {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let resolver = HotReloadableSniResolver::from_config(config).unwrap();
@@ -638,8 +649,8 @@ mod certificate_reloader {
         std::fs::copy(fixtures.join("server-default.key"), &key_path).unwrap();
 
         let config2 = TlsConfig {
-            cert_file: cert_path.clone(),
-            key_file: key_path.clone(),
+            cert_file: Some(cert_path.clone()),
+            key_file: Some(key_path.clone()),
             additional_certs: vec![],
             ca_file: None,
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -648,6 +659,7 @@ mod certificate_reloader {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
         let resolver2 = Arc::new(HotReloadableSniResolver::from_config(config2).unwrap());
         reloader.register("https-will-fail", resolver2);
@@ -734,8 +746,8 @@ mod validation {
     fn test_validate_missing_cert_file() {
         let fixtures = fixtures_path();
         let config = TlsConfig {
-            cert_file: fixtures.join("nonexistent.crt"),
-            key_file: fixtures.join("server-default.key"),
+            cert_file: Some(fixtures.join("nonexistent.crt")),
+            key_file: Some(fixtures.join("server-default.key")),
             additional_certs: vec![],
             ca_file: None,
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -744,6 +756,7 @@ mod validation {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let result = validate_tls_config(&config);
@@ -760,8 +773,8 @@ mod validation {
     fn test_validate_missing_key_file() {
         let fixtures = fixtures_path();
         let config = TlsConfig {
-            cert_file: fixtures.join("server-default.crt"),
-            key_file: fixtures.join("nonexistent.key"),
+            cert_file: Some(fixtures.join("server-default.crt")),
+            key_file: Some(fixtures.join("nonexistent.key")),
             additional_certs: vec![],
             ca_file: None,
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -770,6 +783,7 @@ mod validation {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let result = validate_tls_config(&config);
@@ -786,8 +800,8 @@ mod validation {
     fn test_validate_missing_sni_cert() {
         let fixtures = fixtures_path();
         let config = TlsConfig {
-            cert_file: fixtures.join("server-default.crt"),
-            key_file: fixtures.join("server-default.key"),
+            cert_file: Some(fixtures.join("server-default.crt")),
+            key_file: Some(fixtures.join("server-default.key")),
             additional_certs: vec![SniCertificate {
                 hostnames: vec!["test.example.com".to_string()],
                 cert_file: fixtures.join("nonexistent.crt"),
@@ -800,6 +814,7 @@ mod validation {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let result = validate_tls_config(&config);
@@ -810,8 +825,8 @@ mod validation {
     fn test_validate_mtls_missing_ca_file() {
         let fixtures = fixtures_path();
         let config = TlsConfig {
-            cert_file: fixtures.join("server-default.crt"),
-            key_file: fixtures.join("server-default.key"),
+            cert_file: Some(fixtures.join("server-default.crt")),
+            key_file: Some(fixtures.join("server-default.key")),
             additional_certs: vec![],
             ca_file: Some(fixtures.join("nonexistent-ca.crt")),
             min_version: sentinel_common::types::TlsVersion::Tls12,
@@ -820,6 +835,7 @@ mod validation {
             client_auth: true,
             ocsp_stapling: false,
             session_resumption: true,
+            acme: None,
         };
 
         let result = validate_tls_config(&config);

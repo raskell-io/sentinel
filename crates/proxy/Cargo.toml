@@ -68,6 +68,9 @@ x509-parser = "0.18"
 sha2 = "0.10"
 url = "2.5"
 
+# HMAC for cookie signing (sticky sessions)
+hmac = "0.12"
+
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -141,10 +144,16 @@ futures = "0.3"
 
 # gRPC health checking
 tonic = { workspace = true }
-tonic-health = "0.14"
+tonic-health = "0.12"
 
 # HTTP client for shadow traffic and service discovery
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# ACME automatic certificate management (Let's Encrypt)
+instant-acme = "0.7"
+
+# Certificate generation for ACME
+rcgen = "0.14"
 
 [features]
 default = []

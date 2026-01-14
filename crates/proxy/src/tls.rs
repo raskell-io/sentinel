@@ -115,11 +115,21 @@ pub struct SniResolver {
 impl SniResolver {
     /// Create a new SNI resolver from TLS configuration
     pub fn from_config(config: &TlsConfig) -> Result<Self, TlsError> {
+        // Get cert_file and key_file - required for non-ACME configs
+        let (cert_file, key_file) = match (&config.cert_file, &config.key_file) {
+            (Some(cert), Some(key)) => (cert, key),
+            _ => {
+                return Err(TlsError::ConfigBuild(
+                    "TLS configuration requires cert_file and key_file".to_string(),
+                ));
+            }
+        };
+
         // Load default certificate
-        let default_cert = load_certified_key(&config.cert_file, &config.key_file)?;
+        let default_cert = load_certified_key(cert_file, key_file)?;
 
         info!(
-            cert_file = %config.cert_file.display(),
+            cert_file = %cert_file.display(),
             "Loaded default TLS certificate"
         );
 
@@ -261,8 +271,14 @@ impl HotReloadableSniResolver {
     pub fn reload(&self) -> Result<(), TlsError> {
         let config = self.config.read();
 
+        let cert_file_display = config
+            .cert_file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(acme-managed)".to_string());
+
         info!(
-            cert_file = %config.cert_file.display(),
+            cert_file = %cert_file_display,
             sni_count = config.additional_certs.len(),
             "Reloading TLS certificates"
         );
@@ -1170,18 +1186,33 @@ pub fn build_server_config(config: &TlsConfig) -> Result<ServerConfig, TlsError>
 
 /// Validate TLS configuration files exist and are readable
 pub fn validate_tls_config(config: &TlsConfig) -> Result<(), TlsError> {
-    // Check default certificate
-    if !config.cert_file.exists() {
-        return Err(TlsError::CertificateLoad(format!(
-            "Certificate file not found: {}",
-            config.cert_file.display()
-        )));
-    }
-    if !config.key_file.exists() {
-        return Err(TlsError::KeyLoad(format!(
-            "Key file not found: {}",
-            config.key_file.display()
-        )));
+    // If ACME is configured, skip manual cert file validation
+    if config.acme.is_some() {
+        // ACME-managed certificates don't need cert_file/key_file to exist
+        trace!("Skipping manual cert validation for ACME-managed TLS");
+    } else {
+        // Check default certificate (required for non-ACME configs)
+        match (&config.cert_file, &config.key_file) {
+            (Some(cert_file), Some(key_file)) => {
+                if !cert_file.exists() {
+                    return Err(TlsError::CertificateLoad(format!(
+                        "Certificate file not found: {}",
+                        cert_file.display()
+                    )));
+                }
+                if !key_file.exists() {
+                    return Err(TlsError::KeyLoad(format!(
+                        "Key file not found: {}",
+                        key_file.display()
+                    )));
+                }
+            }
+            _ => {
+                return Err(TlsError::ConfigBuild(
+                    "TLS configuration requires cert_file and key_file (or ACME block)".to_string(),
+                ));
+            }
+        }
     }
 
     // Check SNI certificates

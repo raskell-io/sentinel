@@ -66,6 +66,7 @@ mod tests {
                     metadata: std::collections::HashMap::new(),
                 }],
                 load_balancing: sentinel_common::types::LoadBalancingAlgorithm::RoundRobin,
+                sticky_session: None,
                 health_check: None,
                 connection_pool: ConnectionPoolConfig::default(),
                 timeouts: UpstreamTimeouts::default(),

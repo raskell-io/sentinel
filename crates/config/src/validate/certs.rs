@@ -13,26 +13,109 @@ pub async fn validate_certificates(config: &Config) -> ValidationResult {
 
     for listener in &config.listeners {
         if let Some(ref tls) = listener.tls {
+            // If ACME is configured, validate ACME config instead of manual certs
+            if let Some(ref acme_config) = tls.acme {
+                // Validate ACME configuration
+                if acme_config.domains.is_empty() {
+                    result.add_error(ValidationError::new(
+                        ErrorCategory::Certificate,
+                        format!(
+                            "ACME configuration for listener '{}' requires at least one domain",
+                            listener.id
+                        ),
+                    ));
+                }
+
+                // Check storage directory is writable
+                let storage_path = &acme_config.storage;
+                if storage_path.exists() && !is_dir_writable(storage_path) {
+                    result.add_error(ValidationError::new(
+                        ErrorCategory::Certificate,
+                        format!(
+                            "ACME storage directory not writable: {:?}",
+                            storage_path
+                        ),
+                    ));
+                }
+
+                // Check if existing ACME certificates need renewal
+                let primary_domain = acme_config.domains.first();
+                if let Some(domain) = primary_domain {
+                    let cert_path = storage_path
+                        .join("domains")
+                        .join(domain)
+                        .join("cert.pem");
+                    if cert_path.exists() {
+                        match load_and_validate_cert(&cert_path) {
+                            Ok(Some(expiry_warning)) => {
+                                result.add_warning(expiry_warning);
+                            }
+                            Ok(None) => {
+                                // ACME certificate is valid
+                            }
+                            Err(e) => {
+                                // ACME cert invalid, will be renewed
+                                result.add_warning(ValidationWarning::new(format!(
+                                    "ACME certificate validation failed (will be renewed): {}",
+                                    e.message
+                                )));
+                            }
+                        }
+                    }
+                }
+
+                continue;
+            }
+
+            // Manual certificate validation
+            let cert_file = match &tls.cert_file {
+                Some(path) => path,
+                None => {
+                    result.add_error(ValidationError::new(
+                        ErrorCategory::Certificate,
+                        format!(
+                            "TLS configuration for listener '{}' requires cert-file or acme block",
+                            listener.id
+                        ),
+                    ));
+                    continue;
+                }
+            };
+
+            let key_file = match &tls.key_file {
+                Some(path) => path,
+                None => {
+                    result.add_error(ValidationError::new(
+                        ErrorCategory::Certificate,
+                        format!(
+                            "TLS configuration for listener '{}' requires key-file or acme block",
+                            listener.id
+                        ),
+                    ));
+                    continue;
+                }
+            };
+
             // Check certificate file exists
-            if !Path::new(&tls.cert_file).exists() {
+            if !Path::new(cert_file).exists() {
                 result.add_error(ValidationError::new(
                     ErrorCategory::Certificate,
-                    format!("Certificate not found: {:?}", tls.cert_file),
+                    format!("Certificate not found: {:?}", cert_file),
                 ));
                 continue;
             }
 
             // Check key file exists
-            if !Path::new(&tls.key_file).exists() {
+            if !Path::new(key_file).exists() {
                 result.add_error(ValidationError::new(
                     ErrorCategory::Certificate,
-                    format!("Private key not found: {:?}", tls.key_file),
+                    format!("Private key not found: {:?}", key_file),
                 ));
                 continue;
             }
 
             // Try to load and validate the certificate
-            match load_and_validate_cert(&tls.cert_file) {
+            match load_and_validate_cert(cert_file) {
                 Ok(Some(expiry_warning)) => {
                     result.add_warning(expiry_warning);
                 }
@@ -47,6 +130,19 @@ pub async fn validate_certificates(config: &Config) -> ValidationResult {
     }
 
     result
+}
+
+/// Check if a directory is writable
+fn is_dir_writable(path: &Path) -> bool {
+    use std::fs;
+    let test_file = path.join(".sentinel_write_test");
+    match fs::write(&test_file, b"test") {
+        Ok(()) => {
+            let _ = fs::remove_file(&test_file);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Load a certificate and check its expiry
@@ -118,8 +214,8 @@ mod tests {
 
     fn test_tls_config() -> TlsConfig {
         TlsConfig {
-            cert_file: "/nonexistent/cert.pem".into(),
-            key_file: "/nonexistent/key.pem".into(),
+            cert_file: Some("/nonexistent/cert.pem".into()),
+            key_file: Some("/nonexistent/key.pem".into()),
             additional_certs: vec![],
             ca_file: None,
             min_version: TlsVersion::Tls12,
@@ -128,6 +224,7 @@ mod tests {
             client_auth: false,
             ocsp_stapling: false,
             session_resumption: false,
+            acme: None,
         }
     }
 

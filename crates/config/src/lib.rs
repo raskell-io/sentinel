@@ -610,6 +610,7 @@ impl Config {
                     metadata: HashMap::new(),
                 }],
                 load_balancing: LoadBalancingAlgorithm::RoundRobin,
+                sticky_session: None,
                 health_check: None,
                 connection_pool: ConnectionPoolConfig::default(),
                 timeouts: UpstreamTimeouts::default(),
