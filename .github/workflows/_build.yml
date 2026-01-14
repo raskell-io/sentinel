@@ -83,10 +83,21 @@ jobs:
         run: |
           pip3 install ziglang
           cargo install cargo-zigbuild
+          rustup target add aarch64-unknown-linux-gnu
 
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
+
+      - name: Add cross-compilation target (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          HOST_TARGET=$(rustc -vV | grep host | cut -d' ' -f2)
+          TARGET="${{ matrix.config.target }}"
+          if [ "$HOST_TARGET" != "$TARGET" ]; then
+            echo "Adding target $TARGET for cross-compilation"
+            rustup target add "$TARGET"
+          fi
 
       - name: Build workspace
         run: |
