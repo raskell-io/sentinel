@@ -664,14 +664,180 @@ let count = pool.correlation_affinity_count();
 
 ---
 
+## Flow Control Modes
+
+The pool supports configurable flow control behavior when an agent signals it cannot accept requests.
+
+### Configuration
+
+```rust
+use sentinel_agent_protocol::v2::{AgentPoolConfig, FlowControlMode};
+
+let config = AgentPoolConfig {
+    flow_control_mode: FlowControlMode::FailClosed, // Default
+    flow_control_wait_timeout: Duration::from_millis(100),
+    ..Default::default()
+};
+```
+
+### Available Modes
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `FailClosed` | Returns `FlowControlPaused` error immediately | Strict backpressure, caller handles error |
+| `FailOpen` | Skips agent processing, returns allow | Optional processing (logging, analytics) |
+| `WaitAndRetry` | Waits up to timeout, then fails | Transient pauses, brief congestion |
+
+### FailClosed (Default)
+
+```rust
+// Agent paused → immediate error
+match pool.send_request_headers("waf", &event).await {
+    Err(AgentProtocolError::FlowControlPaused { agent_id }) => {
+        // Return 503 to client, or use fallback
+        return Err(ServiceUnavailable);
+    }
+    Ok(response) => { /* process */ }
+}
+```
+
+### FailOpen
+
+```rust
+let config = AgentPoolConfig {
+    flow_control_mode: FlowControlMode::FailOpen,
+    ..Default::default()
+};
+
+// Agent paused → returns default allow, request proceeds
+let response = pool.send_request_headers("analytics", &event).await?;
+// response.decision == Decision::Allow (if agent was paused)
+```
+
+### WaitAndRetry
+
+```rust
+let config = AgentPoolConfig {
+    flow_control_mode: FlowControlMode::WaitAndRetry,
+    flow_control_wait_timeout: Duration::from_millis(100),
+    ..Default::default()
+};
+
+// Agent paused → waits up to 100ms for resume
+// If still paused → returns FlowControlPaused error
+```
+
+---
+
+## Buffer Size Configuration
+
+The internal channel buffer size is configurable for tuning backpressure behavior.
+
+```rust
+let config = AgentPoolConfig {
+    channel_buffer_size: 64, // Default
+    ..Default::default()
+};
+```
+
+### Tuning Guidelines
+
+| Scenario | Buffer Size | Trade-off |
+|----------|-------------|-----------|
+| Low latency | 16-32 | Tighter backpressure, earlier pause signals |
+| High throughput | 64-128 | Burst absorption, higher memory use |
+| Memory constrained | 8-16 | Lower memory, more frequent pauses |
+
+---
+
+## Sticky Sessions
+
+Sticky sessions ensure long-lived streaming connections (WebSocket, SSE, long-polling) use the same agent connection throughout their lifetime.
+
+### Creating a Sticky Session
+
+```rust
+// When a WebSocket is established
+pool.create_sticky_session("ws-12345", "waf-agent")?;
+```
+
+### Using Sticky Sessions
+
+```rust
+// All subsequent messages use the same connection
+let (response, used_sticky) = pool
+    .send_request_headers_with_sticky_session(
+        "ws-12345",      // session_id
+        "waf-agent",     // agent_id (fallback if session expired)
+        "corr-123",      // correlation_id
+        &event,
+    )
+    .await?;
+
+if used_sticky {
+    tracing::debug!("Request used sticky session");
+}
+```
+
+### Session Management
+
+```rust
+// Check if session exists
+if pool.has_sticky_session("ws-12345") {
+    // Session is active
+}
+
+// Refresh session (updates last-accessed time)
+pool.refresh_sticky_session("ws-12345");
+
+// Clear session when stream ends
+pool.clear_sticky_session("ws-12345");
+
+// Get session count for monitoring
+let active_sessions = pool.sticky_session_count();
+```
+
+### Automatic Expiry
+
+Sessions automatically expire after `sticky_session_timeout` (default: 5 minutes):
+
+```rust
+let config = AgentPoolConfig {
+    sticky_session_timeout: Some(Duration::from_secs(300)), // 5 minutes
+    ..Default::default()
+};
+
+// Disable automatic expiry
+let config = AgentPoolConfig {
+    sticky_session_timeout: None, // Only cleared explicitly
+    ..Default::default()
+};
+```
+
+The maintenance task (`run_maintenance()`) automatically cleans up expired sessions.
+
+### When to Use Sticky Sessions
+
+| Scenario | Use Sticky Sessions? |
+|----------|---------------------|
+| WebSocket connections | Yes |
+| Server-Sent Events (SSE) | Yes |
+| Long-polling | Yes |
+| HTTP/2 multiplexed streams | Maybe (per-stream) |
+| Regular HTTP requests | No (use correlation affinity) |
+
+---
+
 ## Completed Optimizations
 
 The following optimizations from the performance roadmap are now complete:
 
 - **Binary serialization**: MessagePack encoding for UDS transport (`binary-uds` feature)
 - **Zero-copy body streaming**: `send_request_body_chunk_binary()` and `send_response_body_chunk_binary()` methods
-- **Buffer size alignment**: Unified `CHANNEL_BUFFER_SIZE = 64` across all transports
+- **Buffer size configuration**: Configurable `channel_buffer_size` (default: 64)
 - **Header allocation**: SmallVec-based `HeaderValues` for inline single-value storage
-- **Flow control enforcement**: All `send_*` methods check flow control state
+- **Flow control modes**: Configurable `FlowControlMode` (FailClosed, FailOpen, WaitAndRetry)
+- **Sticky sessions**: Session affinity for long-lived streaming connections
+- **Cow header names**: Zero-allocation header name interning (see [api.md](api.md))
 
-See [performance-roadmap.md](../performance-roadmap.md) for full details.
+See [performance-roadmap.md](../performance-roadmap.md) and [benchmark-results.md](benchmark-results.md) for full details.

@@ -14,9 +14,12 @@
 //! This provides accurate rate limiting across multiple instances with minimal
 //! Redis operations (single MULTI/EXEC transaction per request).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
-use tracing::warn;
+use parking_lot::RwLock;
+use tracing::{debug, error, trace, warn};
 
 #[cfg(feature = "distributed-rate-limit")]
 use redis::aio::ConnectionManager;

@@ -479,6 +479,161 @@ let response = pool.send_request_headers("agent", &headers).await?;
 
 ---
 
+## Header Utilities
+
+The `headers` module provides optimized header types that minimize allocations in the hot path.
+
+### Zero-Allocation Header Names
+
+The `intern_header_name()` function returns static references for common HTTP headers, avoiding string allocation:
+
+```rust
+use sentinel_agent_protocol::headers::{intern_header_name, CowHeaderMap, HeaderValues};
+use std::borrow::Cow;
+
+// Known headers return static references (no allocation)
+let content_type = intern_header_name("Content-Type");
+assert!(matches!(content_type, Cow::Borrowed(_)));
+assert_eq!(content_type, "content-type"); // Normalized to lowercase
+
+// Unknown headers allocate once
+let custom = intern_header_name("X-Custom-Header");
+assert!(matches!(custom, Cow::Owned(_)));
+```
+
+### Supported Header Names
+
+32 common headers are interned as static strings:
+
+| Category | Headers |
+|----------|---------|
+| **Request** | `host`, `user-agent`, `accept`, `accept-encoding`, `accept-language`, `authorization`, `cookie`, `origin`, `referer` |
+| **Response** | `content-type`, `content-length`, `set-cookie`, `location`, `server`, `date`, `etag`, `last-modified`, `cache-control` |
+| **Caching** | `if-match`, `if-none-match`, `if-modified-since`, `vary` |
+| **Connection** | `connection`, `transfer-encoding` |
+| **Proxy** | `x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host`, `x-real-ip` |
+| **Tracing** | `x-request-id`, `x-correlation-id`, `x-trace-id`, `x-span-id` |
+
+### CowHeaderMap
+
+Use `CowHeaderMap` for zero-allocation header storage:
+
+```rust
+use sentinel_agent_protocol::headers::{
+    CowHeaderMap, HeaderValues, intern_header_name,
+    to_cow_optimized, from_cow_optimized, iter_flat_cow,
+};
+use std::collections::HashMap;
+
+// Build headers with interned names
+let mut headers = CowHeaderMap::new();
+headers.insert(
+    intern_header_name("content-type"),
+    HeaderValues::from_iter(["application/json".to_string()])
+);
+
+// Convert from standard HashMap
+let std_headers: HashMap<String, Vec<String>> = get_headers_from_somewhere();
+let cow_headers = to_cow_optimized(std_headers);
+
+// Convert back to standard format
+let std_again = from_cow_optimized(cow_headers);
+
+// Iterate without allocation
+for (name, value) in iter_flat_cow(&cow_headers) {
+    println!("{}: {}", name, value);
+}
+```
+
+### SmallVec Header Values
+
+Header values use `SmallVec<[String; 1]>` to avoid heap allocation for single-value headers (the common case):
+
+```rust
+use sentinel_agent_protocol::headers::HeaderValues;
+
+// Single value: stored inline (no heap allocation)
+let single: HeaderValues = HeaderValues::from_iter(["value".to_string()]);
+assert!(!single.spilled()); // Stored inline
+
+// Multiple values: spills to heap
+let multi: HeaderValues = HeaderValues::from_iter([
+    "value1".to_string(),
+    "value2".to_string(),
+]);
+assert!(multi.spilled()); // On heap
+```
+
+### Performance Impact
+
+| Optimization | Improvement |
+|--------------|-------------|
+| Header name interning | ~95% fewer string allocations |
+| SmallVec single values | 40% faster header creation |
+| Cow-based map | 17% faster header map building |
+
+---
+
+## Memory-Mapped Buffers (Feature: `mmap-buffers`)
+
+For large request/response bodies, enable the `mmap-buffers` feature for efficient memory-mapped storage.
+
+### Enabling the Feature
+
+```toml
+[dependencies]
+sentinel-agent-protocol = { version = "0.3", features = ["mmap-buffers"] }
+```
+
+### Using LargeBodyBuffer
+
+```rust
+use sentinel_agent_protocol::mmap_buffer::{LargeBodyBuffer, LargeBodyBufferConfig};
+
+let config = LargeBodyBufferConfig {
+    mmap_threshold: 1024 * 1024,      // 1MB - switch to mmap above this
+    max_body_size: 100 * 1024 * 1024, // 100MB max
+    temp_dir: None,                    // Use system temp
+};
+
+let mut buffer = LargeBodyBuffer::with_config(config);
+
+// Write chunks (automatically uses mmap for large bodies)
+buffer.write_chunk(chunk1)?;
+buffer.write_chunk(chunk2)?;
+
+// Read back
+let data = buffer.as_slice()?;
+
+// Check storage type
+if buffer.is_mmap() {
+    println!("Using memory-mapped storage");
+}
+
+// Convert to Vec (reads mmap into memory)
+let vec = buffer.into_vec()?;
+```
+
+### Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `mmap_threshold` | 1MB | Size above which to use mmap |
+| `max_body_size` | 100MB | Maximum allowed body size |
+| `temp_dir` | System temp | Directory for temp files |
+
+### When to Use
+
+| Scenario | Use mmap-buffers? |
+|----------|------------------|
+| File uploads > 1MB | Yes |
+| Large API responses | Yes |
+| Streaming media | Yes |
+| Small JSON payloads | No (overhead not worth it) |
+| Memory-constrained environments | Yes |
+
+---
+
 ## Best Practices
 
 1. **Use AgentPool for production**: The pool handles connection management, health tracking, and load balancing automatically.
@@ -491,7 +646,11 @@ let response = pool.send_request_headers("agent", &headers).await?;
 
 5. **Use UDS for co-located agents**: UDS provides significantly lower latency than gRPC for local communication.
 
-6. **Implement graceful shutdown**: Cancel pending requests before shutting down.
+6. **Use header interning**: Call `intern_header_name()` when building header maps to minimize allocations.
+
+7. **Enable mmap-buffers for large bodies**: For file uploads or large responses, use the `mmap-buffers` feature.
+
+8. **Implement graceful shutdown**: Cancel pending requests before shutting down.
 
 ```rust
 // Graceful shutdown
