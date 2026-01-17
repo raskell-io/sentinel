@@ -14,7 +14,7 @@ use std::sync::{Arc, Once};
 use std::thread;
 use std::time::Duration;
 
-use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair};
+use rcgen::{CertificateParams, DistinguishedName, DnType, Issuer, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
@@ -45,8 +45,27 @@ fn fixtures_path() -> PathBuf {
 // Certificate Generation Utilities
 // ============================================================================
 
+/// A CA with its parameters, certificate, and key pair
+struct CaBundle {
+    params: CertificateParams,
+    cert_der: Vec<u8>,
+    key_pair: KeyPair,
+}
+
+impl CaBundle {
+    /// Create an Issuer for signing certificates
+    fn issuer(&self) -> Issuer<'_, &KeyPair> {
+        Issuer::from_params(&self.params, &self.key_pair)
+    }
+
+    /// Get the CA certificate DER bytes
+    fn cert_der(&self) -> &[u8] {
+        &self.cert_der
+    }
+}
+
 /// Generate a CA certificate and key pair for testing
-fn generate_ca() -> (Certificate, KeyPair) {
+fn generate_ca() -> CaBundle {
     let mut params = CertificateParams::default();
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
@@ -57,11 +76,44 @@ fn generate_ca() -> (Certificate, KeyPair) {
 
     let key_pair = KeyPair::generate().unwrap();
     let cert = params.self_signed(&key_pair).unwrap();
-    (cert, key_pair)
+    let cert_der = cert.der().to_vec();
+
+    CaBundle {
+        params,
+        cert_der,
+        key_pair,
+    }
+}
+
+/// A certificate bundle with DER bytes and key pair
+struct CertBundle {
+    cert_der: Vec<u8>,
+    key_pair: KeyPair,
+}
+
+impl CertBundle {
+    fn cert_der(&self) -> &[u8] {
+        &self.cert_der
+    }
+
+    fn key_der(&self) -> Vec<u8> {
+        self.key_pair.serialize_der()
+    }
+
+    fn pem(&self) -> String {
+        // Convert DER to PEM format
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&self.cert_der);
+        format!("-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n", b64)
+    }
+
+    fn key_pem(&self) -> String {
+        self.key_pair.serialize_pem()
+    }
 }
 
 /// Generate a server certificate signed by the CA
-fn generate_server_cert(ca_cert: &Certificate, ca_key: &KeyPair) -> (Certificate, KeyPair) {
+fn generate_server_cert(ca: &CaBundle) -> CertBundle {
     let mut params = CertificateParams::default();
 
     let mut dn = DistinguishedName::new();
@@ -75,13 +127,16 @@ fn generate_server_cert(ca_cert: &Certificate, ca_key: &KeyPair) -> (Certificate
     ];
 
     let key_pair = KeyPair::generate().unwrap();
-    let issuer = ca_cert.issuer().chain(ca_key);
-    let cert = params.signed_by(&key_pair, &issuer).unwrap();
-    (cert, key_pair)
+    let cert = params.signed_by(&key_pair, &ca.issuer()).unwrap();
+
+    CertBundle {
+        cert_der: cert.der().to_vec(),
+        key_pair,
+    }
 }
 
 /// Generate a client certificate signed by the CA
-fn generate_client_cert(ca_cert: &Certificate, ca_key: &KeyPair) -> (Certificate, KeyPair) {
+fn generate_client_cert(ca: &CaBundle) -> CertBundle {
     let mut params = CertificateParams::default();
 
     let mut dn = DistinguishedName::new();
@@ -92,9 +147,12 @@ fn generate_client_cert(ca_cert: &Certificate, ca_key: &KeyPair) -> (Certificate
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
 
     let key_pair = KeyPair::generate().unwrap();
-    let issuer = ca_cert.issuer().chain(ca_key);
-    let cert = params.signed_by(&key_pair, &issuer).unwrap();
-    (cert, key_pair)
+    let cert = params.signed_by(&key_pair, &ca.issuer()).unwrap();
+
+    CertBundle {
+        cert_der: cert.der().to_vec(),
+        key_pair,
+    }
 }
 
 // ============================================================================
@@ -236,15 +294,15 @@ mod integration {
         ensure_crypto_provider();
 
         // Generate certificates
-        let (ca_cert, ca_key) = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
-        let (client_cert, client_key) = generate_client_cert(&ca_cert, &ca_key);
+        let ca = generate_ca();
+        let server_cert = generate_server_cert(&ca);
+        let client_cert = generate_client_cert(&ca);
 
         // Start mTLS server
         let server = MtlsServer::start(
-            ca_cert.der().to_vec(),
-            server_cert.der().to_vec(),
-            server_key.serialize_der(),
+            ca.cert_der().to_vec(),
+            server_cert.cert_der().to_vec(),
+            server_cert.key_der(),
         )
         .expect("Failed to start mTLS server");
 
@@ -254,12 +312,12 @@ mod integration {
         // Build client config with our client certificate
         let mut root_store = RootCertStore::empty();
         root_store
-            .add(CertificateDer::from(ca_cert.der().to_vec()))
+            .add(CertificateDer::from(ca.cert_der().to_vec()))
             .unwrap();
 
-        let client_cert_der = CertificateDer::from(client_cert.der().to_vec());
+        let client_cert_der = CertificateDer::from(client_cert.cert_der().to_vec());
         let client_key_der =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_key.serialize_der()));
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
 
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
@@ -311,14 +369,14 @@ mod integration {
         ensure_crypto_provider();
 
         // Generate certificates
-        let (ca_cert, ca_key) = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
+        let ca = generate_ca();
+        let server_cert = generate_server_cert(&ca);
 
         // Start mTLS server
         let server = MtlsServer::start(
-            ca_cert.der().to_vec(),
-            server_cert.der().to_vec(),
-            server_key.serialize_der(),
+            ca.cert_der().to_vec(),
+            server_cert.cert_der().to_vec(),
+            server_cert.key_der(),
         )
         .expect("Failed to start mTLS server");
 
@@ -328,7 +386,7 @@ mod integration {
         // Build client config WITHOUT client certificate
         let mut root_store = RootCertStore::empty();
         root_store
-            .add(CertificateDer::from(ca_cert.der().to_vec()))
+            .add(CertificateDer::from(ca.cert_der().to_vec()))
             .unwrap();
 
         let client_config = ClientConfig::builder()
@@ -384,19 +442,18 @@ mod integration {
         ensure_crypto_provider();
 
         // Generate server CA and certs
-        let (ca_cert, ca_key) = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
+        let ca = generate_ca();
+        let server_cert = generate_server_cert(&ca);
 
         // Generate a DIFFERENT CA for client cert (untrusted)
-        let (untrusted_ca_cert, untrusted_ca_key) = generate_ca();
-        let (client_cert, client_key) =
-            generate_client_cert(&untrusted_ca_cert, &untrusted_ca_key);
+        let untrusted_ca = generate_ca();
+        let client_cert = generate_client_cert(&untrusted_ca);
 
         // Start mTLS server (only trusts the first CA)
         let server = MtlsServer::start(
-            ca_cert.der().to_vec(),
-            server_cert.der().to_vec(),
-            server_key.serialize_der(),
+            ca.cert_der().to_vec(),
+            server_cert.cert_der().to_vec(),
+            server_cert.key_der(),
         )
         .expect("Failed to start mTLS server");
 
@@ -406,12 +463,12 @@ mod integration {
         // Build client config with untrusted client certificate
         let mut root_store = RootCertStore::empty();
         root_store
-            .add(CertificateDer::from(ca_cert.der().to_vec()))
+            .add(CertificateDer::from(ca.cert_der().to_vec()))
             .unwrap();
 
-        let client_cert_der = CertificateDer::from(client_cert.der().to_vec());
+        let client_cert_der = CertificateDer::from(client_cert.cert_der().to_vec());
         let client_key_der =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_key.serialize_der()));
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
 
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
@@ -552,8 +609,8 @@ mod load_client_cert_key_tests {
         ensure_crypto_provider();
 
         // Generate CA and client cert
-        let (ca_cert, ca_key) = generate_ca();
-        let (client_cert, client_key) = generate_client_cert(&ca_cert, &ca_key);
+        let ca = generate_ca();
+        let client_cert = generate_client_cert(&ca);
 
         // Write to temp files
         let temp_dir = tempfile::tempdir().unwrap();
@@ -561,7 +618,7 @@ mod load_client_cert_key_tests {
         let key_path = temp_dir.path().join("client.key");
 
         std::fs::write(&cert_path, client_cert.pem()).unwrap();
-        std::fs::write(&key_path, client_key.serialize_pem()).unwrap();
+        std::fs::write(&key_path, client_cert.key_pem()).unwrap();
 
         // Load using our function
         let result = load_client_cert_key(&cert_path, &key_path);
@@ -588,15 +645,15 @@ mod async_tests {
         ensure_crypto_provider();
 
         // Generate certificates
-        let (ca_cert, ca_key) = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
-        let (client_cert, client_key) = generate_client_cert(&ca_cert, &ca_key);
+        let ca = generate_ca();
+        let server_cert = generate_server_cert(&ca);
+        let client_cert = generate_client_cert(&ca);
 
         // Start mTLS server (runs in a thread)
         let server = MtlsServer::start(
-            ca_cert.der().to_vec(),
-            server_cert.der().to_vec(),
-            server_key.serialize_der(),
+            ca.cert_der().to_vec(),
+            server_cert.cert_der().to_vec(),
+            server_cert.key_der(),
         )
         .expect("Failed to start mTLS server");
 
@@ -606,12 +663,12 @@ mod async_tests {
         // Build async client config
         let mut root_store = RootCertStore::empty();
         root_store
-            .add(CertificateDer::from(ca_cert.der().to_vec()))
+            .add(CertificateDer::from(ca.cert_der().to_vec()))
             .unwrap();
 
-        let client_cert_der = CertificateDer::from(client_cert.der().to_vec());
+        let client_cert_der = CertificateDer::from(client_cert.cert_der().to_vec());
         let client_key_der =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_key.serialize_der()));
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
 
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
@@ -655,14 +712,14 @@ mod async_tests {
         ensure_crypto_provider();
 
         // Generate certificates
-        let (ca_cert, ca_key) = generate_ca();
-        let (server_cert, server_key) = generate_server_cert(&ca_cert, &ca_key);
+        let ca = generate_ca();
+        let server_cert = generate_server_cert(&ca);
 
         // Start mTLS server
         let server = MtlsServer::start(
-            ca_cert.der().to_vec(),
-            server_cert.der().to_vec(),
-            server_key.serialize_der(),
+            ca.cert_der().to_vec(),
+            server_cert.cert_der().to_vec(),
+            server_cert.key_der(),
         )
         .expect("Failed to start mTLS server");
 
@@ -671,7 +728,7 @@ mod async_tests {
         // Build client config WITHOUT client cert
         let mut root_store = RootCertStore::empty();
         root_store
-            .add(CertificateDer::from(ca_cert.der().to_vec()))
+            .add(CertificateDer::from(ca.cert_der().to_vec()))
             .unwrap();
 
         let client_config = ClientConfig::builder()
