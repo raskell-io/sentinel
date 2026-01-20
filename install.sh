@@ -5,6 +5,12 @@
 # This script detects your OS and architecture, downloads the appropriate
 # pre-built binary, and installs it to /usr/local/bin (or ~/.local/bin if
 # /usr/local/bin is not writable).
+#
+# After installation, use `sentinel bundle install` to install bundled agents
+# (WAF, rate limiter, denylist). See https://sentinel.raskell.io/docs/deployment/bundle/
+#
+# Options:
+#   --help      Show help message
 
 set -e
 
@@ -186,9 +192,53 @@ check_path() {
     esac
 }
 
+# Show help message
+show_help() {
+    cat << EOF
+Sentinel Install Script
+
+Usage: curl -fsSL https://raw.githubusercontent.com/raskell-io/sentinel/main/install.sh | sh
+
+Options:
+    --help      Show this help message
+
+After installing Sentinel, you can install bundled agents using:
+
+    sudo sentinel bundle install
+
+This downloads and installs:
+    - WAF agent (ModSecurity-based firewall)
+    - Rate limit agent (token bucket limiting)
+    - Denylist agent (IP/path blocking)
+
+See the bundle command documentation:
+    https://sentinel.raskell.io/docs/deployment/bundle/
+
+For more information: https://sentinel.raskell.io/docs
+EOF
+}
+
+# Parse command line arguments
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                warn "Unknown option: $1"
+                ;;
+        esac
+        shift
+    done
+}
+
 # Main installation
 main() {
+    parse_args "$@"
     echo ""
+
     printf "${BLUE}┌─────────────────────────────────────┐${NC}\n"
     printf "${BLUE}│${NC}     ${GREEN}Sentinel${NC} Installer              ${BLUE}│${NC}\n"
     printf "${BLUE}│${NC}     Security-first reverse proxy    ${BLUE}│${NC}\n"
@@ -208,17 +258,17 @@ main() {
         error "Linux ARM64 binaries are not yet available. Please build from source or use Docker."
     fi
 
-    # Get latest version
+    # Create temporary directory
+    local tmp_dir=$(mktemp -d)
+    trap "rm -rf '$tmp_dir'" EXIT
+
+    # Download and install
     info "Fetching latest release..."
     local version=$(get_latest_version)
     if [ -z "$version" ]; then
         error "Could not determine latest version"
     fi
     info "Latest version: ${version}"
-
-    # Create temporary directory
-    local tmp_dir=$(mktemp -d)
-    trap "rm -rf '$tmp_dir'" EXIT
 
     # Download and extract
     download_binary "$version" "$os" "$arch" "$tmp_dir"
@@ -259,6 +309,11 @@ main() {
     echo ""
     printf "Documentation: ${BLUE}https://sentinel.raskell.io${NC}\n"
     printf "GitHub: ${BLUE}https://github.com/${REPO}${NC}\n"
+    echo ""
+
+    # Hint about bundled agents
+    printf "${YELLOW}Tip:${NC} To install bundled agents (WAF, rate limiter, denylist):\n"
+    printf "     ${GREEN}sudo sentinel bundle install${NC}\n"
     echo ""
 }
 

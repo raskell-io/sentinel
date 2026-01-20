@@ -80,6 +80,9 @@ pub mod upstream;
 pub mod validation;
 pub mod websocket;
 
+// Bundle management (agent installation)
+pub mod bundle;
+
 // ============================================================================
 // Public API Re-exports
 // ============================================================================

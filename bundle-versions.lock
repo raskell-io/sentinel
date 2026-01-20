@@ -1,0 +1,31 @@
+# Sentinel Distribution Bundle - Version Lock File
+#
+# This file pins the agent versions included in the bundle distribution.
+# Bundle CI fetches these specific versions for reproducible builds.
+#
+# Update via PR when agents release new versions.
+# Format: CalVer for bundle, SemVer for agents
+
+[bundle]
+# Bundle version (CalVer: YY.MM_PATCH)
+version = "26.01_1"
+
+[agents]
+# Core agents included in the bundle
+waf = "0.2.0"
+ratelimit = "0.2.0"
+denylist = "0.2.0"
+
+# Echo agent is built from this repo, version matches proxy
+# echo = "from-source"
+
+[repositories]
+# GitHub repositories for each agent
+waf = "raskell-io/sentinel-agent-waf"
+ratelimit = "raskell-io/sentinel-agent-ratelimit"
+denylist = "raskell-io/sentinel-agent-denylist"
+
+[checksums]
+# SHA256 checksums for verification (updated by release CI)
+# Format: agent-version-os-arch = "sha256:..."
+# These are populated during bundle build

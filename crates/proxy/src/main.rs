@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use sentinel_config::Config;
+use sentinel_proxy::bundle::{run_bundle_command, BundleArgs};
 use sentinel_proxy::{ReloadTrigger, SentinelProxy, SignalManager, SignalType};
 
 /// Version string combining Cargo semver and CalVer release tag
@@ -101,6 +102,9 @@ enum Commands {
         #[arg(short = 'c', long = "config")]
         config: Option<String>,
     },
+
+    /// Manage bundled agents (install, status, update)
+    Bundle(BundleArgs),
 }
 
 fn main() -> Result<()> {
@@ -135,6 +139,14 @@ fn main() -> Result<()> {
             skip_certs,
         ),
         Some(Commands::Lint { config }) => lint_config(config.as_deref().or(cli.config.as_deref())),
+        Some(Commands::Bundle(args)) => {
+            // Initialize minimal logging for bundle commands
+            tracing_subscriber::fmt()
+                .with_target(false)
+                .with_level(true)
+                .init();
+            run_bundle_command(args)
+        }
         None => {
             // Default: run the server
             run_server(cli.config, cli.verbose, cli.daemon, cli.upgrade)
