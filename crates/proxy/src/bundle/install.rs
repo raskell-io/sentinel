@@ -222,18 +222,90 @@ fn parse_version_output(output: &str) -> Option<String> {
 /// Generate a default configuration file for an agent
 pub fn generate_default_config(agent_name: &str) -> String {
     match agent_name {
-        "waf" => include_str!("../../../../deploy/bundle/agents/waf.yaml").to_string(),
-        "ratelimit" => include_str!("../../../../deploy/bundle/agents/ratelimit.yaml").to_string(),
-        "denylist" => include_str!("../../../../deploy/bundle/agents/denylist.yaml").to_string(),
+        "waf" => r#"# WAF Agent Configuration
+# ModSecurity-based Web Application Firewall
+# See https://sentinel.raskell.io/docs/agents/waf
+
+socket:
+  path: /var/run/sentinel/waf.sock
+  mode: 0660
+
+logging:
+  level: info
+  format: json
+
+modsecurity:
+  engine: "On"
+
+crs:
+  paranoia_level: 1
+  inbound_anomaly_score_threshold: 5
+  outbound_anomaly_score_threshold: 4
+"#
+        .to_string(),
+
+        "ratelimit" => r#"# Rate Limit Agent Configuration
+# Token bucket rate limiting
+# See https://sentinel.raskell.io/docs/agents/ratelimit
+
+socket:
+  path: /var/run/sentinel/ratelimit.sock
+  mode: 0660
+
+logging:
+  level: info
+  format: json
+
+rules:
+  - name: default
+    match:
+      path_prefix: /
+    limit:
+      requests_per_second: 100
+      burst: 200
+    key: client_ip
+"#
+        .to_string(),
+
+        "denylist" => r#"# Denylist Agent Configuration
+# IP and path blocking
+# See https://sentinel.raskell.io/docs/agents/denylist
+
+socket:
+  path: /var/run/sentinel/denylist.sock
+  mode: 0660
+
+logging:
+  level: info
+  format: json
+
+ip_denylist:
+  enabled: true
+  # Add IPs to block:
+  # ips:
+  #   - 192.168.1.100
+  #   - 10.0.0.0/8
+
+path_denylist:
+  enabled: true
+  patterns:
+    - ".*\\.php$"
+    - "/wp-admin.*"
+    - "/wp-login.*"
+    - "/.env"
+    - "/\\.git.*"
+"#
+        .to_string(),
+
         _ => format!(
             "# {} agent configuration\n\
              # See https://sentinel.raskell.io/docs/agents/{}\n\n\
              socket:\n\
-             \x20 path: /var/run/sentinel/{}.sock\n\
-             \x20 mode: 0660\n\n\
+               path: /var/run/sentinel/{}.sock\n\
+               mode: 0660\n\n\
              logging:\n\
-             \x20 level: info\n\
-             \x20 format: json\n",
+               level: info\n\
+               format: json\n",
             agent_name, agent_name, agent_name
         ),
     }
