@@ -205,14 +205,16 @@ mod tests {
 
     #[test]
     fn test_status_display() {
-        let status = AgentStatus {
-            name: "waf".to_string(),
-            expected_version: "0.2.0".to_string(),
-            installed_version: Some("0.2.0".to_string()),
-            status: Status::UpToDate,
-        };
+        assert_eq!(format!("{}", Status::UpToDate), "up to date");
+        assert_eq!(format!("{}", Status::Outdated), "outdated");
+        assert_eq!(format!("{}", Status::NotInstalled), "not installed");
+        assert_eq!(format!("{}", Status::BuiltIn), "built-in");
+    }
 
-        assert_eq!(format!("{}", status.status), "up to date");
+    #[test]
+    fn test_status_equality() {
+        assert_eq!(Status::UpToDate, Status::UpToDate);
+        assert_ne!(Status::UpToDate, Status::Outdated);
     }
 
     #[test]
@@ -240,5 +242,254 @@ mod tests {
         assert_eq!(summary.total, 2);
         assert_eq!(summary.up_to_date, 1);
         assert_eq!(summary.not_installed, 1);
+        assert_eq!(summary.outdated, 0);
+        assert_eq!(summary.built_in, 0);
+    }
+
+    #[test]
+    fn test_bundle_status_summary_all_types() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![
+                AgentStatus {
+                    name: "waf".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.2.0".to_string()),
+                    status: Status::UpToDate,
+                },
+                AgentStatus {
+                    name: "ratelimit".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.1.0".to_string()),
+                    status: Status::Outdated,
+                },
+                AgentStatus {
+                    name: "denylist".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: None,
+                    status: Status::NotInstalled,
+                },
+                AgentStatus {
+                    name: "echo".to_string(),
+                    expected_version: "built-in".to_string(),
+                    installed_version: Some("built-in".to_string()),
+                    status: Status::BuiltIn,
+                },
+            ],
+            paths: InstallPaths::user(),
+        };
+
+        let summary = status.summary();
+        assert_eq!(summary.total, 4);
+        assert_eq!(summary.up_to_date, 1);
+        assert_eq!(summary.outdated, 1);
+        assert_eq!(summary.not_installed, 1);
+        assert_eq!(summary.built_in, 1);
+    }
+
+    #[test]
+    fn test_is_complete_true() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![
+                AgentStatus {
+                    name: "waf".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.2.0".to_string()),
+                    status: Status::UpToDate,
+                },
+                AgentStatus {
+                    name: "echo".to_string(),
+                    expected_version: "built-in".to_string(),
+                    installed_version: Some("built-in".to_string()),
+                    status: Status::BuiltIn,
+                },
+            ],
+            paths: InstallPaths::user(),
+        };
+
+        assert!(status.is_complete());
+    }
+
+    #[test]
+    fn test_is_complete_false_not_installed() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![
+                AgentStatus {
+                    name: "waf".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: None,
+                    status: Status::NotInstalled,
+                },
+            ],
+            paths: InstallPaths::user(),
+        };
+
+        assert!(!status.is_complete());
+    }
+
+    #[test]
+    fn test_is_complete_false_outdated() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![
+                AgentStatus {
+                    name: "waf".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.1.0".to_string()),
+                    status: Status::Outdated,
+                },
+            ],
+            paths: InstallPaths::user(),
+        };
+
+        assert!(!status.is_complete());
+    }
+
+    #[test]
+    fn test_pending_agents() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![
+                AgentStatus {
+                    name: "waf".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.2.0".to_string()),
+                    status: Status::UpToDate,
+                },
+                AgentStatus {
+                    name: "ratelimit".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.1.0".to_string()),
+                    status: Status::Outdated,
+                },
+                AgentStatus {
+                    name: "denylist".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: None,
+                    status: Status::NotInstalled,
+                },
+            ],
+            paths: InstallPaths::user(),
+        };
+
+        let pending = status.pending_agents();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().any(|a| a.name == "ratelimit"));
+        assert!(pending.iter().any(|a| a.name == "denylist"));
+        assert!(!pending.iter().any(|a| a.name == "waf"));
+    }
+
+    #[test]
+    fn test_pending_agents_empty() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![
+                AgentStatus {
+                    name: "waf".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.2.0".to_string()),
+                    status: Status::UpToDate,
+                },
+            ],
+            paths: InstallPaths::user(),
+        };
+
+        assert!(status.pending_agents().is_empty());
+    }
+
+    #[test]
+    fn test_display_output_contains_header() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![],
+            paths: InstallPaths::user(),
+        };
+
+        let output = status.display();
+        assert!(output.contains("Sentinel Bundle Status"));
+        assert!(output.contains("Bundle version: 26.01_1"));
+    }
+
+    #[test]
+    fn test_display_output_contains_agents() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![
+                AgentStatus {
+                    name: "waf".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.2.0".to_string()),
+                    status: Status::UpToDate,
+                },
+                AgentStatus {
+                    name: "ratelimit".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: None,
+                    status: Status::NotInstalled,
+                },
+            ],
+            paths: InstallPaths::user(),
+        };
+
+        let output = status.display();
+        assert!(output.contains("waf"));
+        assert!(output.contains("ratelimit"));
+        assert!(output.contains("0.2.0"));
+        assert!(output.contains("✓")); // up to date icon
+        assert!(output.contains("✗")); // not installed icon
+    }
+
+    #[test]
+    fn test_display_output_contains_summary() {
+        let status = BundleStatus {
+            bundle_version: "26.01_1".to_string(),
+            agents: vec![
+                AgentStatus {
+                    name: "waf".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: Some("0.2.0".to_string()),
+                    status: Status::UpToDate,
+                },
+                AgentStatus {
+                    name: "ratelimit".to_string(),
+                    expected_version: "0.2.0".to_string(),
+                    installed_version: None,
+                    status: Status::NotInstalled,
+                },
+            ],
+            paths: InstallPaths::user(),
+        };
+
+        let output = status.display();
+        assert!(output.contains("Total: 2"));
+        assert!(output.contains("Up to date: 1"));
+        assert!(output.contains("Not installed: 1"));
+    }
+
+    #[test]
+    fn test_agent_status_fields() {
+        let status = AgentStatus {
+            name: "test".to_string(),
+            expected_version: "1.0.0".to_string(),
+            installed_version: Some("0.9.0".to_string()),
+            status: Status::Outdated,
+        };
+
+        assert_eq!(status.name, "test");
+        assert_eq!(status.expected_version, "1.0.0");
+        assert_eq!(status.installed_version, Some("0.9.0".to_string()));
+        assert_eq!(status.status, Status::Outdated);
+    }
+
+    #[test]
+    fn test_status_summary_default() {
+        let summary = StatusSummary::default();
+        assert_eq!(summary.total, 0);
+        assert_eq!(summary.up_to_date, 0);
+        assert_eq!(summary.outdated, 0);
+        assert_eq!(summary.not_installed, 0);
+        assert_eq!(summary.built_in, 0);
     }
 }

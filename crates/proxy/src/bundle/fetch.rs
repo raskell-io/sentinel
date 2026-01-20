@@ -295,6 +295,7 @@ impl Iterator for WalkDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn test_detect_platform() {
@@ -317,5 +318,148 @@ mod tests {
 
         #[cfg(target_arch = "aarch64")]
         assert_eq!(arch, "arm64");
+    }
+
+    #[test]
+    fn test_detect_os_is_known() {
+        let os = detect_os();
+        assert!(
+            ["linux", "darwin", "windows", "unknown"].contains(&os),
+            "Unexpected OS: {}",
+            os
+        );
+    }
+
+    #[test]
+    fn test_detect_arch_is_known() {
+        let arch = detect_arch();
+        assert!(
+            ["amd64", "arm64", "unknown"].contains(&arch),
+            "Unexpected arch: {}",
+            arch
+        );
+    }
+
+    #[test]
+    fn test_find_binary_direct() {
+        let temp = tempfile::tempdir().unwrap();
+        let binary_name = "test-binary";
+
+        // Create binary at top level
+        std::fs::write(temp.path().join(binary_name), "binary content").unwrap();
+
+        let result = find_binary(temp.path(), binary_name);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().file_name().unwrap(), binary_name);
+    }
+
+    #[test]
+    fn test_find_binary_in_bin_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let binary_name = "test-binary";
+
+        // Create binary in bin/ subdirectory
+        let bin_dir = temp.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join(binary_name), "binary content").unwrap();
+
+        let result = find_binary(temp.path(), binary_name);
+        assert!(result.is_ok());
+        assert!(result.unwrap().to_string_lossy().contains("bin"));
+    }
+
+    #[test]
+    fn test_find_binary_nested() {
+        let temp = tempfile::tempdir().unwrap();
+        let binary_name = "sentinel-waf-agent";
+
+        // Create deeply nested structure (like some release artifacts)
+        let nested = temp.path().join("sentinel-waf-agent-0.2.0").join("bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join(binary_name), "binary content").unwrap();
+
+        let result = find_binary(temp.path(), binary_name);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_find_binary_not_found() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let result = find_binary(temp.path(), "nonexistent-binary");
+        assert!(matches!(result, Err(FetchError::BinaryNotFound(_))));
+    }
+
+    #[test]
+    fn test_extract_archive_valid_tarball() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use tar::Builder;
+
+        let temp = tempfile::tempdir().unwrap();
+        let binary_name = "test-binary";
+
+        // Create a valid tar.gz archive in memory
+        let mut archive_data = Vec::new();
+        {
+            let encoder = GzEncoder::new(&mut archive_data, Compression::default());
+            let mut builder = Builder::new(encoder);
+
+            // Add a file to the archive
+            let binary_content = b"#!/bin/sh\necho hello";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(binary_content.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+
+            builder
+                .append_data(&mut header, binary_name, &binary_content[..])
+                .unwrap();
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        let result = extract_archive(&archive_data, binary_name, temp.path());
+        assert!(result.is_ok());
+
+        let binary_path = result.unwrap();
+        assert!(binary_path.exists());
+    }
+
+    #[test]
+    fn test_extract_archive_invalid_gzip() {
+        let temp = tempfile::tempdir().unwrap();
+        let invalid_data = b"this is not a gzip file";
+
+        let result = extract_archive(invalid_data, "binary", temp.path());
+        assert!(matches!(result, Err(FetchError::Extract(_))));
+    }
+
+    #[test]
+    fn test_download_result_fields() {
+        let result = DownloadResult {
+            binary_path: PathBuf::from("/tmp/test"),
+            archive_size: 1024,
+            checksum_verified: true,
+        };
+
+        assert_eq!(result.archive_size, 1024);
+        assert!(result.checksum_verified);
+    }
+
+    #[test]
+    fn test_fetch_error_display() {
+        let err = FetchError::ChecksumMismatch {
+            agent: "waf".to_string(),
+        };
+        assert!(err.to_string().contains("waf"));
+
+        let err = FetchError::BinaryNotFound("test".to_string());
+        assert!(err.to_string().contains("test"));
+
+        let err = FetchError::DownloadFailed {
+            url: "https://example.com".to_string(),
+            status: 404,
+        };
+        assert!(err.to_string().contains("404"));
     }
 }

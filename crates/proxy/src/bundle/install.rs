@@ -427,19 +427,234 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_version_multiline() {
+        let output = "sentinel-waf-agent\nversion: 0.2.0\nbuilt with rustc";
+        assert_eq!(parse_version_output(output), Some("0.2.0".to_string()));
+    }
+
+    #[test]
+    fn test_parse_version_with_v_prefix() {
+        // Version number must start with digit, so "v0.2.0" wouldn't match
+        assert_eq!(
+            parse_version_output("version v0.2.0"),
+            None // v0.2.0 starts with 'v', not a digit
+        );
+        // Test with version number not in parentheses
+        assert_eq!(
+            parse_version_output("myapp v0.2.0 version 0.2.0"),
+            Some("0.2.0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_install_paths_system() {
+        let paths = InstallPaths::system();
+        assert!(paths.system_wide);
+        assert_eq!(paths.bin_dir, PathBuf::from("/usr/local/bin"));
+        assert_eq!(paths.config_dir, PathBuf::from("/etc/sentinel/agents"));
+        assert_eq!(
+            paths.systemd_dir,
+            Some(PathBuf::from("/etc/systemd/system"))
+        );
+    }
+
+    #[test]
     fn test_install_paths_user() {
         let paths = InstallPaths::user();
         assert!(!paths.system_wide);
         assert!(paths.bin_dir.to_string_lossy().contains(".local"));
+        assert!(paths.config_dir.to_string_lossy().contains(".config"));
     }
 
     #[test]
-    fn test_generate_default_config() {
+    fn test_install_paths_with_prefix() {
+        let paths = InstallPaths::with_prefix(Path::new("/opt/sentinel"));
+        assert!(!paths.system_wide);
+        assert_eq!(paths.bin_dir, PathBuf::from("/opt/sentinel/bin"));
+        assert_eq!(
+            paths.config_dir,
+            PathBuf::from("/opt/sentinel/etc/sentinel/agents")
+        );
+    }
+
+    #[test]
+    fn test_generate_default_config_waf() {
         let config = generate_default_config("waf");
         assert!(config.contains("socket:"));
-        assert!(config.contains("modsecurity:") || config.contains("waf"));
+        assert!(config.contains("modsecurity:"));
+        assert!(config.contains("crs:"));
+        assert!(config.contains("paranoia_level"));
+        assert!(config.contains("/var/run/sentinel/waf.sock"));
+    }
 
-        let unknown = generate_default_config("unknown");
-        assert!(unknown.contains("unknown agent configuration"));
+    #[test]
+    fn test_generate_default_config_ratelimit() {
+        let config = generate_default_config("ratelimit");
+        assert!(config.contains("socket:"));
+        assert!(config.contains("rules:"));
+        assert!(config.contains("requests_per_second"));
+        assert!(config.contains("burst"));
+        assert!(config.contains("/var/run/sentinel/ratelimit.sock"));
+    }
+
+    #[test]
+    fn test_generate_default_config_denylist() {
+        let config = generate_default_config("denylist");
+        assert!(config.contains("socket:"));
+        assert!(config.contains("ip_denylist:"));
+        assert!(config.contains("path_denylist:"));
+        assert!(config.contains("patterns:"));
+        assert!(config.contains("/var/run/sentinel/denylist.sock"));
+    }
+
+    #[test]
+    fn test_generate_default_config_unknown() {
+        let config = generate_default_config("custom");
+        assert!(config.contains("custom agent configuration"));
+        assert!(config.contains("/var/run/sentinel/custom.sock"));
+    }
+
+    #[test]
+    fn test_generate_systemd_service() {
+        let service = generate_systemd_service(
+            "waf",
+            Path::new("/usr/local/bin/sentinel-waf-agent"),
+            Path::new("/etc/sentinel/agents/waf.yaml"),
+        );
+
+        assert!(service.contains("[Unit]"));
+        assert!(service.contains("[Service]"));
+        assert!(service.contains("[Install]"));
+        assert!(service.contains("Description=Sentinel waf Agent"));
+        assert!(service.contains("ExecStart=/usr/local/bin/sentinel-waf-agent"));
+        assert!(service.contains("--config /etc/sentinel/agents/waf.yaml"));
+        assert!(service.contains("User=sentinel"));
+        assert!(service.contains("WantedBy=sentinel.target"));
+        assert!(service.contains("After=sentinel.service"));
+    }
+
+    #[test]
+    fn test_install_binary() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("source");
+        let dest_dir = temp.path().join("dest");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        // Create source binary
+        let source_path = source_dir.join("test-binary");
+        std::fs::write(&source_path, "binary content").unwrap();
+
+        let result = install_binary(&source_path, &dest_dir, "test-binary");
+        assert!(result.is_ok());
+
+        let installed = result.unwrap();
+        assert!(installed.exists());
+        assert_eq!(installed.file_name().unwrap(), "test-binary");
+    }
+
+    #[test]
+    fn test_uninstall_binary_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let binary_path = temp.path().join("test-binary");
+        std::fs::write(&binary_path, "content").unwrap();
+
+        let result = uninstall_binary(temp.path(), "test-binary");
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // true = was removed
+        assert!(!binary_path.exists());
+    }
+
+    #[test]
+    fn test_uninstall_binary_not_exists() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let result = uninstall_binary(temp.path(), "nonexistent");
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // false = wasn't there
+    }
+
+    #[test]
+    fn test_install_config_new() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path();
+
+        let result = install_config(config_dir, "waf", "test: content", false);
+        assert!(result.is_ok());
+
+        let config_path = result.unwrap();
+        assert!(config_path.exists());
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), "test: content");
+    }
+
+    #[test]
+    fn test_install_config_skip_existing() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path();
+
+        // Create existing config
+        let existing_path = config_dir.join("waf.yaml");
+        std::fs::write(&existing_path, "original content").unwrap();
+
+        // Try to install without force
+        let result = install_config(config_dir, "waf", "new content", false);
+        assert!(result.is_ok());
+
+        // Should not have overwritten
+        assert_eq!(std::fs::read_to_string(&existing_path).unwrap(), "original content");
+    }
+
+    #[test]
+    fn test_install_config_force_overwrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path();
+
+        // Create existing config
+        let existing_path = config_dir.join("waf.yaml");
+        std::fs::write(&existing_path, "original content").unwrap();
+
+        // Install with force
+        let result = install_config(config_dir, "waf", "new content", true);
+        assert!(result.is_ok());
+
+        // Should have overwritten
+        assert_eq!(std::fs::read_to_string(&existing_path).unwrap(), "new content");
+    }
+
+    #[test]
+    fn test_install_paths_ensure_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = InstallPaths {
+            bin_dir: temp.path().join("bin"),
+            config_dir: temp.path().join("config"),
+            systemd_dir: Some(temp.path().join("systemd")),
+            system_wide: false,
+        };
+
+        assert!(!paths.bin_dir.exists());
+        assert!(!paths.config_dir.exists());
+
+        let result = paths.ensure_dirs();
+        assert!(result.is_ok());
+
+        assert!(paths.bin_dir.exists());
+        assert!(paths.config_dir.exists());
+        assert!(paths.systemd_dir.as_ref().unwrap().exists());
+    }
+
+    #[test]
+    fn test_install_error_display() {
+        let err = InstallError::PermissionDenied("/root".to_string());
+        assert!(err.to_string().contains("/root"));
+
+        let err = InstallError::DirNotFound("/missing".to_string());
+        assert!(err.to_string().contains("/missing"));
+    }
+
+    #[test]
+    fn test_get_installed_version_not_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = get_installed_version(temp.path(), "nonexistent");
+        assert!(result.is_none());
     }
 }

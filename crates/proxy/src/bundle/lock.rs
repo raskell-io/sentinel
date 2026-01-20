@@ -200,6 +200,63 @@ ratelimit = "raskell-io/sentinel-agent-ratelimit"
     }
 
     #[test]
+    fn test_parse_lock_file_with_checksums() {
+        let content = r#"
+[bundle]
+version = "26.01_2"
+
+[agents]
+waf = "0.3.0"
+
+[repositories]
+waf = "raskell-io/sentinel-agent-waf"
+
+[checksums]
+waf = "abc123def456"
+"#;
+
+        let lock = BundleLock::from_str(content).unwrap();
+        assert_eq!(lock.checksums.get("waf"), Some(&"abc123def456".to_string()));
+    }
+
+    #[test]
+    fn test_parse_lock_file_empty_checksums() {
+        let content = r#"
+[bundle]
+version = "26.01_1"
+
+[agents]
+waf = "0.2.0"
+
+[repositories]
+waf = "raskell-io/sentinel-agent-waf"
+"#;
+
+        let lock = BundleLock::from_str(content).unwrap();
+        assert!(lock.checksums.is_empty());
+    }
+
+    #[test]
+    fn test_parse_invalid_toml() {
+        let content = "this is not valid toml {{{";
+        let result = BundleLock::from_str(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_missing_bundle_section() {
+        let content = r#"
+[agents]
+waf = "0.2.0"
+
+[repositories]
+waf = "raskell-io/sentinel-agent-waf"
+"#;
+        let result = BundleLock::from_str(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_agent_info() {
         let content = r#"
 [bundle]
@@ -226,10 +283,151 @@ waf = "raskell-io/sentinel-agent-waf"
     }
 
     #[test]
+    fn test_agent_not_found() {
+        let content = r#"
+[bundle]
+version = "26.01_1"
+
+[agents]
+waf = "0.2.0"
+
+[repositories]
+waf = "raskell-io/sentinel-agent-waf"
+"#;
+
+        let lock = BundleLock::from_str(content).unwrap();
+        assert!(lock.agent("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_agent_without_repository() {
+        let content = r#"
+[bundle]
+version = "26.01_1"
+
+[agents]
+waf = "0.2.0"
+orphan = "1.0.0"
+
+[repositories]
+waf = "raskell-io/sentinel-agent-waf"
+"#;
+
+        let lock = BundleLock::from_str(content).unwrap();
+        // orphan has no repository entry, so agent() should return None
+        assert!(lock.agent("orphan").is_none());
+        // agents() should skip orphan
+        let agents = lock.agents();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name, "waf");
+    }
+
+    #[test]
+    fn test_agent_names() {
+        let content = r#"
+[bundle]
+version = "26.01_1"
+
+[agents]
+waf = "0.2.0"
+ratelimit = "0.2.0"
+denylist = "0.2.0"
+
+[repositories]
+waf = "raskell-io/sentinel-agent-waf"
+ratelimit = "raskell-io/sentinel-agent-ratelimit"
+denylist = "raskell-io/sentinel-agent-denylist"
+"#;
+
+        let lock = BundleLock::from_str(content).unwrap();
+        let names = lock.agent_names();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&"waf"));
+        assert!(names.contains(&"ratelimit"));
+        assert!(names.contains(&"denylist"));
+    }
+
+    #[test]
+    fn test_download_url_linux_amd64() {
+        let agent = AgentInfo {
+            name: "waf".to_string(),
+            version: "0.2.0".to_string(),
+            repository: "raskell-io/sentinel-agent-waf".to_string(),
+            binary_name: "sentinel-waf-agent".to_string(),
+        };
+
+        let url = agent.download_url("linux", "amd64");
+        assert_eq!(
+            url,
+            "https://github.com/raskell-io/sentinel-agent-waf/releases/download/v0.2.0/sentinel-waf-agent-0.2.0-linux-x86_64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn test_download_url_linux_arm64() {
+        let agent = AgentInfo {
+            name: "ratelimit".to_string(),
+            version: "1.0.0".to_string(),
+            repository: "raskell-io/sentinel-agent-ratelimit".to_string(),
+            binary_name: "sentinel-ratelimit-agent".to_string(),
+        };
+
+        let url = agent.download_url("linux", "arm64");
+        assert_eq!(
+            url,
+            "https://github.com/raskell-io/sentinel-agent-ratelimit/releases/download/v1.0.0/sentinel-ratelimit-agent-1.0.0-linux-aarch64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn test_download_url_darwin() {
+        let agent = AgentInfo {
+            name: "denylist".to_string(),
+            version: "0.5.0".to_string(),
+            repository: "raskell-io/sentinel-agent-denylist".to_string(),
+            binary_name: "sentinel-denylist-agent".to_string(),
+        };
+
+        let url = agent.download_url("darwin", "arm64");
+        assert!(url.contains("darwin"));
+        assert!(url.contains("aarch64"));
+    }
+
+    #[test]
+    fn test_checksum_url() {
+        let agent = AgentInfo {
+            name: "waf".to_string(),
+            version: "0.2.0".to_string(),
+            repository: "raskell-io/sentinel-agent-waf".to_string(),
+            binary_name: "sentinel-waf-agent".to_string(),
+        };
+
+        let url = agent.checksum_url("linux", "amd64");
+        assert!(url.ends_with(".sha256"));
+        assert!(url.contains("sentinel-waf-agent"));
+    }
+
+    #[test]
     fn test_embedded_lock() {
         // This test verifies the embedded lock file can be parsed
         let lock = BundleLock::embedded().unwrap();
         assert!(!lock.bundle.version.is_empty());
         assert!(!lock.agents.is_empty());
+    }
+
+    #[test]
+    fn test_embedded_lock_has_required_agents() {
+        let lock = BundleLock::embedded().unwrap();
+
+        // The embedded lock should have the core agents
+        assert!(lock.agent("waf").is_some(), "waf agent should be in bundle");
+        assert!(lock.agent("ratelimit").is_some(), "ratelimit agent should be in bundle");
+        assert!(lock.agent("denylist").is_some(), "denylist agent should be in bundle");
+    }
+
+    #[test]
+    fn test_from_file_not_found() {
+        let result = BundleLock::from_file(Path::new("/nonexistent/path/lock.toml"));
+        assert!(matches!(result, Err(LockError::NotFound(_))));
     }
 }
