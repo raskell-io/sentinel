@@ -68,9 +68,8 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # IPC and protocol
-# prost 0.13 required by tonic 0.12 - must upgrade tonic to 0.13+ to use prost 0.14
 prost = "0.14"
-tonic = { version = "0.12", features = ["transport", "tls", "tls-roots"] }
+tonic = { version = "0.14", features = ["transport", "tls-ring", "tls-native-roots"] }
 bytes = "1.9"
 
 # Configuration and validation

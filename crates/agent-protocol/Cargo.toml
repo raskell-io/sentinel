@@ -25,6 +25,7 @@ sentinel-common = { path = "../common", version = "0.4.1" }
 # Protocol and serialization
 prost = { workspace = true }
 tonic = { workspace = true }
+tonic-prost = "0.14"
 bytes = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -62,8 +63,7 @@ futures = "0.3"
 tracing = { workspace = true }
 
 [build-dependencies]
-# Use 0.12.3 to match tonic 0.12 workspace dependency
-tonic-build = "0.12.3"
+tonic-prost-build = "0.14"
 
 [dev-dependencies]
 tempfile = "3.12"
