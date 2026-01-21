@@ -16,6 +16,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] - 2026-01-21
+
+### Changed
+- **Dependency updates** with breaking change fixes:
+  - prost 0.13 → 0.14 (with tonic ecosystem upgrade to 0.14)
+  - tonic 0.12 → 0.14 (TLS features renamed: `tls` → `tls-ring`, `tls-roots` → `tls-native-roots`)
+  - tungstenite 0.24 → 0.28 (`Message::Text` now uses `Utf8Bytes`)
+  - sysinfo 0.31 → 0.37 (`RefreshKind::new()` → `RefreshKind::nothing()`)
+  - toml 0.8 → 0.9
+  - brotli 7.0 → 8.0
+  - directories 5.0 → 6.0
+  - signal-hook 0.3 → 0.4
+  - jsonschema 0.17 → 0.18
+  - ip2location 0.5 → 0.6
+  - tokio-tungstenite 0.24 → 0.28
+- GitHub Actions updates: checkout v6, github-script v8, docker/build-push-action v6
+
+### Fixed
+- WebSocket test compatibility with tungstenite 0.28 API changes
+- System metrics collection with sysinfo 0.37 API changes
+
+---
+
 ## [0.4.0] - 2026-01-21
 
 ### Added
@@ -75,7 +98,8 @@ See [GitHub Releases](https://github.com/raskell-io/sentinel/releases) for histo
 
 ---
 
-[Unreleased]: https://github.com/raskell-io/sentinel/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/raskell-io/sentinel/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/raskell-io/sentinel/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/raskell-io/sentinel/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/raskell-io/sentinel/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/raskell-io/sentinel/releases/tag/v0.3.0
