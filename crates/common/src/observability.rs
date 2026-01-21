@@ -492,7 +492,7 @@ impl RequestMetrics {
 
         // Create system with specific refresh kinds
         let mut system = System::new_with_specifics(
-            RefreshKind::new()
+            RefreshKind::nothing()
                 .with_cpu(CpuRefreshKind::everything())
                 .with_memory(MemoryRefreshKind::everything()),
         );
