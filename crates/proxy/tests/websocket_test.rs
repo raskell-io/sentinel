@@ -316,13 +316,13 @@ async fn test_echo_server_basic() {
 
     // Send a message
     write
-        .send(Message::Text("Hello, WebSocket!".to_string()))
+        .send(Message::Text("Hello, WebSocket!".into()))
         .await
         .expect("Failed to send message");
 
     // Read echoed message
     let response = read.next().await.expect("No response").expect("Read error");
-    assert_eq!(response, Message::Text("Hello, WebSocket!".to_string()));
+    assert_eq!(response, Message::Text("Hello, WebSocket!".into()));
 
     // Clean up
     write.send(Message::Close(None)).await.ok();
