@@ -349,6 +349,29 @@ fn select_target(
 
             (0, "Weighted least connections: fallback to first target".to_string())
         }
+
+        LoadBalancingAlgorithm::Sticky => {
+            // Sticky sessions based on cookie or header
+            // Similar to IP hash but uses session identifier
+            let hash_key = request
+                .headers
+                .get("cookie")
+                .or(request.headers.get("x-session-id"))
+                .or(request.headers.get("x-forwarded-for"))
+                .cloned()
+                .unwrap_or_else(|| request.cache_key());
+
+            let hash = xxh3_64(hash_key.as_bytes());
+            let index = (hash as usize) % targets.len();
+
+            (
+                index,
+                format!(
+                    "Sticky: session key hashes to target {} (same session always routes to same target)",
+                    index
+                ),
+            )
+        }
     }
 }
 
