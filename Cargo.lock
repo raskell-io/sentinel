@@ -5043,7 +5043,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-agent-protocol"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5079,7 +5079,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-common"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5101,7 +5101,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-config"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -5180,7 +5180,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-proxy"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -5231,7 +5231,7 @@ dependencies = [
  "pingora-timeout",
  "prometheus 0.14.0",
  "proptest",
- "rand 0.8.5",
+ "rand 0.9.2",
  "rcgen",
  "redis",
  "regex",
@@ -5271,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-stack"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5288,7 +5288,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-wasm-runtime"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
