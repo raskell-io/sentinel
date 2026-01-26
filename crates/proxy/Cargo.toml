@@ -145,7 +145,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 murmur3 = "0.5"
 
 # File watching for hot reload
-notify = "6.1"
+notify = "8.2"
 
 # Networking
 tokio-util = { version = "0.7", features = ["codec"] }
