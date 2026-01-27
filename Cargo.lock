@@ -5370,7 +5370,7 @@ dependencies = [
  "pingora-timeout",
  "prometheus 0.14.0",
  "proptest",
- "rand 0.8.5",
+ "rand 0.9.2",
  "rcgen",
  "redis",
  "regex",
