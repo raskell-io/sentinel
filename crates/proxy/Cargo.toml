@@ -61,7 +61,7 @@ bytes = { workspace = true }
 # TLS
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 
 # X.509 certificate parsing for OCSP
 x509-parser = "0.18"
