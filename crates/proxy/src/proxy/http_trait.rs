@@ -3143,8 +3143,8 @@ impl ProxyHttp for SentinelProxy {
             }
         }
 
-        // Write to access log file if configured
-        if self.log_manager.access_log_enabled() {
+        // Write to access log file if configured (check sampling before allocating entry)
+        if self.log_manager.should_log_access(status) {
             let access_entry = AccessLogEntry {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 trace_id: ctx.trace_id.clone(),

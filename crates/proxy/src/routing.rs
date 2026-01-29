@@ -173,14 +173,17 @@ impl RouteMatcher {
             "Starting route matching"
         );
 
-        // Check cache first (lock-free read)
-        let cache_key = req.cache_key();
-        if let Some(route_id_ref) = self.cache.get(&cache_key) {
-            let route_id = route_id_ref.clone();
-            drop(route_id_ref); // Release the ref before further processing
+        // Check cache first (lock-free read, zero-allocation on hit)
+        let cached = req.with_cache_key(|key| {
+            self.cache.get(key).map(|r| {
+                let route_id = r.clone();
+                drop(r);
+                route_id
+            })
+        });
+        if let Some(route_id) = cached {
             trace!(
                 route_id = %route_id,
-                cache_key = %cache_key,
                 "Route cache hit"
             );
             if let Some(route) = self.find_route_by_id(&route_id) {
@@ -202,7 +205,6 @@ impl RouteMatcher {
         self.cache.record_miss();
 
         trace!(
-            cache_key = %cache_key,
             route_count = self.routes.len(),
             "Cache miss, evaluating routes"
         );
@@ -228,12 +230,13 @@ impl RouteMatcher {
                     "Route matched"
                 );
 
-                // Update cache (lock-free insert)
-                self.cache.insert(cache_key.clone(), route.id.clone());
+                // Update cache — allocate key only on miss (rare after warmup)
+                req.with_cache_key(|key| {
+                    self.cache.insert(key.to_string(), route.id.clone());
+                });
 
                 trace!(
                     route_id = %route.id,
-                    cache_key = %cache_key,
                     "Route added to cache"
                 );
 
@@ -595,9 +598,22 @@ impl<'a> RequestInfo<'a> {
             .unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))
     }
 
-    /// Generate a cache key for this request
-    fn cache_key(&self) -> String {
-        format!("{}:{}:{}", self.method, self.host, self.path)
+    /// Generate a cache key for this request using a thread-local buffer
+    /// to avoid per-request heap allocation.
+    fn with_cache_key<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        use std::cell::RefCell;
+        use std::fmt::Write;
+
+        thread_local! {
+            static BUF: RefCell<String> = RefCell::new(String::with_capacity(128));
+        }
+
+        BUF.with(|buf| {
+            let mut buf = buf.borrow_mut();
+            buf.clear();
+            let _ = write!(buf, "{}:{}:{}", self.method, self.host, self.path);
+            f(&buf)
+        })
     }
 
     /// Parse query parameters from path (only call when needed)

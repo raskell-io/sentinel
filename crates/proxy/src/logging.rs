@@ -620,28 +620,28 @@ impl LogManager {
         }
     }
 
-    /// Write an access log entry
+    /// Check whether an access log entry with the given status should be logged,
+    /// accounting for sampling rate. Call this before constructing `AccessLogEntry`
+    /// to avoid allocating fields that would be discarded.
+    pub fn should_log_access(&self, status: u16) -> bool {
+        if self.access_log.is_none() {
+            return false;
+        }
+        if let Some(ref config) = self.access_log_config {
+            if config.sample_errors_always && status >= 400 {
+                return true;
+            }
+            use rand::Rng;
+            let mut rng = rand::rng();
+            return rng.random::<f64>() < config.sample_rate;
+        }
+        true
+    }
+
+    /// Write an access log entry. Callers should check `should_log_access` first
+    /// to avoid building the entry when it would be discarded by sampling.
     pub fn log_access(&self, entry: &AccessLogEntry) {
         if let Some(ref writer) = self.access_log {
-            // Check sampling if config is available
-            if let Some(ref config) = self.access_log_config {
-                // Determine if we should log this entry
-                let should_log = if config.sample_errors_always && entry.status >= 400 {
-                    // Always log errors (4xx/5xx)
-                    true
-                } else {
-                    // Sample based on sample_rate (0.0-1.0)
-                    // Generate random number and check if it's less than sample_rate
-                    use rand::Rng;
-                    let mut rng = rand::rng();
-                    rng.random::<f64>() < config.sample_rate
-                };
-
-                if !should_log {
-                    return; // Skip logging this entry
-                }
-            }
-
             let formatted = entry.format(self.access_log_format);
             let mut guard = writer.lock();
             if let Err(e) = guard.write_line(&formatted) {

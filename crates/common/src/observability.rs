@@ -112,6 +112,38 @@ pub struct RequestMetrics {
     pii_detected_total: IntCounterVec,
 }
 
+/// Return a static string for common HTTP status codes to avoid
+/// per-request `u16::to_string()` allocation in metrics labels.
+fn status_str(status: u16) -> &'static str {
+    match status {
+        200 => "200",
+        201 => "201",
+        204 => "204",
+        301 => "301",
+        302 => "302",
+        304 => "304",
+        307 => "307",
+        308 => "308",
+        400 => "400",
+        401 => "401",
+        403 => "403",
+        404 => "404",
+        405 => "405",
+        408 => "408",
+        409 => "409",
+        413 => "413",
+        429 => "429",
+        500 => "500",
+        502 => "502",
+        503 => "503",
+        504 => "504",
+        // Leak a boxed string for rare codes — this happens at most once per
+        // unique status code over the process lifetime, bounded by the ~60
+        // defined HTTP status codes.
+        _ => Box::leak(status.to_string().into_boxed_str()),
+    }
+}
+
 impl RequestMetrics {
     /// Create new metrics collector and register with Prometheus
     pub fn new() -> Result<Self> {
@@ -388,7 +420,7 @@ impl RequestMetrics {
             .observe(duration.as_secs_f64());
 
         self.request_count
-            .with_label_values(&[route, method, &status.to_string()])
+            .with_label_values(&[route, method, status_str(status)])
             .inc();
     }
 
