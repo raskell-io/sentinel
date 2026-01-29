@@ -1379,6 +1379,11 @@ impl UpstreamPool {
     }
 
     /// Report connection result for a target
+    ///
+    /// On failure, the circuit breaker records the failure but the load balancer
+    /// health status is only updated when the circuit breaker transitions to Open.
+    /// This prevents a single connection error (e.g., a stale pooled connection
+    /// reset) from permanently removing a target from the healthy pool.
     pub async fn report_result(&self, target: &str, success: bool) {
         trace!(
             upstream_id = %self.id,
@@ -1398,19 +1403,33 @@ impl UpstreamPool {
             }
             self.load_balancer.report_health(target, true).await;
         } else {
-            if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
-                breaker.record_failure();
-                debug!(
-                    upstream_id = %self.id,
-                    target = %target,
-                    "Recorded failure in circuit breaker"
-                );
+            let breaker_opened =
+                if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
+                    let opened = breaker.record_failure();
+                    debug!(
+                        upstream_id = %self.id,
+                        target = %target,
+                        circuit_breaker_opened = opened,
+                        "Recorded failure in circuit breaker"
+                    );
+                    opened
+                } else {
+                    false
+                };
+
+            // Only mark the target unhealthy in the load balancer when the
+            // circuit breaker has actually opened (failure threshold reached).
+            // Individual failures are tracked by the circuit breaker; the
+            // upstream_peer selection loop already checks breaker state.
+            if breaker_opened {
+                self.load_balancer.report_health(target, false).await;
             }
-            self.load_balancer.report_health(target, false).await;
+
             self.stats.failures.fetch_add(1, Ordering::Relaxed);
             warn!(
                 upstream_id = %self.id,
                 target = %target,
+                circuit_breaker_opened = breaker_opened,
                 "Connection failure reported for target"
             );
         }
@@ -1419,8 +1438,10 @@ impl UpstreamPool {
     /// Report request result with latency for adaptive load balancing
     ///
     /// This method passes latency information to the load balancer for
-    /// adaptive weight adjustment. It updates circuit breakers, health
-    /// status, and load balancer metrics.
+    /// adaptive weight adjustment. It updates circuit breakers and health
+    /// status. On failure, health is only marked down when the circuit
+    /// breaker transitions to Open, preventing stale connection resets
+    /// from permanently removing targets.
     pub async fn report_result_with_latency(
         &self,
         target: &str,
@@ -1440,17 +1461,29 @@ impl UpstreamPool {
             if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
                 breaker.record_success();
             }
+            // Always report success to the load balancer (restores health + records latency)
+            self.load_balancer
+                .report_result_with_latency(target, true, latency)
+                .await;
         } else {
-            if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
-                breaker.record_failure();
-            }
+            let breaker_opened =
+                if let Some(breaker) = self.circuit_breakers.read().await.get(target) {
+                    breaker.record_failure()
+                } else {
+                    false
+                };
             self.stats.failures.fetch_add(1, Ordering::Relaxed);
-        }
 
-        // Report to load balancer with latency (enables adaptive weight adjustment)
-        self.load_balancer
-            .report_result_with_latency(target, success, latency)
-            .await;
+            // Only propagate failure to the load balancer when the circuit
+            // breaker has opened. This ensures adaptive LBs record the
+            // health change and individual failures don't prematurely
+            // remove targets from the healthy pool.
+            if breaker_opened {
+                self.load_balancer
+                    .report_result_with_latency(target, false, latency)
+                    .await;
+            }
+        }
     }
 
     /// Get pool statistics

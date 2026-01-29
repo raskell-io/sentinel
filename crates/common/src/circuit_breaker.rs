@@ -220,8 +220,11 @@ impl CircuitBreaker {
     ///
     /// Increments failure counter and may transition to Open state
     /// if failure threshold is reached.
+    ///
+    /// Returns `true` if this failure caused the circuit breaker to
+    /// transition to Open state (either from Closed or Half-Open).
     #[inline]
-    pub fn record_failure(&self) {
+    pub fn record_failure(&self) -> bool {
         self.consecutive_successes.store(0, Ordering::Relaxed);
         let failures = self.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -236,6 +239,7 @@ impl CircuitBreaker {
         match state {
             STATE_CLOSED if failures >= self.config.failure_threshold.into() => {
                 self.transition_to_open();
+                true
             }
             STATE_HALF_OPEN => {
                 debug!(
@@ -243,14 +247,15 @@ impl CircuitBreaker {
                     "Failure in half-open state, re-opening circuit"
                 );
                 self.transition_to_open();
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
     /// Async version of record_failure for backward compatibility
     #[inline]
-    pub async fn record_failure_async(&self) {
+    pub async fn record_failure_async(&self) -> bool {
         self.record_failure()
     }
 
