@@ -465,11 +465,13 @@ impl SentinelProxy {
         let req_header = session.req_header_mut();
 
         // Build headers map for agent processing
-        let mut headers_map = HashMap::new();
+        // HTTP header names are already lowercase (Pingora normalizes HTTP/1.1; HTTP/2 is lowercase by spec)
+        let mut headers_map: HashMap<String, Vec<String>> =
+            HashMap::with_capacity(req_header.headers.len() + 2);
         for (name, value) in req_header.headers.iter() {
             headers_map
-                .entry(name.as_str().to_lowercase())
-                .or_insert_with(Vec::new)
+                .entry(name.as_str().to_string())
+                .or_default()
                 .push(value.to_str().unwrap_or("").to_string());
         }
 
@@ -512,7 +514,7 @@ impl SentinelProxy {
         // Process through agents (passing filter-specific failure modes)
         match self
             .agent_manager
-            .process_request_headers(&agent_ctx, &headers_map, &agent_filters)
+            .process_request_headers(&agent_ctx, headers_map, &agent_filters)
             .await
         {
             Ok(decision) => {

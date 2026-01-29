@@ -389,22 +389,22 @@ impl AgentManager {
     pub async fn process_request_headers(
         &self,
         ctx: &AgentCallContext,
-        headers: &HashMap<String, Vec<String>>,
+        mut headers: HashMap<String, Vec<String>>,
         route_agents: &[(String, FailureMode)],
     ) -> SentinelResult<AgentDecision> {
+        let method = headers
+            .remove(":method")
+            .and_then(|mut v| if v.is_empty() { None } else { Some(v.swap_remove(0)) })
+            .unwrap_or_else(|| "GET".to_string());
+        let uri = headers
+            .remove(":path")
+            .and_then(|mut v| if v.is_empty() { None } else { Some(v.swap_remove(0)) })
+            .unwrap_or_else(|| "/".to_string());
         let event = RequestHeadersEvent {
             metadata: ctx.metadata.clone(),
-            method: headers
-                .get(":method")
-                .and_then(|v| v.first())
-                .unwrap_or(&"GET".to_string())
-                .clone(),
-            uri: headers
-                .get(":path")
-                .and_then(|v| v.first())
-                .unwrap_or(&"/".to_string())
-                .clone(),
-            headers: headers.clone(),
+            method,
+            uri,
+            headers,
         };
 
         // Use parallel processing for better latency with multiple agents

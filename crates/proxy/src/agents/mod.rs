@@ -34,7 +34,7 @@
 //! let manager = AgentManager::new(agent_configs).await?;
 //! manager.initialize().await?;
 //!
-//! let decision = manager.process_request_headers(&ctx, &headers, &["waf", "auth"]).await?;
+//! let decision = manager.process_request_headers(&ctx, headers, &["waf", "auth"]).await?;
 //! if !decision.is_allow() {
 //!     // Handle block/redirect/challenge
 //! }
