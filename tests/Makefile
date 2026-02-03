@@ -1,7 +1,7 @@
 # Sentinel Test Makefile
 # Provides convenient targets for running various test scenarios
 
-.PHONY: all help up down build test test-quick test-echo test-ratelimit test-waf test-security test-performance test-soak test-soak-quick test-soak-extended analyze-soak logs clean
+.PHONY: all help up down build test test-quick test-echo test-ratelimit test-waf test-security test-performance test-soak test-soak-quick test-soak-extended analyze-soak logs clean test-first-time test-first-time-waf test-first-time-lua
 
 DOCKER_COMPOSE = docker compose -f ../docker-compose.yml
 DOCKER_COMPOSE_TEST = docker compose -f ../docker-compose.yml -f ../docker-compose.test.yml
@@ -35,6 +35,11 @@ help:
 	@echo "  test-soak          - 24-hour standard soak test"
 	@echo "  test-soak-extended - 72-hour extended soak test"
 	@echo "  analyze-soak       - Analyze most recent soak results"
+	@echo ""
+	@echo "First-Time User Smoke Tests (non-Docker):"
+	@echo "  test-first-time     - Run all first-time user smoke tests"
+	@echo "  test-first-time-waf - WAF agent first-time user test"
+	@echo "  test-first-time-lua - Lua agent first-time user test"
 	@echo ""
 	@echo "Local (non-Docker):"
 	@echo "  test-local   - Run tests against local binaries"
@@ -149,6 +154,17 @@ test-performance: up
 	RPS=$$(( 1000 * 1000 / DURATION )); \
 	echo "1000 requests completed in $${DURATION}ms (~$${RPS} req/s)"
 	@$(MAKE) down
+
+# First-time user smoke tests (non-Docker, builds from source if needed)
+test-first-time: test-first-time-waf test-first-time-lua
+
+test-first-time-waf:
+	@echo "Running first-time user WAF agent smoke test..."
+	./test_first_time_waf.sh
+
+test-first-time-lua:
+	@echo "Running first-time user Lua agent smoke test..."
+	./test_first_time_lua.sh
 
 # Run tests against local binaries (not Docker)
 test-local:
