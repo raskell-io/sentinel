@@ -161,14 +161,21 @@ install_binary() {
     # Try to install
     if ! cp "$binary_path" "${install_dir}/${BINARY_NAME}" 2>/dev/null; then
         if [ "$install_dir" = "$INSTALL_DIR" ]; then
-            # Try with sudo
+            # Try with sudo, fall back to ~/.local/bin if that fails
             if command -v sudo >/dev/null 2>&1; then
                 echo ""
                 info "Installing to ${install_dir} requires administrator privileges."
                 info "You may be prompted for your password."
                 echo ""
-                sudo cp "$binary_path" "${install_dir}/${BINARY_NAME}"
-                sudo chmod +x "${install_dir}/${BINARY_NAME}"
+                if ! sudo cp "$binary_path" "${install_dir}/${BINARY_NAME}" 2>/dev/null; then
+                    install_dir="$FALLBACK_DIR"
+                    mkdir -p "$install_dir"
+                    info "sudo failed, installing to ${install_dir} instead..."
+                    cp "$binary_path" "${install_dir}/${BINARY_NAME}"
+                    chmod +x "${install_dir}/${BINARY_NAME}"
+                else
+                    sudo chmod +x "${install_dir}/${BINARY_NAME}"
+                fi
             else
                 install_dir="$FALLBACK_DIR"
                 mkdir -p "$install_dir"
@@ -259,9 +266,7 @@ main() {
     info "Detected platform: ${os}-${arch}"
 
     # Check for unsupported combinations
-    if [ "$os" = "linux" ] && [ "$arch" = "arm64" ]; then
-        error "Linux ARM64 binaries are not yet available. Please build from source or use Docker."
-    fi
+    # (all four platform/arch combos are now built in CI)
 
     # Create temporary directory
     local tmp_dir=$(mktemp -d)
