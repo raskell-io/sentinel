@@ -102,6 +102,8 @@ More examples: [`config/examples/`](config/examples/) covers API gateways, load 
 
 First-class support for LLM/AI workloads: token-based rate limiting, usage budgets, model-based routing with glob patterns (`gpt-4*`, `claude-*`), and guardrails for prompt injection and PII detection. Supports OpenAI, Anthropic, and generic providers out of the box.
 
+See the full feature breakdown at [sentinel.raskell.io/features](https://sentinel.raskell.io/features/).
+
 ## Why Sentinel
 
 Modern proxies accumulate hidden behavior, unbounded complexity, and operational risk that surfaces under stress.
