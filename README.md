@@ -37,6 +37,12 @@
 
 Sentinel is a high-performance reverse proxy built on [Cloudflare Pingora](https://github.com/cloudflare/pingora). It provides explicit limits, predictable behavior, and production-grade defaults for environments where operators need to sleep.
 
+**Performance:** Lowest p99 latency in [benchmarks](https://sentinel.raskell.io/benchmarks/) against Envoy, HAProxy, Nginx, and Caddy. 1M-request soak tests with 99.95% success rate and zero memory leaks. Pure Rust WAF engine processes clean traffic at 912K req/s — 30x faster than the C++ ModSecurity reference.
+
+## Status
+
+Production-ready core (proxy, routing, TLS, caching, load balancing). Agents are individually versioned — WAF, Auth, and AI Gateway are stable; others are beta or alpha. See [sentinel.raskell.io/agents](https://sentinel.raskell.io/agents/) for per-agent status.
+
 ## Quick Start
 
 ```bash
@@ -45,6 +51,10 @@ curl -fsSL https://getsentinel.raskell.io | sh
 
 # Or via Cargo
 cargo install sentinel-proxy
+
+# Or via Docker
+docker run -v $(pwd)/sentinel.kdl:/etc/sentinel/sentinel.kdl \
+  ghcr.io/raskell-io/sentinel --config /etc/sentinel/sentinel.kdl
 ```
 
 Save this as `sentinel.kdl` — it proxies `localhost:8080` to a backend on port `8081`:
@@ -115,29 +125,20 @@ Example configs for each: [`config/examples/`](config/examples/)
 
 ## Why Sentinel
 
-Modern proxies accumulate hidden behavior, unbounded complexity, and operational risk that surfaces under stress.
+Modern proxies accumulate hidden behavior, unbounded complexity, and operational risk that surfaces under stress. Sentinel takes a different approach:
 
-Sentinel takes a different approach:
+- **Bounded resources** — Memory limits, queue depths, deterministic timeouts. No surprise behavior.
+- **Explicit failure modes** — Fail-open or fail-closed per route, never ambiguous.
+- **External extensibility** — Security logic lives in agents, not the core. Small, stable dataplane.
+- **Observable by default** — Every decision is logged and metered. Features ship only when bounded, observed, and tested.
 
-- **Bounded resources** — Memory limits, queue depths, deterministic timeouts
-- **Explicit failure modes** — Fail-open or fail-closed, never ambiguous
-- **External extensibility** — Security logic lives in agents, not the core
-- **Observable by default** — Every decision is logged and metered
-
-The goal is infrastructure that is **correct, calm, and trustworthy**.
-
-## Design Principles
-
-- **Sleepable operations** — No unbounded resources. No surprise behavior.
-- **Security-first** — Every limit and decision is explicit in configuration.
-- **Small, stable core** — Innovation lives outside the dataplane, behind contracts.
-- **Production correctness** — Features ship only when bounded, observed, and tested.
-
-See [`MANIFESTO.md`](MANIFESTO.md) for the full philosophy.
+The goal is infrastructure that is **correct, calm, and trustworthy**. See [`MANIFESTO.md`](MANIFESTO.md) for the full philosophy.
 
 ## Agents
 
-Sentinel's security and extensibility lives in **agents** — external processes that hook into every request phase. Agents are crash-isolated from the proxy, independently deployable, and can be written in any language (SDKs for Rust, Go, Python, TypeScript, Elixir, Kotlin, and Haskell).
+Sentinel's security and extensibility lives in **agents** — external processes that hook into every request phase. Agents are crash-isolated from the proxy, independently deployable, and can be written in any language.
+
+Agent SDKs: [Rust](https://github.com/raskell-io/sentinel-agent-rust-sdk) · [Go](https://github.com/raskell-io/sentinel-agent-go-sdk) · [Python](https://github.com/raskell-io/sentinel-agent-python-sdk) · [TypeScript](https://github.com/raskell-io/sentinel-agent-typescript-sdk) · [Elixir](https://github.com/raskell-io/sentinel-agent-elixir-sdk) · [Kotlin](https://github.com/raskell-io/sentinel-agent-kotlin-sdk) · [Haskell](https://github.com/raskell-io/sentinel-agent-haskell-sdk)
 
 | Agent | Description |
 |-------|-------------|
@@ -153,7 +154,8 @@ Sentinel's security and extensibility lives in **agents** — external processes
 
 Browse all 25+ agents at [sentinel.raskell.io/agents](https://sentinel.raskell.io/agents/).
 
-## Crates
+<details>
+<summary><strong>Crates</strong></summary>
 
 Each crate has its own `docs/` directory with detailed documentation.
 
@@ -167,6 +169,8 @@ Each crate has its own `docs/` directory with detailed documentation.
 | [`playground-wasm`](crates/playground-wasm/) | Browser bindings for the config playground |
 | [`sim`](crates/sim/) | WASM-compatible configuration simulator |
 | [`stack`](crates/stack/) | All-in-one process manager for proxy and agents |
+
+</details>
 
 ## Contributing
 
