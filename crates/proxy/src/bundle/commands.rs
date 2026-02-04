@@ -156,31 +156,31 @@ fn cmd_install(
         println!("[DRY RUN] Would install the following agents:");
         println!();
         for agent in &agents {
-            let agent_status = status
-                .agents
-                .iter()
-                .find(|a| a.name == agent.name);
+            let agent_status = status.agents.iter().find(|a| a.name == agent.name);
 
             let action = match agent_status {
                 Some(s) if s.status == crate::bundle::status::Status::UpToDate && !force => {
                     "skip (already installed)"
                 }
-                Some(s) if s.status == crate::bundle::status::Status::Outdated => {
-                    "upgrade"
-                }
+                Some(s) if s.status == crate::bundle::status::Status::Outdated => "upgrade",
                 _ => "install",
             };
 
             println!(
                 "  {} {} -> {} ({})",
-                agent.name, agent.version, paths.bin_dir.display(), action
+                agent.name,
+                agent.version,
+                paths.bin_dir.display(),
+                action
             );
         }
         return Ok(());
     }
 
     // Ensure directories exist
-    paths.ensure_dirs().context("Failed to create installation directories")?;
+    paths
+        .ensure_dirs()
+        .context("Failed to create installation directories")?;
 
     // Create temporary directory for downloads
     let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
@@ -200,7 +200,10 @@ fn cmd_install(
         if !force {
             if let Some(s) = agent_status {
                 if s.status == crate::bundle::status::Status::UpToDate {
-                    println!("  [skip] {} {} (already installed)", agent.name, agent.version);
+                    println!(
+                        "  [skip] {} {} (already installed)",
+                        agent.name, agent.version
+                    );
                     skipped += 1;
                     continue;
                 }
@@ -210,9 +213,8 @@ fn cmd_install(
         print!("  Installing {} {}...", agent.name, agent.version);
 
         // Download
-        let download_result = rt.block_on(async {
-            download_agent(agent, temp_dir.path(), !skip_verify).await
-        });
+        let download_result =
+            rt.block_on(async { download_agent(agent, temp_dir.path(), !skip_verify).await });
 
         let download = match download_result {
             Ok(d) => d,
@@ -241,7 +243,8 @@ fn cmd_install(
         if install_systemd {
             if let Some(ref systemd_dir) = paths.systemd_dir {
                 let bin_path = paths.bin_dir.join(&agent.binary_name);
-                let service_content = generate_systemd_service(&agent.name, &bin_path, &config_path);
+                let service_content =
+                    generate_systemd_service(&agent.name, &bin_path, &config_path);
                 install_systemd_service(systemd_dir, &agent.name, &service_content)
                     .context("Failed to install systemd service")?;
             }
@@ -374,7 +377,10 @@ fn cmd_uninstall(lock: &BundleLock, agent: Option<String>, dry_run: bool) -> Res
     println!();
     println!("Removed {} agent(s)", removed);
     println!();
-    println!("Note: Configuration files in {} were preserved", paths.config_dir.display());
+    println!(
+        "Note: Configuration files in {} were preserved",
+        paths.config_dir.display()
+    );
 
     Ok(())
 }
@@ -400,14 +406,24 @@ fn cmd_update(current_lock: &BundleLock, apply: bool) -> Result<()> {
     println!("{}", "─".repeat(40));
 
     for (name, latest_version) in &latest_lock.agents {
-        let current_version = current_lock.agents.get(name).map(|s| s.as_str()).unwrap_or("-");
+        let current_version = current_lock
+            .agents
+            .get(name)
+            .map(|s| s.as_str())
+            .unwrap_or("-");
         let is_update = current_version != latest_version;
 
         if is_update {
             updates_available = true;
-            println!("{:<15} {:<12} {:<12} ←", name, current_version, latest_version);
+            println!(
+                "{:<15} {:<12} {:<12} ←",
+                name, current_version, latest_version
+            );
         } else {
-            println!("{:<15} {:<12} {:<12}", name, current_version, latest_version);
+            println!(
+                "{:<15} {:<12} {:<12}",
+                name, current_version, latest_version
+            );
         }
     }
 

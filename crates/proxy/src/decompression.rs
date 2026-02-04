@@ -245,7 +245,10 @@ pub fn decompress_body(
 }
 
 /// Decompress gzip data with incremental ratio checking
-fn decompress_gzip(data: &[u8], config: &DecompressionConfig) -> Result<Vec<u8>, DecompressionError> {
+fn decompress_gzip(
+    data: &[u8],
+    config: &DecompressionConfig,
+) -> Result<Vec<u8>, DecompressionError> {
     let mut decoder = GzDecoder::new(data);
     decompress_with_limits(&mut decoder, data.len(), config)
 }
@@ -277,10 +280,8 @@ fn decompress_with_limits<R: Read>(
     config: &DecompressionConfig,
 ) -> Result<Vec<u8>, DecompressionError> {
     // Pre-allocate with reasonable estimate (assume 5x ratio initially)
-    let initial_capacity = std::cmp::min(
-        compressed_size.saturating_mul(5),
-        config.max_output_bytes,
-    );
+    let initial_capacity =
+        std::cmp::min(compressed_size.saturating_mul(5), config.max_output_bytes);
     let mut output = Vec::with_capacity(initial_capacity);
 
     // Read in chunks to check ratio incrementally

@@ -103,7 +103,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_per_agent_queue_isolation_config() {
-        use sentinel_config::{AgentConfig, AgentTransport, AgentType, AgentEvent, AgentProtocolVersion};
+        use sentinel_config::{
+            AgentConfig, AgentEvent, AgentProtocolVersion, AgentTransport, AgentType,
+        };
         use std::path::PathBuf;
 
         // Verify the max_concurrent_calls field works in AgentConfig
@@ -158,8 +160,8 @@ mod tests {
     #[tokio::test]
     async fn test_v2_agent_config() {
         use sentinel_config::{
-            AgentConfig, AgentTransport, AgentType, AgentEvent,
-            AgentProtocolVersion, AgentPoolConfig, LoadBalanceStrategy,
+            AgentConfig, AgentEvent, AgentPoolConfig, AgentProtocolVersion, AgentTransport,
+            AgentType, LoadBalanceStrategy,
         };
 
         let config = AgentConfig {
@@ -197,6 +199,9 @@ mod tests {
         assert!(config.pool.is_some());
         let pool = config.pool.unwrap();
         assert_eq!(pool.connections_per_agent, 8);
-        assert_eq!(pool.load_balance_strategy, LoadBalanceStrategy::LeastConnections);
+        assert_eq!(
+            pool.load_balance_strategy,
+            LoadBalanceStrategy::LeastConnections
+        );
     }
 }

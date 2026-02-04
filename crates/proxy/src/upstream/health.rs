@@ -188,11 +188,8 @@ impl ActiveHealthChecker {
             } => {
                 // Inference health check that verifies expected models are available
                 let timeout = Duration::from_secs(config.timeout_secs);
-                let mut hc = InferenceHealthCheck::new(
-                    endpoint.clone(),
-                    expected_models.clone(),
-                    timeout,
-                );
+                let mut hc =
+                    InferenceHealthCheck::new(endpoint.clone(), expected_models.clone(), timeout);
                 hc.consecutive_success = config.healthy_threshold as usize;
                 hc.consecutive_failure = config.unhealthy_threshold as usize;
 

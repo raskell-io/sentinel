@@ -1,7 +1,7 @@
 //! Agent capability negotiation for Protocol v2.
 
-use serde::{Deserialize, Serialize};
 use crate::EventType;
+use serde::{Deserialize, Serialize};
 
 /// Agent capabilities declared during handshake.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +20,11 @@ pub struct AgentCapabilities {
 }
 
 impl AgentCapabilities {
-    pub fn new(agent_id: impl Into<String>, name: impl Into<String>, version: impl Into<String>) -> Self {
+    pub fn new(
+        agent_id: impl Into<String>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Self {
         Self {
             protocol_version: super::PROTOCOL_VERSION_2,
             agent_id: agent_id.into(),
@@ -79,7 +83,9 @@ pub struct AgentFeatures {
 }
 
 impl AgentFeatures {
-    pub fn simple() -> Self { Self::default() }
+    pub fn simple() -> Self {
+        Self::default()
+    }
     pub fn full() -> Self {
         Self {
             streaming_body: true,

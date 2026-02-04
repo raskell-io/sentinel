@@ -82,5 +82,9 @@ fn main() {
     }
 
     let full_count = examples.iter().filter(|(_, full)| *full).count();
-    println!("✓ {} full configs + {} partial configs validated!", full_count, partial.len());
+    println!(
+        "✓ {} full configs + {} partial configs validated!",
+        full_count,
+        partial.len()
+    );
 }

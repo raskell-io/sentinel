@@ -422,20 +422,38 @@ denylist = "raskell-io/sentinel-agent-denylist"
 
         // Core agents
         assert!(lock.agent("waf").is_some(), "waf agent should be in bundle");
-        assert!(lock.agent("ratelimit").is_some(), "ratelimit agent should be in bundle");
-        assert!(lock.agent("denylist").is_some(), "denylist agent should be in bundle");
+        assert!(
+            lock.agent("ratelimit").is_some(),
+            "ratelimit agent should be in bundle"
+        );
+        assert!(
+            lock.agent("denylist").is_some(),
+            "denylist agent should be in bundle"
+        );
 
         // Security agents
-        assert!(lock.agent("sentinelsec").is_some(), "sentinelsec agent should be in bundle");
-        assert!(lock.agent("ip-reputation").is_some(), "ip-reputation agent should be in bundle");
+        assert!(
+            lock.agent("sentinelsec").is_some(),
+            "sentinelsec agent should be in bundle"
+        );
+        assert!(
+            lock.agent("ip-reputation").is_some(),
+            "ip-reputation agent should be in bundle"
+        );
 
         // Scripting agents
         assert!(lock.agent("lua").is_some(), "lua agent should be in bundle");
         assert!(lock.agent("js").is_some(), "js agent should be in bundle");
-        assert!(lock.agent("wasm").is_some(), "wasm agent should be in bundle");
+        assert!(
+            lock.agent("wasm").is_some(),
+            "wasm agent should be in bundle"
+        );
 
         // Should have many agents total
-        assert!(lock.agents.len() >= 20, "bundle should have at least 20 agents");
+        assert!(
+            lock.agents.len() >= 20,
+            "bundle should have at least 20 agents"
+        );
     }
 
     #[test]

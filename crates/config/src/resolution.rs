@@ -17,9 +17,7 @@
 
 use sentinel_common::ids::{QualifiedId, Scope};
 
-use crate::{
-    AgentConfig, Config, FilterConfig, NamespaceConfig, ServiceConfig, UpstreamConfig,
-};
+use crate::{AgentConfig, Config, FilterConfig, NamespaceConfig, ServiceConfig, UpstreamConfig};
 
 // ============================================================================
 // Resource Resolver
@@ -74,7 +72,11 @@ impl<'a> ResourceResolver<'a> {
     /// 4. Global
     ///
     /// Qualified references (containing `:`) resolve directly.
-    pub fn resolve_upstream(&self, reference: &str, from_scope: &Scope) -> Option<&'a UpstreamConfig> {
+    pub fn resolve_upstream(
+        &self,
+        reference: &str,
+        from_scope: &Scope,
+    ) -> Option<&'a UpstreamConfig> {
         // Qualified reference - direct lookup
         if reference.contains(':') {
             return self.resolve_upstream_qualified(&QualifiedId::parse(reference));
@@ -235,12 +237,7 @@ impl<'a> ResourceResolver<'a> {
             .and_then(|ns| ns.agents.iter().find(|a| a.id == name))
     }
 
-    fn find_service_agent(
-        &self,
-        ns_id: &str,
-        svc_id: &str,
-        name: &str,
-    ) -> Option<&'a AgentConfig> {
+    fn find_service_agent(&self, ns_id: &str, svc_id: &str, name: &str) -> Option<&'a AgentConfig> {
         self.config
             .namespaces
             .iter()
@@ -423,12 +420,19 @@ mod tests {
         let mut config = Config::default_for_testing();
 
         // Add global upstream
-        config.upstreams.insert("global-backend".to_string(), test_upstream("global-backend"));
+        config.upstreams.insert(
+            "global-backend".to_string(),
+            test_upstream("global-backend"),
+        );
 
         // Add namespace with upstream
         let mut ns = NamespaceConfig::new("api");
-        ns.upstreams.insert("ns-backend".to_string(), test_upstream("ns-backend"));
-        ns.upstreams.insert("shared-backend".to_string(), test_upstream("shared-backend"));
+        ns.upstreams
+            .insert("ns-backend".to_string(), test_upstream("ns-backend"));
+        ns.upstreams.insert(
+            "shared-backend".to_string(),
+            test_upstream("shared-backend"),
+        );
         ns.exports = ExportConfig {
             upstreams: vec!["shared-backend".to_string()],
             agents: vec![],
@@ -437,7 +441,8 @@ mod tests {
 
         // Add service with upstream
         let mut svc = ServiceConfig::new("payments");
-        svc.upstreams.insert("svc-backend".to_string(), test_upstream("svc-backend"));
+        svc.upstreams
+            .insert("svc-backend".to_string(), test_upstream("svc-backend"));
         ns.services.push(svc);
 
         config.namespaces.push(ns);

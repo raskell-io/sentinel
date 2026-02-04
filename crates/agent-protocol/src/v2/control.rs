@@ -49,10 +49,24 @@ pub struct ConfigUpdateRequest {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ConfigUpdateType {
     RequestReload,
-    RuleUpdate { rule_set: String, rules: Vec<RuleDefinition>, remove_rules: Vec<String> },
-    ListUpdate { list_id: String, add: Vec<String>, remove: Vec<String> },
-    RestartRequired { reason: String, grace_period_ms: u64 },
-    ConfigError { error: String, field: Option<String> },
+    RuleUpdate {
+        rule_set: String,
+        rules: Vec<RuleDefinition>,
+        remove_rules: Vec<String>,
+    },
+    ListUpdate {
+        list_id: String,
+        add: Vec<String>,
+        remove: Vec<String>,
+    },
+    RestartRequired {
+        reason: String,
+        grace_period_ms: u64,
+    },
+    ConfigError {
+        error: String,
+        field: Option<String>,
+    },
 }
 
 /// A rule definition.
@@ -78,11 +92,21 @@ pub struct ConfigUpdateResponse {
 
 impl ConfigUpdateResponse {
     pub fn success(request_id: impl Into<String>) -> Self {
-        Self { request_id: request_id.into(), accepted: true, error: None, timestamp_ms: now_ms() }
+        Self {
+            request_id: request_id.into(),
+            accepted: true,
+            error: None,
+            timestamp_ms: now_ms(),
+        }
     }
 
     pub fn failure(request_id: impl Into<String>, error: impl Into<String>) -> Self {
-        Self { request_id: request_id.into(), accepted: false, error: Some(error.into()), timestamp_ms: now_ms() }
+        Self {
+            request_id: request_id.into(),
+            accepted: false,
+            error: Some(error.into()),
+            timestamp_ms: now_ms(),
+        }
     }
 }
 

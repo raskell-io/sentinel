@@ -94,10 +94,10 @@ impl AcmeClient {
             info!("Loading existing ACME account from storage");
 
             // Deserialize credentials
-            let credentials: instant_acme::AccountCredentials =
-                serde_json::from_str(&creds_json).map_err(|e| {
-                    AcmeError::AccountCreation(format!("Failed to deserialize credentials: {}", e))
-                })?;
+            let credentials: instant_acme::AccountCredentials = serde_json::from_str(&creds_json)
+                .map_err(|e| {
+                AcmeError::AccountCreation(format!("Failed to deserialize credentials: {}", e))
+            })?;
 
             // Reconstruct account from stored credentials
             let account = Account::builder()
@@ -161,9 +161,7 @@ impl AcmeClient {
     /// HTTP-01 challenge information for each domain.
     pub async fn create_order(&self) -> Result<(Order, Vec<ChallengeInfo>), AcmeError> {
         let account_guard = self.account.read().await;
-        let account = account_guard
-            .as_ref()
-            .ok_or(AcmeError::NoAccount)?;
+        let account = account_guard.as_ref().ok_or(AcmeError::NoAccount)?;
 
         // Create identifiers for all domains
         let identifiers: Vec<Identifier> = self
@@ -186,8 +184,9 @@ impl AcmeClient {
         let mut challenges = Vec::new();
 
         while let Some(result) = authorizations.next().await {
-            let mut authz = result
-                .map_err(|e| AcmeError::OrderCreation(format!("Failed to get authorization: {}", e)))?;
+            let mut authz = result.map_err(|e| {
+                AcmeError::OrderCreation(format!("Failed to get authorization: {}", e))
+            })?;
 
             let identifier = authz.identifier();
             let domain = match &identifier.identifier {
@@ -230,9 +229,7 @@ impl AcmeClient {
     ///
     /// A tuple of (Order, Vec<Dns01ChallengeInfo>) containing the order and
     /// DNS-01 challenge information for each domain.
-    pub async fn create_order_dns01(
-        &self,
-    ) -> Result<(Order, Vec<Dns01ChallengeInfo>), AcmeError> {
+    pub async fn create_order_dns01(&self) -> Result<(Order, Vec<Dns01ChallengeInfo>), AcmeError> {
         let account_guard = self.account.read().await;
         let account = account_guard.as_ref().ok_or(AcmeError::NoAccount)?;
 
@@ -257,8 +254,9 @@ impl AcmeClient {
         let mut challenges = Vec::new();
 
         while let Some(result) = authorizations.next().await {
-            let mut authz = result
-                .map_err(|e| AcmeError::OrderCreation(format!("Failed to get authorization: {}", e)))?;
+            let mut authz = result.map_err(|e| {
+                AcmeError::OrderCreation(format!("Failed to get authorization: {}", e))
+            })?;
 
             let identifier = authz.identifier();
             let domain = match &identifier.identifier {
@@ -282,11 +280,8 @@ impl AcmeClient {
             let key_authorization = dns01_challenge.key_authorization();
 
             // Create DNS-01 challenge info with computed value
-            let challenge_info = create_challenge_info(
-                &domain,
-                key_authorization.as_str(),
-                &dns01_challenge.url,
-            );
+            let challenge_info =
+                create_challenge_info(&domain, key_authorization.as_str(), &dns01_challenge.url);
 
             challenges.push(challenge_info);
         }
@@ -420,9 +415,10 @@ impl AcmeClient {
         // Wait for certificate to be issued
         let deadline = tokio::time::Instant::now() + DEFAULT_TIMEOUT;
         let cert_chain = loop {
-            let state = order.refresh().await.map_err(|e| {
-                AcmeError::Finalization(format!("Failed to refresh order: {}", e))
-            })?;
+            let state = order
+                .refresh()
+                .await
+                .map_err(|e| AcmeError::Finalization(format!("Failed to refresh order: {}", e)))?;
 
             match state.status {
                 OrderStatus::Valid => {
@@ -507,7 +503,14 @@ impl std::fmt::Debug for AcmeClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AcmeClient")
             .field("config", &self.config)
-            .field("has_account", &self.account.try_read().map(|a| a.is_some()).unwrap_or(false))
+            .field(
+                "has_account",
+                &self
+                    .account
+                    .try_read()
+                    .map(|a| a.is_some())
+                    .unwrap_or(false),
+            )
             .finish()
     }
 }

@@ -599,7 +599,10 @@ impl KubernetesDiscovery {
                 )
             })?;
 
-        Ok((format!("https://{}:{}", host, port), token.trim().to_string()))
+        Ok((
+            format!("https://{}:{}", host, port),
+            token.trim().to_string(),
+        ))
     }
 
     /// Load and cache kubeconfig
@@ -688,13 +691,19 @@ impl ServiceDiscovery for KubernetesDiscovery {
         // Determine if we're using kubeconfig or in-cluster config
         let (api_server, auth, ca_cert, skip_verify) = if self.kubeconfig.is_some() {
             let config = self.load_kubeconfig()?;
-            (config.server, config.auth, config.ca_cert, config.insecure_skip_tls_verify)
+            (
+                config.server,
+                config.auth,
+                config.ca_cert,
+                config.insecure_skip_tls_verify,
+            )
         } else {
             // Try in-cluster first
             match self.get_in_cluster_config() {
                 Ok((server, token)) => {
                     // In-cluster uses the service account CA
-                    let ca = std::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt").ok();
+                    let ca =
+                        std::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt").ok();
                     (server, KubeAuth::Token(token), ca, false)
                 }
                 Err(e) => {
@@ -704,7 +713,12 @@ impl ServiceDiscovery for KubernetesDiscovery {
                         "In-cluster config not available, trying default kubeconfig"
                     );
                     let config = self.load_kubeconfig()?;
-                    (config.server, config.auth, config.ca_cert, config.insecure_skip_tls_verify)
+                    (
+                        config.server,
+                        config.auth,
+                        config.ca_cert,
+                        config.insecure_skip_tls_verify,
+                    )
                 }
             }
         };
@@ -805,7 +819,10 @@ impl ServiceDiscovery for KubernetesDiscovery {
                 let target_port = subset.ports.as_ref().and_then(|ports| {
                     if let Some(port_name) = &self.port_name {
                         // Find port by name
-                        ports.iter().find(|p| p.name.as_ref() == Some(port_name)).map(|p| p.port)
+                        ports
+                            .iter()
+                            .find(|p| p.name.as_ref() == Some(port_name))
+                            .map(|p| p.port)
                     } else {
                         // Use first port
                         ports.first().map(|p| p.port)
@@ -818,7 +835,9 @@ impl ServiceDiscovery for KubernetesDiscovery {
                         if let Ok(mut addrs) = socket_addr.to_socket_addrs() {
                             if let Some(socket_addr) = addrs.next() {
                                 backends.insert(Backend {
-                                    addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(socket_addr),
+                                    addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(
+                                        socket_addr,
+                                    ),
                                     weight: 1,
                                     ext: http::Extensions::new(),
                                 });
@@ -995,7 +1014,9 @@ impl FileDiscovery {
                 Ok(mut addrs) => {
                     if let Some(socket_addr) = addrs.next() {
                         backends.insert(Backend {
-                            addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(socket_addr),
+                            addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(
+                                socket_addr,
+                            ),
                             weight,
                             ext: http::Extensions::new(),
                         });

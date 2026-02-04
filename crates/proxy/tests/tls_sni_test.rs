@@ -121,21 +121,33 @@ mod sni_resolver {
     fn test_create_from_minimal_config() {
         let config = minimal_tls_config();
         let resolver = SniResolver::from_config(&config);
-        assert!(resolver.is_ok(), "Failed to create resolver: {:?}", resolver.err());
+        assert!(
+            resolver.is_ok(),
+            "Failed to create resolver: {:?}",
+            resolver.err()
+        );
     }
 
     #[test]
     fn test_create_from_multi_sni_config() {
         let config = multi_sni_tls_config();
         let resolver = SniResolver::from_config(&config);
-        assert!(resolver.is_ok(), "Failed to create resolver: {:?}", resolver.err());
+        assert!(
+            resolver.is_ok(),
+            "Failed to create resolver: {:?}",
+            resolver.err()
+        );
     }
 
     #[test]
     fn test_create_from_wildcard_config() {
         let config = wildcard_tls_config();
         let resolver = SniResolver::from_config(&config);
-        assert!(resolver.is_ok(), "Failed to create resolver: {:?}", resolver.err());
+        assert!(
+            resolver.is_ok(),
+            "Failed to create resolver: {:?}",
+            resolver.err()
+        );
     }
 
     #[test]
@@ -169,8 +181,14 @@ mod sni_resolver {
         let cert3 = resolver.resolve(Some("Api.Example.Com"));
 
         // The certificates should be the same Arc instance
-        assert!(Arc::ptr_eq(&cert1, &cert2), "Case insensitive matching failed");
-        assert!(Arc::ptr_eq(&cert2, &cert3), "Case insensitive matching failed");
+        assert!(
+            Arc::ptr_eq(&cert1, &cert2),
+            "Case insensitive matching failed"
+        );
+        assert!(
+            Arc::ptr_eq(&cert2, &cert3),
+            "Case insensitive matching failed"
+        );
     }
 
     #[test]
@@ -467,7 +485,11 @@ mod hot_reload {
 
         // Reload should pick up new certs
         let reload_result = resolver.reload();
-        assert!(reload_result.is_ok(), "Reload should succeed: {:?}", reload_result.err());
+        assert!(
+            reload_result.is_ok(),
+            "Reload should succeed: {:?}",
+            reload_result.err()
+        );
 
         // Get certificate after reload
         let cert_after = resolver.resolve(None);
@@ -513,7 +535,10 @@ mod hot_reload {
 
         // Reload should fail
         let reload_result = resolver.reload();
-        assert!(reload_result.is_err(), "Reload should fail with invalid cert");
+        assert!(
+            reload_result.is_err(),
+            "Reload should fail with invalid cert"
+        );
 
         // Original cert should still be in use
         let cert_after = resolver.resolve(None);
@@ -556,7 +581,10 @@ mod hot_reload {
 
         // Reload should fail
         let reload_result = resolver.reload();
-        assert!(reload_result.is_err(), "Reload should fail when cert file is deleted");
+        assert!(
+            reload_result.is_err(),
+            "Reload should fail when cert file is deleted"
+        );
 
         // Original cert should still be in use
         let cert_after = resolver.resolve(None);
@@ -626,7 +654,10 @@ mod certificate_reloader {
 
         // Reload all - should succeed
         let (success_count, errors) = reloader.reload_all();
-        assert_eq!(success_count, 2, "Both resolvers should reload successfully");
+        assert_eq!(
+            success_count, 2,
+            "Both resolvers should reload successfully"
+        );
         assert!(errors.is_empty(), "No errors expected");
     }
 
@@ -671,7 +702,10 @@ mod certificate_reloader {
         let (success_count, errors) = reloader.reload_all();
         assert_eq!(success_count, 1, "One resolver should succeed");
         assert_eq!(errors.len(), 1, "One resolver should fail");
-        assert_eq!(errors[0].0, "https-will-fail", "Failed resolver should be identified");
+        assert_eq!(
+            errors[0].0, "https-will-fail",
+            "Failed resolver should be identified"
+        );
     }
 
     #[test]
@@ -864,7 +898,11 @@ mod server_config {
         ensure_crypto_provider();
         let config = minimal_tls_config();
         let result = build_server_config(&config);
-        assert!(result.is_ok(), "Failed to build server config: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to build server config: {:?}",
+            result.err()
+        );
 
         let server_config = result.unwrap();
         // Check ALPN protocols are set
@@ -877,7 +915,11 @@ mod server_config {
         ensure_crypto_provider();
         let config = multi_sni_tls_config();
         let result = build_server_config(&config);
-        assert!(result.is_ok(), "Failed to build server config with SNI: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to build server config with SNI: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -885,7 +927,11 @@ mod server_config {
         ensure_crypto_provider();
         let config = mtls_tls_config();
         let result = build_server_config(&config);
-        assert!(result.is_ok(), "Failed to build mTLS server config: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to build mTLS server config: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -893,6 +939,10 @@ mod server_config {
         ensure_crypto_provider();
         let config = wildcard_tls_config();
         let result = build_server_config(&config);
-        assert!(result.is_ok(), "Failed to build wildcard server config: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to build wildcard server config: {:?}",
+            result.err()
+        );
     }
 }

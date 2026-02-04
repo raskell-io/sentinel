@@ -76,15 +76,11 @@ impl UdsEncoding {
     #[inline]
     pub fn serialize<T: serde::Serialize>(&self, value: &T) -> Result<Vec<u8>, AgentProtocolError> {
         match self {
-            UdsEncoding::Json => {
-                serde_json::to_vec(value)
-                    .map_err(|e| AgentProtocolError::Serialization(e.to_string()))
-            }
+            UdsEncoding::Json => serde_json::to_vec(value)
+                .map_err(|e| AgentProtocolError::Serialization(e.to_string())),
             #[cfg(feature = "binary-uds")]
-            UdsEncoding::MessagePack => {
-                rmp_serde::to_vec(value)
-                    .map_err(|e| AgentProtocolError::Serialization(e.to_string()))
-            }
+            UdsEncoding::MessagePack => rmp_serde::to_vec(value)
+                .map_err(|e| AgentProtocolError::Serialization(e.to_string())),
             #[cfg(not(feature = "binary-uds"))]
             UdsEncoding::MessagePack => {
                 // Fall back to JSON if binary-uds feature is not enabled
@@ -98,17 +94,16 @@ impl UdsEncoding {
     ///
     /// Returns the deserialized value, or an error if deserialization fails.
     #[inline]
-    pub fn deserialize<'a, T: serde::Deserialize<'a>>(&self, bytes: &'a [u8]) -> Result<T, AgentProtocolError> {
+    pub fn deserialize<'a, T: serde::Deserialize<'a>>(
+        &self,
+        bytes: &'a [u8],
+    ) -> Result<T, AgentProtocolError> {
         match self {
-            UdsEncoding::Json => {
-                serde_json::from_slice(bytes)
-                    .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))
-            }
+            UdsEncoding::Json => serde_json::from_slice(bytes)
+                .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string())),
             #[cfg(feature = "binary-uds")]
-            UdsEncoding::MessagePack => {
-                rmp_serde::from_slice(bytes)
-                    .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string()))
-            }
+            UdsEncoding::MessagePack => rmp_serde::from_slice(bytes)
+                .map_err(|e| AgentProtocolError::InvalidMessage(e.to_string())),
             #[cfg(not(feature = "binary-uds"))]
             UdsEncoding::MessagePack => {
                 // Fall back to JSON if binary-uds feature is not enabled
@@ -448,7 +443,9 @@ impl AgentClientV2Uds {
 
         if !response.success {
             return Err(AgentProtocolError::ConnectionFailed(
-                response.error.unwrap_or_else(|| "Unknown handshake error".to_string()),
+                response
+                    .error
+                    .unwrap_or_else(|| "Unknown handshake error".to_string()),
             ));
         }
 
@@ -512,7 +509,15 @@ impl AgentClientV2Uds {
                                     Ok(response) => {
                                         // Extract correlation ID from the response
                                         // For UDS, we include correlation_id in the response
-                                        if let Some(sender) = pending.lock().await.remove(&response.audit.custom.get("correlation_id").and_then(|v| v.as_str()).unwrap_or("").to_string()) {
+                                        if let Some(sender) = pending.lock().await.remove(
+                                            &response
+                                                .audit
+                                                .custom
+                                                .get("correlation_id")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string(),
+                                        ) {
                                             let _ = sender.send(response);
                                         }
                                     }
@@ -532,7 +537,9 @@ impl AgentClientV2Uds {
                                 struct HealthStatusMsg {
                                     state: Option<i64>,
                                 }
-                                if let Ok(health) = reader_encoding.deserialize::<HealthStatusMsg>(&payload) {
+                                if let Ok(health) =
+                                    reader_encoding.deserialize::<HealthStatusMsg>(&payload)
+                                {
                                     if let Some(state) = health.state {
                                         *health_state_clone.write().await = state as i32;
                                     }
@@ -550,7 +557,9 @@ impl AgentClientV2Uds {
                                 struct FlowControlMsg {
                                     action: Option<i64>,
                                 }
-                                if let Ok(fc) = reader_encoding.deserialize::<FlowControlMsg>(&payload) {
+                                if let Ok(fc) =
+                                    reader_encoding.deserialize::<FlowControlMsg>(&payload)
+                                {
                                     let action = fc.action.unwrap_or(0);
                                     let new_state = match action {
                                         1 => FlowState::Paused,
@@ -613,7 +622,8 @@ impl AgentClientV2Uds {
         correlation_id: &str,
         event: &crate::RequestHeadersEvent,
     ) -> Result<AgentResponse, AgentProtocolError> {
-        self.send_event(MessageType::RequestHeaders, correlation_id, event).await
+        self.send_event(MessageType::RequestHeaders, correlation_id, event)
+            .await
     }
 
     /// Send a request body chunk event.
@@ -622,7 +632,8 @@ impl AgentClientV2Uds {
         correlation_id: &str,
         event: &crate::RequestBodyChunkEvent,
     ) -> Result<AgentResponse, AgentProtocolError> {
-        self.send_event(MessageType::RequestBodyChunk, correlation_id, event).await
+        self.send_event(MessageType::RequestBodyChunk, correlation_id, event)
+            .await
     }
 
     /// Send a response headers event.
@@ -631,7 +642,8 @@ impl AgentClientV2Uds {
         correlation_id: &str,
         event: &crate::ResponseHeadersEvent,
     ) -> Result<AgentResponse, AgentProtocolError> {
-        self.send_event(MessageType::ResponseHeaders, correlation_id, event).await
+        self.send_event(MessageType::ResponseHeaders, correlation_id, event)
+            .await
     }
 
     /// Send a response body chunk event.
@@ -640,7 +652,8 @@ impl AgentClientV2Uds {
         correlation_id: &str,
         event: &crate::ResponseBodyChunkEvent,
     ) -> Result<AgentResponse, AgentProtocolError> {
-        self.send_event(MessageType::ResponseBodyChunk, correlation_id, event).await
+        self.send_event(MessageType::ResponseBodyChunk, correlation_id, event)
+            .await
     }
 
     /// Send a binary request body chunk event (zero-copy path).
@@ -670,7 +683,8 @@ impl AgentClientV2Uds {
             event.chunk_index,
             Some(event.bytes_received),
             None,
-        ).await
+        )
+        .await
     }
 
     /// Send a binary response body chunk event (zero-copy path).
@@ -691,7 +705,8 @@ impl AgentClientV2Uds {
             event.chunk_index,
             None,
             Some(event.bytes_sent),
-        ).await
+        )
+        .await
     }
 
     /// Internal helper to send binary body chunks with encoding-aware serialization.
@@ -781,7 +796,10 @@ impl AgentClientV2Uds {
         let response = tokio::time::timeout(self.timeout, rx)
             .await
             .map_err(|_| {
-                self.pending.try_lock().ok().map(|mut p| p.remove(correlation_id));
+                self.pending
+                    .try_lock()
+                    .ok()
+                    .map(|mut p| p.remove(correlation_id));
                 AgentProtocolError::Timeout(self.timeout)
             })?
             .map_err(|_| AgentProtocolError::ConnectionClosed)?;
@@ -857,7 +875,10 @@ impl AgentClientV2Uds {
         let response = tokio::time::timeout(self.timeout, rx)
             .await
             .map_err(|_| {
-                self.pending.try_lock().ok().map(|mut p| p.remove(correlation_id));
+                self.pending
+                    .try_lock()
+                    .ok()
+                    .map(|mut p| p.remove(correlation_id));
                 AgentProtocolError::Timeout(self.timeout)
             })?
             .map_err(|_| AgentProtocolError::ConnectionClosed)?;
@@ -1171,12 +1192,17 @@ mod tests {
             "data": base64::engine::general_purpose::STANDARD.encode(&data),
             "is_last": true,
             "chunk_index": 0u32,
-        })).unwrap().len();
+        }))
+        .unwrap()
+        .len();
 
         // MessagePack should be smaller (raw bytes vs base64 ~33% overhead)
-        assert!(serialized.len() < json_size,
+        assert!(
+            serialized.len() < json_size,
             "MessagePack ({}) should be smaller than JSON+base64 ({})",
-            serialized.len(), json_size);
+            serialized.len(),
+            json_size
+        );
     }
 
     #[test]

@@ -50,17 +50,17 @@ pub mod cache;
 pub mod decompression;
 pub mod discovery;
 pub mod distributed_rate_limit;
-pub mod memcached_rate_limit;
 pub mod errors;
+pub mod memcached_rate_limit;
 
 // Kubernetes kubeconfig parsing (requires kubernetes feature)
-#[cfg(feature = "kubernetes")]
-pub mod kubeconfig;
 pub mod geo_filter;
 pub mod grpc_health;
 pub mod health;
 pub mod http_helpers;
 pub mod inference;
+#[cfg(feature = "kubernetes")]
+pub mod kubeconfig;
 pub mod logging;
 pub mod memory_cache;
 pub mod metrics;
@@ -68,9 +68,9 @@ pub mod otel;
 pub mod proxy;
 pub mod rate_limit;
 pub mod reload;
+pub mod routing;
 pub mod scoped_circuit_breaker;
 pub mod scoped_rate_limit;
-pub mod routing;
 pub mod scoped_routing;
 pub mod shadow;
 pub mod static_files;

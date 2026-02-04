@@ -102,7 +102,8 @@ impl TiktokenManager {
             || model_lower.contains("gpt-3.5")
             || model_lower.contains("gpt-35")
             || model_lower.contains("text-embedding")
-            || model_lower.contains("claude") // Claude approximation
+            || model_lower.contains("claude")
+        // Claude approximation
         {
             return TiktokenEncoding::Cl100kBase;
         }
@@ -504,7 +505,8 @@ mod tests {
         let manager = TiktokenManager::new();
 
         // "Hello world" is typically 2 tokens with cl100k_base
-        let tokens = manager.count_tokens_with_encoding(TiktokenEncoding::Cl100kBase, "Hello world");
+        let tokens =
+            manager.count_tokens_with_encoding(TiktokenEncoding::Cl100kBase, "Hello world");
         assert_eq!(tokens, 2);
     }
 

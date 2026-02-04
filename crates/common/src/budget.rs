@@ -446,8 +446,15 @@ mod tests {
     #[test]
     fn test_budget_check_result_is_allowed() {
         assert!(BudgetCheckResult::Allowed { remaining: 1000 }.is_allowed());
-        assert!(BudgetCheckResult::Soft { remaining: -100, over_by: 100 }.is_allowed());
-        assert!(!BudgetCheckResult::Exhausted { retry_after_secs: 3600 }.is_allowed());
+        assert!(BudgetCheckResult::Soft {
+            remaining: -100,
+            over_by: 100
+        }
+        .is_allowed());
+        assert!(!BudgetCheckResult::Exhausted {
+            retry_after_secs: 3600
+        }
+        .is_allowed());
     }
 
     #[test]

@@ -58,8 +58,8 @@ pub mod waf;
 
 // Agents
 pub use agents::{
-    AgentConfig, AgentEvent, AgentPoolConfig, AgentProtocolVersion, AgentTlsConfig,
-    AgentTransport, AgentType, BodyStreamingMode, LoadBalanceStrategy,
+    AgentConfig, AgentEvent, AgentPoolConfig, AgentProtocolVersion, AgentTlsConfig, AgentTransport,
+    AgentType, BodyStreamingMode, LoadBalanceStrategy,
 };
 
 // Defaults
@@ -83,19 +83,19 @@ pub use resolution::ResourceResolver;
 
 // Observability
 pub use observability::{
-    AccessLogConfig, AccessLogFields, AuditLogConfig, ErrorLogConfig, LoggingConfig,
-    MetricsConfig, ObservabilityConfig, TracingBackend, TracingConfig,
+    AccessLogConfig, AccessLogFields, AuditLogConfig, ErrorLogConfig, LoggingConfig, MetricsConfig,
+    ObservabilityConfig, TracingBackend, TracingConfig,
 };
 
 // Routes
 pub use routes::{
     ApiSchemaConfig, BuiltinHandler, CacheBackend, CacheStorageConfig, ErrorFormat, ErrorPage,
-    ErrorPageConfig, FallbackConfig, FallbackTriggers, FallbackUpstream, FailureMode,
+    ErrorPageConfig, FailureMode, FallbackConfig, FallbackTriggers, FallbackUpstream,
     GuardrailAction, GuardrailFailureMode, GuardrailsConfig, HeaderModifications, InferenceConfig,
     InferenceProvider, InferenceRouting, InferenceRoutingStrategy, MatchCondition,
-    ModelRoutingConfig, ModelUpstreamMapping, PiiAction, PiiDetectionConfig,
-    PromptInjectionConfig, RateLimitPolicy, RouteCacheConfig, RouteConfig, RoutePolicies,
-    ServiceType, StaticFileConfig, TokenEstimation, TokenRateLimit,
+    ModelRoutingConfig, ModelUpstreamMapping, PiiAction, PiiDetectionConfig, PromptInjectionConfig,
+    RateLimitPolicy, RouteCacheConfig, RouteConfig, RoutePolicies, ServiceType, StaticFileConfig,
+    TokenEstimation, TokenRateLimit,
 };
 
 // Server
@@ -214,11 +214,20 @@ pub enum SchemaCompatibility {
     /// Version is compatible (within supported range)
     Compatible,
     /// Version is newer than supported - may have unsupported features
-    Newer { config_version: String, max_supported: String },
+    Newer {
+        config_version: String,
+        max_supported: String,
+    },
     /// Version is older than minimum supported
-    Older { config_version: String, min_supported: String },
+    Older {
+        config_version: String,
+        min_supported: String,
+    },
     /// Version format is invalid
-    Invalid { config_version: String, reason: String },
+    Invalid {
+        config_version: String,
+        reason: String,
+    },
 }
 
 impl SchemaCompatibility {
@@ -269,10 +278,12 @@ fn parse_version(version: &str) -> Option<(u32, u32)> {
 pub fn check_schema_compatibility(config_version: &str) -> SchemaCompatibility {
     let config_ver = match parse_version(config_version) {
         Some(v) => v,
-        None => return SchemaCompatibility::Invalid {
-            config_version: config_version.to_string(),
-            reason: "Expected format: major.minor (e.g., '1.0')".to_string(),
-        },
+        None => {
+            return SchemaCompatibility::Invalid {
+                config_version: config_version.to_string(),
+                reason: "Expected format: major.minor (e.g., '1.0')".to_string(),
+            }
+        }
     };
 
     let current_ver = parse_version(CURRENT_SCHEMA_VERSION).unwrap();
@@ -475,7 +486,9 @@ impl Config {
         }
         if !compat.is_loadable() {
             return Err(SentinelError::Config {
-                message: compat.error().unwrap_or_else(|| "Unknown schema version error".to_string()),
+                message: compat
+                    .error()
+                    .unwrap_or_else(|| "Unknown schema version error".to_string()),
                 source: None,
             });
         }

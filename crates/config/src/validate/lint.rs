@@ -31,7 +31,10 @@ pub fn lint_config(config: &Config) -> ValidationResult {
         // Check for missing upstream (skip for static and builtin service types)
         use crate::routes::ServiceType;
         if route.upstream.is_none()
-            && !matches!(route.service_type, ServiceType::Static | ServiceType::Builtin)
+            && !matches!(
+                route.service_type,
+                ServiceType::Static | ServiceType::Builtin
+            )
         {
             result.add_warning(ValidationWarning::new(format!(
                 "Route '{}' has no upstream configured",
@@ -101,9 +104,10 @@ const HSTS_HEADER: &str = "Strict-Transport-Security";
 /// Check for HSTS headers in route configurations and header filters
 fn check_hsts_headers(config: &Config, result: &mut ValidationResult) {
     // Check if any route has HSTS in its response_headers
-    let has_hsts_in_route_policies = config.routes.iter().any(|route| {
-        route_has_hsts_header(&route.policies.response_headers)
-    });
+    let has_hsts_in_route_policies = config
+        .routes
+        .iter()
+        .any(|route| route_has_hsts_header(&route.policies.response_headers));
 
     // Check if any headers filter sets HSTS
     let has_hsts_in_filter = config.filters.values().any(|filter_config| {
@@ -127,10 +131,16 @@ fn check_hsts_headers(config: &Config, result: &mut ValidationResult) {
 /// Check if route header modifications contain HSTS
 fn route_has_hsts_header(headers: &crate::HeaderModifications) -> bool {
     // Check 'set' headers (case-insensitive)
-    let has_in_set = headers.set.keys().any(|k| k.eq_ignore_ascii_case(HSTS_HEADER));
+    let has_in_set = headers
+        .set
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case(HSTS_HEADER));
 
     // Check 'add' headers (case-insensitive)
-    let has_in_add = headers.add.keys().any(|k| k.eq_ignore_ascii_case(HSTS_HEADER));
+    let has_in_add = headers
+        .add
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case(HSTS_HEADER));
 
     has_in_set || has_in_add
 }
@@ -138,10 +148,16 @@ fn route_has_hsts_header(headers: &crate::HeaderModifications) -> bool {
 /// Check if a headers filter sets HSTS
 fn headers_filter_has_hsts(filter: &HeadersFilter) -> bool {
     // Check 'set' headers (case-insensitive)
-    let has_in_set = filter.set.keys().any(|k| k.eq_ignore_ascii_case(HSTS_HEADER));
+    let has_in_set = filter
+        .set
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case(HSTS_HEADER));
 
     // Check 'add' headers (case-insensitive)
-    let has_in_add = filter.add.keys().any(|k| k.eq_ignore_ascii_case(HSTS_HEADER));
+    let has_in_add = filter
+        .add
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case(HSTS_HEADER));
 
     has_in_set || has_in_add
 }
@@ -151,8 +167,8 @@ mod tests {
     use super::*;
     use crate::filters::FilterConfig;
     use crate::{
-        ConnectionPoolConfig, HttpVersionConfig, ListenerConfig, MatchCondition, RoutePolicies,
-        RouteConfig, ServiceType, TlsConfig, UpstreamConfig, UpstreamTarget, UpstreamTimeouts,
+        ConnectionPoolConfig, HttpVersionConfig, ListenerConfig, MatchCondition, RouteConfig,
+        RoutePolicies, ServiceType, TlsConfig, UpstreamConfig, UpstreamTarget, UpstreamTimeouts,
     };
     use sentinel_common::types::{LoadBalancingAlgorithm, Priority, TlsVersion};
     use std::collections::HashMap;
@@ -255,7 +271,9 @@ mod tests {
     #[test]
     fn test_lint_missing_health_check() {
         let mut config = Config::default_for_testing();
-        config.upstreams.insert("test".to_string(), test_upstream_config());
+        config
+            .upstreams
+            .insert("test".to_string(), test_upstream_config());
 
         let result = lint_config(&config);
 
@@ -285,10 +303,13 @@ mod tests {
 
         let result = lint_config(&config);
 
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.message.contains("HSTS") && w.message.contains("Strict-Transport-Security")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("HSTS")
+                    && w.message.contains("Strict-Transport-Security"))
+        );
     }
 
     #[test]

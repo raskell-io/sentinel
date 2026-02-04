@@ -26,7 +26,10 @@ pub async fn validate_agents(config: &Config) -> ValidationResult {
         let Some(filter_config) = config.filters.get(filter_name) else {
             result.add_error(ValidationError::new(
                 ErrorCategory::Agent,
-                format!("Filter '{}' referenced in route but not defined", filter_name),
+                format!(
+                    "Filter '{}' referenced in route but not defined",
+                    filter_name
+                ),
             ));
             continue;
         };
@@ -199,7 +202,7 @@ mod tests {
     use super::*;
     use crate::agents::{AgentConfig, AgentEvent, AgentType};
     use crate::filters::{AgentFilter, FilterConfig};
-    use crate::{MatchCondition, RoutePolicies, RouteConfig, ServiceType};
+    use crate::{MatchCondition, RouteConfig, RoutePolicies, ServiceType};
     use sentinel_common::types::Priority;
     use std::path::PathBuf;
 
@@ -269,7 +272,10 @@ mod tests {
         config.routes = vec![test_route_with_filter("auth-filter")];
         config.filters.insert(
             "auth-filter".to_string(),
-            FilterConfig::new("auth-filter", Filter::Agent(AgentFilter::new("nonexistent-agent"))),
+            FilterConfig::new(
+                "auth-filter",
+                Filter::Agent(AgentFilter::new("nonexistent-agent")),
+            ),
         );
 
         let result = validate_agents(&config).await;
@@ -424,7 +430,9 @@ mod tests {
     fn test_is_valid_http_url() {
         // Valid URLs
         assert!(is_valid_http_url("http://localhost:8080/agent"));
-        assert!(is_valid_http_url("https://agent.example.com/api/v1/process"));
+        assert!(is_valid_http_url(
+            "https://agent.example.com/api/v1/process"
+        ));
         assert!(is_valid_http_url("http://192.168.1.100:8080"));
 
         // Invalid URLs

@@ -51,7 +51,10 @@ impl<'a> HeadersRef<'a> {
     /// Get the first value for a header.
     #[inline]
     pub fn get_first(&self, name: &str) -> Option<&str> {
-        self.inner.get(name).and_then(|v| v.first()).map(|s| s.as_str())
+        self.inner
+            .get(name)
+            .and_then(|v| v.first())
+            .map(|s| s.as_str())
     }
 
     /// Check if a header exists.
@@ -133,7 +136,10 @@ impl<'a> HeadersCow<'a> {
     /// Get the first value for a header.
     #[inline]
     pub fn get_first(&self, name: &str) -> Option<&str> {
-        self.inner.get(name).and_then(|v| v.first()).map(|s| s.as_str())
+        self.inner
+            .get(name)
+            .and_then(|v| v.first())
+            .map(|s| s.as_str())
     }
 
     /// Check if a header exists.
@@ -457,8 +463,14 @@ mod tests {
 
     fn sample_headers() -> HashMap<String, Vec<String>> {
         let mut h = HashMap::new();
-        h.insert("content-type".to_string(), vec!["application/json".to_string()]);
-        h.insert("accept".to_string(), vec!["text/html".to_string(), "application/json".to_string()]);
+        h.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
+        h.insert(
+            "accept".to_string(),
+            vec!["text/html".to_string(), "application/json".to_string()],
+        );
         h.insert("x-custom".to_string(), vec!["value".to_string()]);
         h
     }
@@ -550,13 +562,16 @@ mod tests {
         let mut optimized: OptimizedHeaderMap = HashMap::new();
 
         // Single value - stored inline (no Vec allocation)
-        optimized.insert("content-type".to_string(), HeaderValues::from_iter(["application/json".to_string()]));
+        optimized.insert(
+            "content-type".to_string(),
+            HeaderValues::from_iter(["application/json".to_string()]),
+        );
 
         // Multiple values
-        optimized.insert("accept".to_string(), HeaderValues::from_iter([
-            "text/html".to_string(),
-            "application/json".to_string(),
-        ]));
+        optimized.insert(
+            "accept".to_string(),
+            HeaderValues::from_iter(["text/html".to_string(), "application/json".to_string()]),
+        );
 
         assert_eq!(optimized.get("content-type").map(|v| v.len()), Some(1));
         assert_eq!(optimized.get("accept").map(|v| v.len()), Some(2));
@@ -612,10 +627,8 @@ mod tests {
     #[test]
     fn test_smallvec_multiple_values_spill() {
         // Verify SmallVec spills to heap for multiple values
-        let values: HeaderValues = HeaderValues::from_iter([
-            "first".to_string(),
-            "second".to_string(),
-        ]);
+        let values: HeaderValues =
+            HeaderValues::from_iter(["first".to_string(), "second".to_string()]);
 
         // SmallVec<[String; 1]> should spill for 2+ values
         assert!(values.spilled());
@@ -652,14 +665,38 @@ mod tests {
     fn test_intern_header_name_all_known() {
         // Verify all known headers are interned correctly
         let known_headers = [
-            "host", "content-type", "content-length", "user-agent",
-            "accept", "accept-encoding", "accept-language", "authorization",
-            "cookie", "set-cookie", "cache-control", "connection", "date",
-            "etag", "if-match", "if-none-match", "if-modified-since",
-            "last-modified", "location", "origin", "referer", "server",
-            "transfer-encoding", "vary", "x-forwarded-for", "x-forwarded-proto",
-            "x-forwarded-host", "x-real-ip", "x-request-id", "x-correlation-id",
-            "x-trace-id", "x-span-id",
+            "host",
+            "content-type",
+            "content-length",
+            "user-agent",
+            "accept",
+            "accept-encoding",
+            "accept-language",
+            "authorization",
+            "cookie",
+            "set-cookie",
+            "cache-control",
+            "connection",
+            "date",
+            "etag",
+            "if-match",
+            "if-none-match",
+            "if-modified-since",
+            "last-modified",
+            "location",
+            "origin",
+            "referer",
+            "server",
+            "transfer-encoding",
+            "vary",
+            "x-forwarded-for",
+            "x-forwarded-proto",
+            "x-forwarded-host",
+            "x-real-ip",
+            "x-request-id",
+            "x-correlation-id",
+            "x-trace-id",
+            "x-span-id",
         ];
 
         for header in known_headers {
@@ -680,11 +717,11 @@ mod tests {
         // Insert using interned names
         headers.insert(
             intern_header_name("content-type"),
-            HeaderValues::from_iter(["application/json".to_string()])
+            HeaderValues::from_iter(["application/json".to_string()]),
         );
         headers.insert(
             intern_header_name("x-custom"),
-            HeaderValues::from_iter(["value".to_string()])
+            HeaderValues::from_iter(["value".to_string()]),
         );
 
         // Lookup works with borrowed strings

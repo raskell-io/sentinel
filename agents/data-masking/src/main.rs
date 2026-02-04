@@ -66,9 +66,8 @@ async fn main() -> Result<()> {
     };
 
     // Create agent
-    let agent = Box::new(
-        DataMaskingAgent::new(config).context("Failed to create data masking agent")?,
-    );
+    let agent =
+        Box::new(DataMaskingAgent::new(config).context("Failed to create data masking agent")?);
 
     // Determine transport mode
     match (&args.socket, &args.grpc) {

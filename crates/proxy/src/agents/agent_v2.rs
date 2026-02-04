@@ -8,13 +8,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sentinel_agent_protocol::v2::{
-    AgentCapabilities, AgentPool, AgentPoolConfig as ProtocolPoolConfig,
-    AgentPoolStats, CancelReason, ConfigPusher, ConfigUpdateType,
-    LoadBalanceStrategy as ProtocolLBStrategy, MetricsCollector,
+    AgentCapabilities, AgentPool, AgentPoolConfig as ProtocolPoolConfig, AgentPoolStats,
+    CancelReason, ConfigPusher, ConfigUpdateType, LoadBalanceStrategy as ProtocolLBStrategy,
+    MetricsCollector,
 };
 use sentinel_agent_protocol::{
-    AgentResponse, EventType, RequestBodyChunkEvent, RequestHeadersEvent,
-    ResponseBodyChunkEvent, ResponseHeadersEvent,
+    AgentResponse, EventType, RequestBodyChunkEvent, RequestHeadersEvent, ResponseBodyChunkEvent,
+    ResponseHeadersEvent,
 };
 use sentinel_common::{
     errors::{SentinelError, SentinelResult},
@@ -48,10 +48,7 @@ pub struct AgentV2 {
 
 impl AgentV2 {
     /// Create a new v2 agent.
-    pub fn new(
-        config: AgentConfig,
-        circuit_breaker: Arc<CircuitBreaker>,
-    ) -> Self {
+    pub fn new(config: AgentConfig, circuit_breaker: Arc<CircuitBreaker>) -> Self {
         trace!(
             agent_id = %config.id,
             agent_type = ?config.agent_type,
@@ -61,18 +58,22 @@ impl AgentV2 {
         );
 
         // Convert config pool settings to protocol pool config
-        let pool_config = config.pool.as_ref().map(|p| ProtocolPoolConfig {
-            connections_per_agent: p.connections_per_agent,
-            load_balance_strategy: convert_lb_strategy(p.load_balance_strategy),
-            connect_timeout: Duration::from_millis(p.connect_timeout_ms),
-            request_timeout: Duration::from_millis(config.timeout_ms),
-            reconnect_interval: Duration::from_millis(p.reconnect_interval_ms),
-            max_reconnect_attempts: p.max_reconnect_attempts,
-            drain_timeout: Duration::from_millis(p.drain_timeout_ms),
-            max_concurrent_per_connection: p.max_concurrent_per_connection,
-            health_check_interval: Duration::from_millis(p.health_check_interval_ms),
-            ..Default::default()
-        }).unwrap_or_default();
+        let pool_config = config
+            .pool
+            .as_ref()
+            .map(|p| ProtocolPoolConfig {
+                connections_per_agent: p.connections_per_agent,
+                load_balance_strategy: convert_lb_strategy(p.load_balance_strategy),
+                connect_timeout: Duration::from_millis(p.connect_timeout_ms),
+                request_timeout: Duration::from_millis(config.timeout_ms),
+                reconnect_interval: Duration::from_millis(p.reconnect_interval_ms),
+                max_reconnect_attempts: p.max_reconnect_attempts,
+                drain_timeout: Duration::from_millis(p.drain_timeout_ms),
+                max_concurrent_per_connection: p.max_concurrent_per_connection,
+                health_check_interval: Duration::from_millis(p.health_check_interval_ms),
+                ..Default::default()
+            })
+            .unwrap_or_default();
 
         let pool = Arc::new(AgentPool::with_config(pool_config));
 
@@ -138,7 +139,9 @@ impl AgentV2 {
         let start = Instant::now();
 
         // Add agent to pool - pool will establish connections
-        self.pool.add_agent(&self.config.id, &endpoint).await
+        self.pool
+            .add_agent(&self.config.id, &endpoint)
+            .await
             .map_err(|e| {
                 error!(
                     agent_id = %self.config.id,

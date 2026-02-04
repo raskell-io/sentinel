@@ -74,12 +74,9 @@ impl WebhookProvider {
         credentials: Option<Credentials>,
         timeout: Duration,
     ) -> DnsResult<Self> {
-        let client = Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| {
-                DnsProviderError::Configuration(format!("Failed to create HTTP client: {}", e))
-            })?;
+        let client = Client::builder().timeout(timeout).build().map_err(|e| {
+            DnsProviderError::Configuration(format!("Failed to create HTTP client: {}", e))
+        })?;
 
         // Remove trailing slash from base URL
         let base_url = base_url.trim_end_matches('/').to_string();
@@ -95,12 +92,8 @@ impl WebhookProvider {
     /// Add authentication to a request
     fn add_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match (&self.auth_header, &self.credentials) {
-            (Some(header), Some(creds)) => {
-                request.header(header.as_str(), creds.as_bearer_token())
-            }
-            (None, Some(creds)) => {
-                request.bearer_auth(creds.as_bearer_token())
-            }
+            (Some(header), Some(creds)) => request.header(header.as_str(), creds.as_bearer_token()),
+            (None, Some(creds)) => request.bearer_auth(creds.as_bearer_token()),
             _ => request,
         }
     }
@@ -138,17 +131,13 @@ impl DnsProvider for WebhookProvider {
             .post(format!("{}/records", self.base_url))
             .json(&request);
 
-        let response = self
-            .add_auth(request_builder)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    DnsProviderError::Timeout { elapsed_secs: 30 }
-                } else {
-                    DnsProviderError::ApiRequest(format!("Webhook request failed: {}", e))
-                }
-            })?;
+        let response = self.add_auth(request_builder).send().await.map_err(|e| {
+            if e.is_timeout() {
+                DnsProviderError::Timeout { elapsed_secs: 30 }
+            } else {
+                DnsProviderError::ApiRequest(format!("Webhook request failed: {}", e))
+            }
+        })?;
 
         if response.status() == reqwest::StatusCode::UNAUTHORIZED
             || response.status() == reqwest::StatusCode::FORBIDDEN
@@ -167,12 +156,14 @@ impl DnsProvider for WebhookProvider {
             });
         }
 
-        let record_response: CreateRecordResponse = response.json().await.map_err(|e| {
-            DnsProviderError::RecordCreation {
-                record_name: record_name.to_string(),
-                message: format!("Failed to parse webhook response: {}", e),
-            }
-        })?;
+        let record_response: CreateRecordResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| DnsProviderError::RecordCreation {
+                    record_name: record_name.to_string(),
+                    message: format!("Failed to parse webhook response: {}", e),
+                })?;
 
         debug!(record_id = %record_response.record_id, "TXT record created via webhook");
         Ok(record_response.record_id)
@@ -190,17 +181,13 @@ impl DnsProvider for WebhookProvider {
             .delete(format!("{}/records/{}", self.base_url, record_id))
             .query(&[("domain", domain)]);
 
-        let response = self
-            .add_auth(request_builder)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    DnsProviderError::Timeout { elapsed_secs: 30 }
-                } else {
-                    DnsProviderError::ApiRequest(format!("Webhook request failed: {}", e))
-                }
-            })?;
+        let response = self.add_auth(request_builder).send().await.map_err(|e| {
+            if e.is_timeout() {
+                DnsProviderError::Timeout { elapsed_secs: 30 }
+            } else {
+                DnsProviderError::ApiRequest(format!("Webhook request failed: {}", e))
+            }
+        })?;
 
         // 404 is acceptable - record might already be deleted
         if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -226,17 +213,13 @@ impl DnsProvider for WebhookProvider {
             .client
             .get(format!("{}/domains/{}/supported", self.base_url, domain));
 
-        let response = self
-            .add_auth(request_builder)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    DnsProviderError::Timeout { elapsed_secs: 30 }
-                } else {
-                    DnsProviderError::ApiRequest(format!("Webhook request failed: {}", e))
-                }
-            })?;
+        let response = self.add_auth(request_builder).send().await.map_err(|e| {
+            if e.is_timeout() {
+                DnsProviderError::Timeout { elapsed_secs: 30 }
+            } else {
+                DnsProviderError::ApiRequest(format!("Webhook request failed: {}", e))
+            }
+        })?;
 
         // 404 means domain not supported
         if response.status() == reqwest::StatusCode::NOT_FOUND {

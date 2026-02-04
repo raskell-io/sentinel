@@ -100,9 +100,7 @@ impl ProxyHttp for SentinelProxy {
                     resp.insert_header("Content-Length", key_authorization.len().to_string())?;
 
                     // Send response
-                    session
-                        .write_response_header(Box::new(resp), false)
-                        .await?;
+                    session.write_response_header(Box::new(resp), false).await?;
                     session
                         .write_response_body(Some(Bytes::from(key_authorization)), true)
                         .await?;
@@ -289,8 +287,7 @@ impl ProxyHttp for SentinelProxy {
                 ctx.trace_id = self.get_trace_id(session);
 
                 // Parse incoming W3C trace context if present
-                if let Some(traceparent) = req_header.headers.get(crate::otel::TRACEPARENT_HEADER)
-                {
+                if let Some(traceparent) = req_header.headers.get(crate::otel::TRACEPARENT_HEADER) {
                     if let Ok(s) = traceparent.to_str() {
                         ctx.trace_context = crate::otel::TraceContext::parse_traceparent(s);
                     }
@@ -298,11 +295,8 @@ impl ProxyHttp for SentinelProxy {
 
                 // Start OpenTelemetry request span if tracing is enabled
                 if let Some(tracer) = crate::otel::get_tracer() {
-                    ctx.otel_span = Some(tracer.start_span(
-                        &ctx.method,
-                        &ctx.path,
-                        ctx.trace_context.as_ref(),
-                    ));
+                    ctx.otel_span =
+                        Some(tracer.start_span(&ctx.method, &ctx.path, ctx.trace_context.as_ref()));
                 }
             }
 
@@ -859,7 +853,8 @@ impl ProxyHttp for SentinelProxy {
                                 retry_after_ms = retry_after_ms,
                                 "Inference rate limit exceeded (tokens)"
                             );
-                            self.metrics.record_blocked_request("inference_rate_limited");
+                            self.metrics
+                                .record_blocked_request("inference_rate_limited");
 
                             // Audit log the token rate limit
                             let audit_entry = AuditLogEntry::new(
@@ -911,11 +906,13 @@ impl ProxyHttp for SentinelProxy {
                         if self.inference_rate_limit_manager.has_budget(route_id) {
                             ctx.inference_budget_enabled = true;
 
-                            if let Some(budget_result) = self.inference_rate_limit_manager.check_budget(
-                                route_id,
-                                rate_limit_key,
-                                check_result.estimated_tokens,
-                            ) {
+                            if let Some(budget_result) =
+                                self.inference_rate_limit_manager.check_budget(
+                                    route_id,
+                                    rate_limit_key,
+                                    check_result.estimated_tokens,
+                                )
+                            {
                                 if !budget_result.is_allowed() {
                                     let retry_after_secs = budget_result.retry_after_secs();
 
@@ -967,17 +964,22 @@ impl ProxyHttp for SentinelProxy {
 
                                 // Capture budget status for response headers
                                 let remaining = match &budget_result {
-                                    sentinel_common::budget::BudgetCheckResult::Allowed { remaining } => *remaining as i64,
-                                    sentinel_common::budget::BudgetCheckResult::Soft { remaining, .. } => *remaining,
+                                    sentinel_common::budget::BudgetCheckResult::Allowed {
+                                        remaining,
+                                    } => *remaining as i64,
+                                    sentinel_common::budget::BudgetCheckResult::Soft {
+                                        remaining,
+                                        ..
+                                    } => *remaining,
                                     _ => 0,
                                 };
                                 ctx.inference_budget_remaining = Some(remaining);
 
                                 // Get period reset time from budget status
-                                if let Some(status) = self.inference_rate_limit_manager.budget_status(
-                                    route_id,
-                                    rate_limit_key,
-                                ) {
+                                if let Some(status) = self
+                                    .inference_rate_limit_manager
+                                    .budget_status(route_id, rate_limit_key)
+                                {
                                     ctx.inference_budget_period_reset = Some(status.period_end);
                                 }
 
@@ -991,7 +993,10 @@ impl ProxyHttp for SentinelProxy {
                         }
 
                         // Check if cost attribution is enabled
-                        if self.inference_rate_limit_manager.has_cost_attribution(route_id) {
+                        if self
+                            .inference_rate_limit_manager
+                            .has_cost_attribution(route_id)
+                        {
                             ctx.inference_cost_enabled = true;
                         }
                     }
@@ -1036,10 +1041,8 @@ impl ProxyHttp for SentinelProxy {
                                         self.metrics.record_blocked_request("prompt_injection");
 
                                         // Store detection categories for logging
-                                        ctx.guardrail_detection_categories = detections
-                                            .iter()
-                                            .map(|d| d.category.clone())
-                                            .collect();
+                                        ctx.guardrail_detection_categories =
+                                            detections.iter().map(|d| d.category.clone()).collect();
 
                                         // Audit log the block
                                         let audit_entry = AuditLogEntry::new(
@@ -1049,9 +1052,7 @@ impl ProxyHttp for SentinelProxy {
                                             &ctx.path,
                                             &ctx.client_ip,
                                         )
-                                        .with_route_id(
-                                            ctx.route_id.as_deref().unwrap_or("unknown"),
-                                        )
+                                        .with_route_id(ctx.route_id.as_deref().unwrap_or("unknown"))
                                         .with_status_code(status)
                                         .with_reason("Prompt injection detected".to_string());
                                         self.log_manager.log_audit(&audit_entry);
@@ -1074,18 +1075,14 @@ impl ProxyHttp for SentinelProxy {
                                             detection_count = detections.len(),
                                             "Prompt injection detected (logged only)"
                                         );
-                                        ctx.guardrail_detection_categories = detections
-                                            .iter()
-                                            .map(|d| d.category.clone())
-                                            .collect();
+                                        ctx.guardrail_detection_categories =
+                                            detections.iter().map(|d| d.category.clone()).collect();
                                     }
                                     PromptInjectionResult::Warning { detections } => {
                                         // Set flag for response header
                                         ctx.guardrail_warning = true;
-                                        ctx.guardrail_detection_categories = detections
-                                            .iter()
-                                            .map(|d| d.category.clone())
-                                            .collect();
+                                        ctx.guardrail_detection_categories =
+                                            detections.iter().map(|d| d.category.clone()).collect();
                                         debug!(
                                             correlation_id = %ctx.trace_id,
                                             "Prompt injection warning set"
@@ -1735,10 +1732,8 @@ impl ProxyHttp for SentinelProxy {
             }
 
             if let Some(ref mapping) = ctx.model_mapping_applied {
-                upstream_response.insert_header(
-                    "X-Model-Mapping",
-                    format!("{} -> {}", mapping.0, mapping.1),
-                )?;
+                upstream_response
+                    .insert_header("X-Model-Mapping", format!("{} -> {}", mapping.0, mapping.1))?;
             }
 
             trace!(
@@ -1922,7 +1917,11 @@ impl ProxyHttp for SentinelProxy {
 
         // Add W3C traceparent header for distributed tracing
         if let Some(ref span) = ctx.otel_span {
-            let sampled = ctx.trace_context.as_ref().map(|c| c.sampled).unwrap_or(true);
+            let sampled = ctx
+                .trace_context
+                .as_ref()
+                .map(|c| c.sampled)
+                .unwrap_or(true);
             let traceparent =
                 crate::otel::create_traceparent(&span.trace_id, &span.span_id, sampled);
             upstream_request
@@ -1943,12 +1942,16 @@ impl ProxyHttp for SentinelProxy {
 
             // Set headers (overwrite existing)
             for (name, value) in &mods.set {
-                upstream_request.insert_header(name.clone(), value.as_str()).ok();
+                upstream_request
+                    .insert_header(name.clone(), value.as_str())
+                    .ok();
             }
 
             // Add headers (append)
             for (name, value) in &mods.add {
-                upstream_request.append_header(name.clone(), value.as_str()).ok();
+                upstream_request
+                    .append_header(name.clone(), value.as_str())
+                    .ok();
             }
 
             // Remove headers
@@ -1975,7 +1978,10 @@ impl ProxyHttp for SentinelProxy {
                 let upstream_pools = std::sync::Arc::new(pools_snapshot);
 
                 // Get route ID for metrics labeling
-                let route_id = ctx.route_id.clone().unwrap_or_else(|| "unknown".to_string());
+                let route_id = ctx
+                    .route_id
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
 
                 // Create shadow manager
                 let shadow_manager = crate::shadow::ShadowManager::new(
@@ -3042,11 +3048,13 @@ impl ProxyHttp for SentinelProxy {
                     ctx.inference_estimated_tokens,
                 ) {
                     // Use streaming result if available and header extraction failed
-                    let (actual_tokens, source_info) = if let Some(ref streaming) = streaming_result {
+                    let (actual_tokens, source_info) = if let Some(ref streaming) = streaming_result
+                    {
                         // Prefer API-provided counts from streaming, otherwise use tiktoken count
                         if streaming.total_tokens.is_some() {
                             (streaming.total_tokens.unwrap(), "streaming_api")
-                        } else if actual_estimate.source == crate::inference::TokenSource::Estimated {
+                        } else if actual_estimate.source == crate::inference::TokenSource::Estimated
+                        {
                             // Header extraction failed, use streaming tiktoken count
                             // Estimate total by adding input estimate + output from streaming
                             let total = ctx.inference_input_tokens + streaming.output_tokens;
@@ -3093,10 +3101,10 @@ impl ProxyHttp for SentinelProxy {
                         }
 
                         // Update context with remaining budget
-                        if let Some(status) = self.inference_rate_limit_manager.budget_status(
-                            route_id,
-                            rate_limit_key,
-                        ) {
+                        if let Some(status) = self
+                            .inference_rate_limit_manager
+                            .budget_status(route_id, rate_limit_key)
+                        {
                             ctx.inference_budget_remaining = Some(status.tokens_remaining as i64);
                         }
                     }
@@ -3105,9 +3113,12 @@ impl ProxyHttp for SentinelProxy {
                     if ctx.inference_cost_enabled {
                         if let Some(model) = ctx.inference_model.as_deref() {
                             // Use streaming result for more accurate input/output split if available
-                            let (input_tokens, output_tokens) = if let Some(ref streaming) = streaming_result {
+                            let (input_tokens, output_tokens) = if let Some(ref streaming) =
+                                streaming_result
+                            {
                                 // Streaming gives us accurate output tokens
-                                let input = streaming.input_tokens.unwrap_or(ctx.inference_input_tokens);
+                                let input =
+                                    streaming.input_tokens.unwrap_or(ctx.inference_input_tokens);
                                 let output = streaming.output_tokens;
                                 (input, output)
                             } else {
@@ -3118,12 +3129,10 @@ impl ProxyHttp for SentinelProxy {
                             };
                             ctx.inference_output_tokens = output_tokens;
 
-                            if let Some(cost_result) = self.inference_rate_limit_manager.calculate_cost(
-                                route_id,
-                                model,
-                                input_tokens,
-                                output_tokens,
-                            ) {
+                            if let Some(cost_result) = self
+                                .inference_rate_limit_manager
+                                .calculate_cost(route_id, model, input_tokens, output_tokens)
+                            {
                                 ctx.inference_request_cost = Some(cost_result.total_cost);
 
                                 trace!(
@@ -3382,11 +3391,7 @@ impl SentinelProxy {
                     max_output_bytes: ctx.max_decompression_bytes,
                 };
 
-                match crate::decompression::decompress_body(
-                    &ctx.body_buffer,
-                    encoding,
-                    &config,
-                ) {
+                match crate::decompression::decompress_body(&ctx.body_buffer, encoding, &config) {
                     Ok(result) => {
                         ctx.body_was_decompressed = true;
                         self.metrics
@@ -3413,9 +3418,9 @@ impl SentinelProxy {
                             crate::decompression::DecompressionError::InvalidData { .. } => {
                                 "invalid_data"
                             }
-                            crate::decompression::DecompressionError::UnsupportedEncoding { .. } => {
-                                "unsupported"
-                            }
+                            crate::decompression::DecompressionError::UnsupportedEncoding {
+                                ..
+                            } => "unsupported",
                             crate::decompression::DecompressionError::IoError(_) => "io_error",
                         };
                         self.metrics
@@ -3425,7 +3430,9 @@ impl SentinelProxy {
                         let fail_closed = ctx
                             .route_config
                             .as_ref()
-                            .map(|r| r.policies.failure_mode == sentinel_config::FailureMode::Closed)
+                            .map(|r| {
+                                r.policies.failure_mode == sentinel_config::FailureMode::Closed
+                            })
                             .unwrap_or(false);
 
                         if fail_closed {

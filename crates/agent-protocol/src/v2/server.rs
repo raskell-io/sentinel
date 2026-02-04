@@ -17,9 +17,7 @@ use crate::grpc_v2::{
     AgentToProxy, ProxyToAgent,
 };
 use crate::v2::pool::CHANNEL_BUFFER_SIZE;
-use crate::v2::{
-    AgentCapabilities, HandshakeRequest, HandshakeResponse, HealthStatus,
-};
+use crate::v2::{AgentCapabilities, HandshakeRequest, HandshakeResponse, HealthStatus};
 use crate::{
     AgentResponse as V1Response, Decision, EventType, HeaderOp, RequestBodyChunkEvent,
     RequestCompleteEvent, RequestHeadersEvent, RequestMetadata, ResponseBodyChunkEvent,
@@ -175,7 +173,8 @@ pub struct GrpcAgentHandlerV2 {
 }
 
 type ProcessResponseStream = Pin<Box<dyn Stream<Item = Result<AgentToProxy, Status>> + Send>>;
-type ControlResponseStream = Pin<Box<dyn Stream<Item = Result<grpc_v2::ProxyControl, Status>> + Send>>;
+type ControlResponseStream =
+    Pin<Box<dyn Stream<Item = Result<grpc_v2::ProxyControl, Status>> + Send>>;
 
 #[tonic::async_trait]
 impl AgentServiceV2 for GrpcAgentHandlerV2 {
@@ -228,7 +227,11 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                         let start = Instant::now();
                         let resp = handler.on_request_headers(event).await;
                         let processing_time_ms = start.elapsed().as_millis() as u64;
-                        Some(create_agent_response(correlation_id, resp, processing_time_ms))
+                        Some(create_agent_response(
+                            correlation_id,
+                            resp,
+                            processing_time_ms,
+                        ))
                     }
                     Some(grpc_v2::proxy_to_agent::Message::RequestBodyChunk(e)) => {
                         if !handshake_done {
@@ -239,7 +242,11 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                         let start = Instant::now();
                         let resp = handler.on_request_body_chunk(event).await;
                         let processing_time_ms = start.elapsed().as_millis() as u64;
-                        Some(create_agent_response(correlation_id, resp, processing_time_ms))
+                        Some(create_agent_response(
+                            correlation_id,
+                            resp,
+                            processing_time_ms,
+                        ))
                     }
                     Some(grpc_v2::proxy_to_agent::Message::ResponseHeaders(e)) => {
                         if !handshake_done {
@@ -250,7 +257,11 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                         let start = Instant::now();
                         let resp = handler.on_response_headers(event).await;
                         let processing_time_ms = start.elapsed().as_millis() as u64;
-                        Some(create_agent_response(correlation_id, resp, processing_time_ms))
+                        Some(create_agent_response(
+                            correlation_id,
+                            resp,
+                            processing_time_ms,
+                        ))
                     }
                     Some(grpc_v2::proxy_to_agent::Message::ResponseBodyChunk(e)) => {
                         if !handshake_done {
@@ -261,7 +272,11 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                         let start = Instant::now();
                         let resp = handler.on_response_body_chunk(event).await;
                         let processing_time_ms = start.elapsed().as_millis() as u64;
-                        Some(create_agent_response(correlation_id, resp, processing_time_ms))
+                        Some(create_agent_response(
+                            correlation_id,
+                            resp,
+                            processing_time_ms,
+                        ))
                     }
                     Some(grpc_v2::proxy_to_agent::Message::RequestComplete(e)) => {
                         if !handshake_done {
@@ -272,7 +287,11 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                         let start = Instant::now();
                         let resp = handler.on_request_complete(event).await;
                         let processing_time_ms = start.elapsed().as_millis() as u64;
-                        Some(create_agent_response(correlation_id, resp, processing_time_ms))
+                        Some(create_agent_response(
+                            correlation_id,
+                            resp,
+                            processing_time_ms,
+                        ))
                     }
                     Some(grpc_v2::proxy_to_agent::Message::WebsocketFrame(e)) => {
                         if !handshake_done {
@@ -283,7 +302,11 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                         let start = Instant::now();
                         let resp = handler.on_websocket_frame(event).await;
                         let processing_time_ms = start.elapsed().as_millis() as u64;
-                        Some(create_agent_response(correlation_id, resp, processing_time_ms))
+                        Some(create_agent_response(
+                            correlation_id,
+                            resp,
+                            processing_time_ms,
+                        ))
                     }
                     Some(grpc_v2::proxy_to_agent::Message::Ping(ping)) => {
                         trace!(agent_id = %agent_id, sequence = ping.sequence, "Received ping");
@@ -330,7 +353,9 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
         });
 
         let output_stream = ReceiverStream::new(rx);
-        Ok(Response::new(Box::pin(output_stream) as Self::ProcessStreamStream))
+        Ok(Response::new(
+            Box::pin(output_stream) as Self::ProcessStreamStream
+        ))
     }
 
     /// Handle control stream for health/metrics/config.
@@ -408,10 +433,16 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                     Some(grpc_v2::agent_control::Message::Log(log)) => {
                         // Forward log message to proxy's logging system
                         match log.level {
-                            1 => trace!(agent_id = %agent_id_clone, msg = %log.message, "Agent log"),
-                            2 => debug!(agent_id = %agent_id_clone, msg = %log.message, "Agent log"),
+                            1 => {
+                                trace!(agent_id = %agent_id_clone, msg = %log.message, "Agent log")
+                            }
+                            2 => {
+                                debug!(agent_id = %agent_id_clone, msg = %log.message, "Agent log")
+                            }
                             3 => warn!(agent_id = %agent_id_clone, msg = %log.message, "Agent log"),
-                            4 => error!(agent_id = %agent_id_clone, msg = %log.message, "Agent log"),
+                            4 => {
+                                error!(agent_id = %agent_id_clone, msg = %log.message, "Agent log")
+                            }
                             _ => info!(agent_id = %agent_id_clone, msg = %log.message, "Agent log"),
                         }
                     }
@@ -470,7 +501,9 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
         }
 
         let output_stream = ReceiverStream::new(rx);
-        Ok(Response::new(Box::pin(output_stream) as Self::ControlStreamStream))
+        Ok(Response::new(
+            Box::pin(output_stream) as Self::ControlStreamStream
+        ))
     }
 
     /// Handle single event (v1 compatibility mode).
@@ -711,33 +744,36 @@ fn create_agent_response(
         Decision::Allow => Some(grpc_v2::agent_response::Decision::Allow(
             grpc_v2::AllowDecision {},
         )),
-        Decision::Block { status, body, headers } => {
-            Some(grpc_v2::agent_response::Decision::Block(
-                grpc_v2::BlockDecision {
-                    status: status as u32,
-                    body,
-                    headers: headers
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|(k, v)| grpc_v2::Header { name: k, value: v })
-                        .collect(),
-                },
-            ))
-        }
+        Decision::Block {
+            status,
+            body,
+            headers,
+        } => Some(grpc_v2::agent_response::Decision::Block(
+            grpc_v2::BlockDecision {
+                status: status as u32,
+                body,
+                headers: headers
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(k, v)| grpc_v2::Header { name: k, value: v })
+                    .collect(),
+            },
+        )),
         Decision::Redirect { url, status } => Some(grpc_v2::agent_response::Decision::Redirect(
             grpc_v2::RedirectDecision {
                 url,
                 status: status as u32,
             },
         )),
-        Decision::Challenge { challenge_type, params } => {
-            Some(grpc_v2::agent_response::Decision::Challenge(
-                grpc_v2::ChallengeDecision {
-                    challenge_type,
-                    params,
-                },
-            ))
-        }
+        Decision::Challenge {
+            challenge_type,
+            params,
+        } => Some(grpc_v2::agent_response::Decision::Challenge(
+            grpc_v2::ChallengeDecision {
+                challenge_type,
+                params,
+            },
+        )),
     };
 
     let request_headers: Vec<grpc_v2::HeaderOp> = resp

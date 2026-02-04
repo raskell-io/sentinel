@@ -337,7 +337,10 @@ fn lint_config(config_path: Option<&str>) -> Result<()> {
         println!("✓ No best practice issues found");
         std::process::exit(0);
     } else {
-        println!("⚠  Configuration has {} best practice warnings:\n", result.warnings.len());
+        println!(
+            "⚠  Configuration has {} best practice warnings:\n",
+            result.warnings.len()
+        );
         for warning in &result.warnings {
             println!("  ⚠  {}", warning.message);
         }
@@ -480,15 +483,26 @@ fn run_server(
                         } else if let Some(ref acme_config) = tls_config.acme {
                             // ACME-managed certificates
                             let acme_storage = &acme_config.storage;
-                            let primary_domain = acme_config.domains.first().ok_or_else(|| {
-                                error!(
-                                    listener_id = %listener.id,
-                                    "ACME configuration has no domains"
-                                );
-                            }).unwrap_or(&"default".to_string()).clone();
+                            let primary_domain = acme_config
+                                .domains
+                                .first()
+                                .ok_or_else(|| {
+                                    error!(
+                                        listener_id = %listener.id,
+                                        "ACME configuration has no domains"
+                                    );
+                                })
+                                .unwrap_or(&"default".to_string())
+                                .clone();
 
-                            let cert_path = acme_storage.join("domains").join(&primary_domain).join("cert.pem");
-                            let key_path = acme_storage.join("domains").join(&primary_domain).join("key.pem");
+                            let cert_path = acme_storage
+                                .join("domains")
+                                .join(&primary_domain)
+                                .join("cert.pem");
+                            let key_path = acme_storage
+                                .join("domains")
+                                .join(&primary_domain)
+                                .join("key.pem");
 
                             // If ACME certificates don't exist yet, skip for now
                             // The ACME manager will obtain them and trigger a reload
@@ -532,7 +546,11 @@ fn run_server(
                             continue;
                         }
 
-                        match proxy_service.add_tls(&listener.address, &cert_path_str, &key_path_str) {
+                        match proxy_service.add_tls(
+                            &listener.address,
+                            &cert_path_str,
+                            &key_path_str,
+                        ) {
                             Ok(()) => {
                                 info!(
                                     listener_id = %listener.id,

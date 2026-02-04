@@ -43,11 +43,14 @@ pub fn find_upstream_for_model(
     }
 
     // No mapping matched - use default if configured
-    config.default_upstream.as_ref().map(|upstream| ModelRoutingResult {
-        upstream: upstream.clone(),
-        provider: None,
-        is_default: true,
-    })
+    config
+        .default_upstream
+        .as_ref()
+        .map(|upstream| ModelRoutingResult {
+            upstream: upstream.clone(),
+            provider: None,
+            is_default: true,
+        })
 }
 
 /// Check if a model name matches a pattern.

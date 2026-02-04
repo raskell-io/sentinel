@@ -254,7 +254,11 @@ impl ScopedRouteMatcher {
 
     /// Get a route by its qualified ID.
     pub async fn get_route(&self, qid: &QualifiedId) -> Option<Arc<RouteConfig>> {
-        self.routes_by_qid.read().await.get(&qid.canonical()).cloned()
+        self.routes_by_qid
+            .read()
+            .await
+            .get(&qid.canonical())
+            .cloned()
     }
 
     /// Check if any matcher needs headers for matching.
@@ -390,7 +394,10 @@ mod tests {
         assert!(result.is_some());
         let route_match = result.unwrap();
         assert_eq!(route_match.route_id(), "api-route");
-        assert_eq!(route_match.matched_scope, Scope::Namespace("api".to_string()));
+        assert_eq!(
+            route_match.matched_scope,
+            Scope::Namespace("api".to_string())
+        );
 
         // Should fall back to global route
         let req = RequestInfo::new("GET", "/other", "example.com");

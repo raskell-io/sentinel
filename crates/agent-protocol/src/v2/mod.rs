@@ -23,19 +23,29 @@ pub mod uds;
 
 pub use capabilities::*;
 pub use client::{AgentClientV2, CancelReason, ConfigUpdateCallback, FlowState, MetricsCallback};
-pub use uds::{AgentClientV2Uds, MessageType, UdsCapabilities, UdsEncoding, UdsFeatures, UdsHandshakeRequest, UdsHandshakeResponse, UdsLimits, MAX_UDS_MESSAGE_SIZE};
-pub use reverse::{RegistrationRequest, RegistrationResponse, ReverseConnectionClient, ReverseConnectionConfig, ReverseConnectionListener};
 pub use control::*;
+pub use health::*;
+pub use metrics::*;
 pub use observability::{
     AgentConnection, ConfigPusher, ConfigPusherConfig, ConfigUpdateHandler, MetricsCollector,
     MetricsCollectorConfig, MetricsSnapshot, PushResult, PushStatus, UnifiedMetricsAggregator,
 };
-pub use health::*;
-pub use metrics::*;
 pub use pool::{AgentPool, AgentPoolConfig, AgentPoolStats, LoadBalanceStrategy, V2Transport};
-pub use protocol_metrics::{ProtocolMetrics, ProtocolMetricsSnapshot, HistogramMetric, HistogramSnapshot};
-pub use server::{AgentHandlerV2, DrainReason, GrpcAgentHandlerV2, GrpcAgentServerV2, ShutdownReason};
+pub use protocol_metrics::{
+    HistogramMetric, HistogramSnapshot, ProtocolMetrics, ProtocolMetricsSnapshot,
+};
+pub use reverse::{
+    RegistrationRequest, RegistrationResponse, ReverseConnectionClient, ReverseConnectionConfig,
+    ReverseConnectionListener,
+};
+pub use server::{
+    AgentHandlerV2, DrainReason, GrpcAgentHandlerV2, GrpcAgentServerV2, ShutdownReason,
+};
 pub use streaming::*;
+pub use uds::{
+    AgentClientV2Uds, MessageType, UdsCapabilities, UdsEncoding, UdsFeatures, UdsHandshakeRequest,
+    UdsHandshakeResponse, UdsLimits, MAX_UDS_MESSAGE_SIZE,
+};
 
 /// Protocol version 2
 pub const PROTOCOL_VERSION_2: u32 = 2;

@@ -4,7 +4,9 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use sentinel_agent_protocol::{AgentClient, AgentResponse, ConfigureEvent, Decision, EventType, GrpcTlsConfig, HttpTlsConfig};
+use sentinel_agent_protocol::{
+    AgentClient, AgentResponse, ConfigureEvent, Decision, EventType, GrpcTlsConfig, HttpTlsConfig,
+};
 use sentinel_common::{errors::SentinelError, errors::SentinelResult, CircuitBreaker};
 use sentinel_config::{AgentConfig, AgentEvent, AgentTransport};
 use tokio::sync::RwLock;
@@ -184,8 +186,13 @@ impl Agent {
                         }
 
                         // Load client certificate and key for mTLS if provided
-                        if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key) {
-                            grpc_tls = grpc_tls.with_client_cert_files(cert_path, key_path).await.map_err(|e| {
+                        if let (Some(cert_path), Some(key_path)) =
+                            (&tls_config.client_cert, &tls_config.client_key)
+                        {
+                            grpc_tls = grpc_tls
+                                .with_client_cert_files(cert_path, key_path)
+                                .await
+                                .map_err(|e| {
                                 error!(
                                     agent_id = %self.config.id,
                                     cert_path = %cert_path.display(),
@@ -305,8 +312,13 @@ impl Agent {
                         }
 
                         // Load client certificate and key for mTLS if provided
-                        if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key) {
-                            http_tls = http_tls.with_client_cert_files(cert_path, key_path).await.map_err(|e| {
+                        if let (Some(cert_path), Some(key_path)) =
+                            (&tls_config.client_cert, &tls_config.client_key)
+                        {
+                            http_tls = http_tls
+                                .with_client_cert_files(cert_path, key_path)
+                                .await
+                                .map_err(|e| {
                                 error!(
                                     agent_id = %self.config.id,
                                     cert_path = %cert_path.display(),
@@ -429,118 +441,108 @@ impl Agent {
                         }
                     })
             }
-            AgentTransport::Grpc { address, tls } => {
-                match tls {
-                    Some(tls_config) => {
-                        let mut grpc_tls = GrpcTlsConfig::new();
+            AgentTransport::Grpc { address, tls } => match tls {
+                Some(tls_config) => {
+                    let mut grpc_tls = GrpcTlsConfig::new();
 
-                        if let Some(ca_path) = &tls_config.ca_cert {
-                            grpc_tls = grpc_tls.with_ca_cert_file(ca_path).await.map_err(|e| {
-                                SentinelError::Agent {
-                                    agent: self.config.id.clone(),
-                                    message: format!("Failed to load CA certificate: {}", e),
-                                    event: "create_client".to_string(),
-                                    source: None,
-                                }
-                            })?;
-                        }
-
-                        if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key) {
-                            grpc_tls = grpc_tls.with_client_cert_files(cert_path, key_path).await.map_err(|e| {
-                                SentinelError::Agent {
-                                    agent: self.config.id.clone(),
-                                    message: format!("Failed to load client certificate: {}", e),
-                                    event: "create_client".to_string(),
-                                    source: None,
-                                }
-                            })?;
-                        }
-
-                        if tls_config.insecure_skip_verify {
-                            grpc_tls = grpc_tls.with_insecure_skip_verify();
-                        }
-
-                        AgentClient::grpc_tls(&self.config.id, address, timeout, grpc_tls)
-                            .await
-                            .map_err(|e| {
-                                SentinelError::Agent {
-                                    agent: self.config.id.clone(),
-                                    message: format!("Failed to connect via gRPC TLS: {}", e),
-                                    event: "create_client".to_string(),
-                                    source: None,
-                                }
-                            })
+                    if let Some(ca_path) = &tls_config.ca_cert {
+                        grpc_tls = grpc_tls.with_ca_cert_file(ca_path).await.map_err(|e| {
+                            SentinelError::Agent {
+                                agent: self.config.id.clone(),
+                                message: format!("Failed to load CA certificate: {}", e),
+                                event: "create_client".to_string(),
+                                source: None,
+                            }
+                        })?;
                     }
-                    None => {
-                        AgentClient::grpc(&self.config.id, address, timeout)
+
+                    if let (Some(cert_path), Some(key_path)) =
+                        (&tls_config.client_cert, &tls_config.client_key)
+                    {
+                        grpc_tls = grpc_tls
+                            .with_client_cert_files(cert_path, key_path)
                             .await
-                            .map_err(|e| {
-                                SentinelError::Agent {
-                                    agent: self.config.id.clone(),
-                                    message: format!("Failed to connect via gRPC: {}", e),
-                                    event: "create_client".to_string(),
-                                    source: None,
-                                }
-                            })
+                            .map_err(|e| SentinelError::Agent {
+                                agent: self.config.id.clone(),
+                                message: format!("Failed to load client certificate: {}", e),
+                                event: "create_client".to_string(),
+                                source: None,
+                            })?;
                     }
+
+                    if tls_config.insecure_skip_verify {
+                        grpc_tls = grpc_tls.with_insecure_skip_verify();
+                    }
+
+                    AgentClient::grpc_tls(&self.config.id, address, timeout, grpc_tls)
+                        .await
+                        .map_err(|e| SentinelError::Agent {
+                            agent: self.config.id.clone(),
+                            message: format!("Failed to connect via gRPC TLS: {}", e),
+                            event: "create_client".to_string(),
+                            source: None,
+                        })
                 }
-            }
-            AgentTransport::Http { url, tls } => {
-                match tls {
-                    Some(tls_config) => {
-                        let mut http_tls = HttpTlsConfig::new();
+                None => AgentClient::grpc(&self.config.id, address, timeout)
+                    .await
+                    .map_err(|e| SentinelError::Agent {
+                        agent: self.config.id.clone(),
+                        message: format!("Failed to connect via gRPC: {}", e),
+                        event: "create_client".to_string(),
+                        source: None,
+                    }),
+            },
+            AgentTransport::Http { url, tls } => match tls {
+                Some(tls_config) => {
+                    let mut http_tls = HttpTlsConfig::new();
 
-                        if let Some(ca_path) = &tls_config.ca_cert {
-                            http_tls = http_tls.with_ca_cert_file(ca_path).await.map_err(|e| {
-                                SentinelError::Agent {
-                                    agent: self.config.id.clone(),
-                                    message: format!("Failed to load CA certificate: {}", e),
-                                    event: "create_client".to_string(),
-                                    source: None,
-                                }
-                            })?;
-                        }
-
-                        if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key) {
-                            http_tls = http_tls.with_client_cert_files(cert_path, key_path).await.map_err(|e| {
-                                SentinelError::Agent {
-                                    agent: self.config.id.clone(),
-                                    message: format!("Failed to load client certificate: {}", e),
-                                    event: "create_client".to_string(),
-                                    source: None,
-                                }
-                            })?;
-                        }
-
-                        if tls_config.insecure_skip_verify {
-                            http_tls = http_tls.with_insecure_skip_verify();
-                        }
-
-                        AgentClient::http_tls(&self.config.id, url, timeout, http_tls)
-                            .await
-                            .map_err(|e| {
-                                SentinelError::Agent {
-                                    agent: self.config.id.clone(),
-                                    message: format!("Failed to create HTTP TLS client: {}", e),
-                                    event: "create_client".to_string(),
-                                    source: None,
-                                }
-                            })
+                    if let Some(ca_path) = &tls_config.ca_cert {
+                        http_tls = http_tls.with_ca_cert_file(ca_path).await.map_err(|e| {
+                            SentinelError::Agent {
+                                agent: self.config.id.clone(),
+                                message: format!("Failed to load CA certificate: {}", e),
+                                event: "create_client".to_string(),
+                                source: None,
+                            }
+                        })?;
                     }
-                    None => {
-                        AgentClient::http(&self.config.id, url, timeout)
+
+                    if let (Some(cert_path), Some(key_path)) =
+                        (&tls_config.client_cert, &tls_config.client_key)
+                    {
+                        http_tls = http_tls
+                            .with_client_cert_files(cert_path, key_path)
                             .await
-                            .map_err(|e| {
-                                SentinelError::Agent {
-                                    agent: self.config.id.clone(),
-                                    message: format!("Failed to create HTTP client: {}", e),
-                                    event: "create_client".to_string(),
-                                    source: None,
-                                }
-                            })
+                            .map_err(|e| SentinelError::Agent {
+                                agent: self.config.id.clone(),
+                                message: format!("Failed to load client certificate: {}", e),
+                                event: "create_client".to_string(),
+                                source: None,
+                            })?;
                     }
+
+                    if tls_config.insecure_skip_verify {
+                        http_tls = http_tls.with_insecure_skip_verify();
+                    }
+
+                    AgentClient::http_tls(&self.config.id, url, timeout, http_tls)
+                        .await
+                        .map_err(|e| SentinelError::Agent {
+                            agent: self.config.id.clone(),
+                            message: format!("Failed to create HTTP TLS client: {}", e),
+                            event: "create_client".to_string(),
+                            source: None,
+                        })
                 }
-            }
+                None => AgentClient::http(&self.config.id, url, timeout)
+                    .await
+                    .map_err(|e| SentinelError::Agent {
+                        agent: self.config.id.clone(),
+                        message: format!("Failed to create HTTP client: {}", e),
+                        event: "create_client".to_string(),
+                        source: None,
+                    }),
+            },
         }
     }
 
@@ -576,19 +578,22 @@ impl Agent {
             source: None,
         })?;
 
-        let response = client.send_event(EventType::Configure, &event).await.map_err(|e| {
-            error!(
-                agent_id = %self.config.id,
-                error = %e,
-                "Failed to send Configure event"
-            );
-            SentinelError::Agent {
-                agent: self.config.id.clone(),
-                message: format!("Configure event failed: {}", e),
-                event: "configure".to_string(),
-                source: None,
-            }
-        })?;
+        let response = client
+            .send_event(EventType::Configure, &event)
+            .await
+            .map_err(|e| {
+                error!(
+                    agent_id = %self.config.id,
+                    error = %e,
+                    "Failed to send Configure event"
+                );
+                SentinelError::Agent {
+                    agent: self.config.id.clone(),
+                    message: format!("Configure event failed: {}", e),
+                    event: "configure".to_string(),
+                    source: None,
+                }
+            })?;
 
         // Check if agent accepted the configuration
         if !matches!(response.decision, Decision::Allow) {

@@ -104,7 +104,10 @@ impl CertBundle {
         // Convert DER to PEM format
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&self.cert_der);
-        format!("-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n", b64)
+        format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+            b64
+        )
     }
 
     fn key_pem(&self) -> String {
@@ -188,8 +191,7 @@ impl MtlsServer {
 
         // Build server config
         let server_cert = CertificateDer::from(server_cert_der);
-        let server_key =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key_der));
+        let server_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key_der));
 
         let config = ServerConfig::builder()
             .with_client_cert_verifier(client_verifier)
@@ -214,23 +216,17 @@ impl MtlsServer {
                 match listener.accept() {
                     Ok((mut stream, _peer_addr)) => {
                         stream.set_nonblocking(false).ok();
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(5)))
-                            .ok();
-                        stream
-                            .set_write_timeout(Some(Duration::from_secs(5)))
-                            .ok();
+                        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+                        stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
                         // Perform TLS handshake
-                        let mut conn =
-                            match rustls::ServerConnection::new(config.clone()) {
-                                Ok(c) => c,
-                                Err(_) => continue,
-                            };
+                        let mut conn = match rustls::ServerConnection::new(config.clone()) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
 
                         // Complete handshake
-                        let mut tls_stream =
-                            rustls::Stream::new(&mut conn, &mut stream);
+                        let mut tls_stream = rustls::Stream::new(&mut conn, &mut stream);
 
                         // Try to read something to complete handshake
                         let mut buf = [0u8; 1024];
@@ -238,7 +234,8 @@ impl MtlsServer {
                             Ok(n) if n > 0 => {
                                 connection_count_clone.fetch_add(1, Ordering::SeqCst);
                                 // Echo back with prefix
-                                let response = format!("mTLS OK: {}", String::from_utf8_lossy(&buf[..n]));
+                                let response =
+                                    format!("mTLS OK: {}", String::from_utf8_lossy(&buf[..n]));
                                 let _ = tls_stream.write_all(response.as_bytes());
                             }
                             Ok(_) => {}
@@ -316,8 +313,7 @@ mod integration {
             .unwrap();
 
         let client_cert_der = CertificateDer::from(client_cert.cert_der().to_vec());
-        let client_key_der =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
+        let client_key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
 
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
@@ -332,8 +328,8 @@ mod integration {
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
         let server_name = "localhost".try_into().unwrap();
-        let mut conn =
-            rustls::ClientConnection::new(client_config, server_name).expect("Failed to create client connection");
+        let mut conn = rustls::ClientConnection::new(client_config, server_name)
+            .expect("Failed to create client connection");
 
         let mut tls_stream = rustls::Stream::new(&mut conn, &mut stream);
 
@@ -401,8 +397,8 @@ mod integration {
         stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
 
         let server_name = "localhost".try_into().unwrap();
-        let mut conn =
-            rustls::ClientConnection::new(client_config, server_name).expect("Failed to create client connection");
+        let mut conn = rustls::ClientConnection::new(client_config, server_name)
+            .expect("Failed to create client connection");
 
         let mut tls_stream = rustls::Stream::new(&mut conn, &mut stream);
 
@@ -416,8 +412,7 @@ mod integration {
         let read_result = tls_stream.read(&mut buf);
 
         // At least one of these operations should fail
-        let all_succeeded =
-            write_result.is_ok() && flush_result.is_ok() && read_result.is_ok();
+        let all_succeeded = write_result.is_ok() && flush_result.is_ok() && read_result.is_ok();
 
         // Wait for server to process
         thread::sleep(Duration::from_millis(100));
@@ -467,8 +462,7 @@ mod integration {
             .unwrap();
 
         let client_cert_der = CertificateDer::from(client_cert.cert_der().to_vec());
-        let client_key_der =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
+        let client_key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
 
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
@@ -483,8 +477,8 @@ mod integration {
         stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
 
         let server_name = "localhost".try_into().unwrap();
-        let mut conn =
-            rustls::ClientConnection::new(client_config, server_name).expect("Failed to create client connection");
+        let mut conn = rustls::ClientConnection::new(client_config, server_name)
+            .expect("Failed to create client connection");
 
         let mut tls_stream = rustls::Stream::new(&mut conn, &mut stream);
 
@@ -497,8 +491,7 @@ mod integration {
         let read_result = tls_stream.read(&mut buf);
 
         // At least one of these should fail
-        let all_succeeded =
-            write_result.is_ok() && flush_result.is_ok() && read_result.is_ok();
+        let all_succeeded = write_result.is_ok() && flush_result.is_ok() && read_result.is_ok();
 
         // Wait for server to process
         thread::sleep(Duration::from_millis(100));
@@ -667,8 +660,7 @@ mod async_tests {
             .unwrap();
 
         let client_cert_der = CertificateDer::from(client_cert.cert_der().to_vec());
-        let client_key_der =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
+        let client_key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(client_cert.key_der()));
 
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)

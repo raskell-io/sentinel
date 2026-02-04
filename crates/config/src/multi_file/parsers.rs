@@ -10,11 +10,11 @@ use std::path::PathBuf;
 
 use sentinel_common::TraceIdFormat;
 
+use crate::namespace::ExportConfig;
 use crate::{
     AgentConfig, Limits, ListenerConfig, NamespaceConfig, ObservabilityConfig, RouteConfig,
     ServerConfig, ServiceConfig, UpstreamConfig, WafConfig,
 };
-use crate::namespace::ExportConfig;
 
 // =============================================================================
 // Helper functions for extracting values from KDL nodes
@@ -436,8 +436,8 @@ pub(super) fn parse_observability(node: &KdlNode) -> Result<ObservabilityConfig>
 /// }
 /// ```
 pub(super) fn parse_namespace(node: &KdlNode) -> Result<NamespaceConfig> {
-    let id = get_first_arg_string(node)
-        .ok_or_else(|| anyhow!("namespace requires an ID argument"))?;
+    let id =
+        get_first_arg_string(node).ok_or_else(|| anyhow!("namespace requires an ID argument"))?;
 
     // Validate namespace ID (no colons allowed)
     if id.contains(':') {
@@ -500,8 +500,8 @@ pub(super) fn parse_namespace(node: &KdlNode) -> Result<NamespaceConfig> {
 /// }
 /// ```
 pub(super) fn parse_service(node: &KdlNode) -> Result<ServiceConfig> {
-    let id = get_first_arg_string(node)
-        .ok_or_else(|| anyhow!("service requires an ID argument"))?;
+    let id =
+        get_first_arg_string(node).ok_or_else(|| anyhow!("service requires an ID argument"))?;
 
     // Validate service ID (no colons allowed)
     if id.contains(':') {
@@ -533,10 +533,7 @@ pub(super) fn parse_service(node: &KdlNode) -> Result<ServiceConfig> {
                     service.listener = Some(parse_listener(child)?);
                 }
                 _ => {
-                    tracing::debug!(
-                        "Ignoring unknown node in service: {}",
-                        child.name().value()
-                    );
+                    tracing::debug!("Ignoring unknown node in service: {}", child.name().value());
                 }
             }
         }
@@ -583,10 +580,7 @@ fn parse_exports(node: &KdlNode) -> Result<ExportConfig> {
                     }
                 }
                 _ => {
-                    tracing::debug!(
-                        "Ignoring unknown node in exports: {}",
-                        child.name().value()
-                    );
+                    tracing::debug!("Ignoring unknown node in exports: {}", child.name().value());
                 }
             }
         }

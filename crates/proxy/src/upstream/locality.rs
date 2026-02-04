@@ -158,9 +158,7 @@ impl LocalityAwareBalancer {
         let health = self.health_status.read().await;
         self.targets
             .iter()
-            .filter(|t| {
-                t.zone == zone && *health.get(&t.target.full_address()).unwrap_or(&true)
-            })
+            .filter(|t| t.zone == zone && *health.get(&t.target.full_address()).unwrap_or(&true))
             .collect()
     }
 
@@ -308,10 +306,7 @@ impl LoadBalancer for LocalityAwareBalancer {
         // If we have some local targets, combine them with fallback
         let all_targets: Vec<&ZonedTarget> = if !local_healthy.is_empty() {
             // Local first, then fallback
-            local_healthy
-                .into_iter()
-                .chain(fallback_targets)
-                .collect()
+            local_healthy.into_iter().chain(fallback_targets).collect()
         } else {
             fallback_targets
         };

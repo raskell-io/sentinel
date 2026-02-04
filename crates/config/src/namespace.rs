@@ -28,9 +28,7 @@ use std::collections::HashMap;
 
 use sentinel_common::limits::Limits;
 
-use crate::{
-    AgentConfig, FilterConfig, ListenerConfig, RouteConfig, UpstreamConfig,
-};
+use crate::{AgentConfig, FilterConfig, ListenerConfig, RouteConfig, UpstreamConfig};
 
 // ============================================================================
 // Namespace Configuration

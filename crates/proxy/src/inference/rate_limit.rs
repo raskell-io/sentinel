@@ -87,7 +87,12 @@ impl TokenBucket {
             // Try to atomically subtract
             if self
                 .tokens
-                .compare_exchange(current, current - amount, Ordering::AcqRel, Ordering::Relaxed)
+                .compare_exchange(
+                    current,
+                    current - amount,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
                 .is_ok()
             {
                 return Ok(());
@@ -135,9 +140,7 @@ pub struct TokenRateLimiter {
 impl TokenRateLimiter {
     /// Create a new token rate limiter
     pub fn new(config: TokenRateLimit) -> Self {
-        let request_buckets = config.requests_per_minute.map(|rpm| {
-            DashMap::new()
-        });
+        let request_buckets = config.requests_per_minute.map(|rpm| DashMap::new());
 
         Self {
             token_buckets: DashMap::new(),
@@ -151,9 +154,12 @@ impl TokenRateLimiter {
     /// Both token and request limits must pass for the request to be allowed.
     pub fn check(&self, key: &str, estimated_tokens: u64) -> TokenRateLimitResult {
         // Check token limit
-        let token_bucket = self.token_buckets.entry(key.to_string()).or_insert_with(|| {
-            TokenBucket::new(self.config.tokens_per_minute, self.config.burst_tokens)
-        });
+        let token_bucket = self
+            .token_buckets
+            .entry(key.to_string())
+            .or_insert_with(|| {
+                TokenBucket::new(self.config.tokens_per_minute, self.config.burst_tokens)
+            });
 
         if let Err(retry_ms) = token_bucket.try_consume(estimated_tokens) {
             trace!(
@@ -168,7 +174,9 @@ impl TokenRateLimiter {
         }
 
         // Check request limit if configured
-        if let (Some(rpm), Some(ref request_buckets)) = (self.config.requests_per_minute, &self.request_buckets) {
+        if let (Some(rpm), Some(ref request_buckets)) =
+            (self.config.requests_per_minute, &self.request_buckets)
+        {
             let request_bucket = request_buckets.entry(key.to_string()).or_insert_with(|| {
                 // For request limiting, use burst = rpm / 6 (10 second burst)
                 let burst = rpm.max(1) / 6;
@@ -301,7 +309,10 @@ mod tests {
         // This should exceed the 200 burst tokens
         let result = limiter.check("test-key", 50);
         assert!(!result.is_allowed());
-        assert!(matches!(result, TokenRateLimitResult::TokensExceeded { .. }));
+        assert!(matches!(
+            result,
+            TokenRateLimitResult::TokensExceeded { .. }
+        ));
     }
 
     #[test]

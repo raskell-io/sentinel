@@ -53,10 +53,7 @@ pub enum Scope {
     /// Namespace scope - visible within the namespace and its services
     Namespace(String),
     /// Service scope - local to a specific service within a namespace
-    Service {
-        namespace: String,
-        service: String,
-    },
+    Service { namespace: String, service: String },
 }
 
 impl Scope {
@@ -112,7 +109,6 @@ impl Scope {
         chain
     }
 }
-
 
 impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -459,10 +455,7 @@ mod tests {
         assert!(scope.is_service());
         assert_eq!(scope.namespace(), Some("api"));
         assert_eq!(scope.service(), Some("payments"));
-        assert_eq!(
-            scope.parent(),
-            Some(Scope::Namespace("api".to_string()))
-        );
+        assert_eq!(scope.parent(), Some(Scope::Namespace("api".to_string())));
     }
 
     #[test]

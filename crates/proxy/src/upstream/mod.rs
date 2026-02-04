@@ -102,7 +102,9 @@ pub use adaptive::{AdaptiveBalancer, AdaptiveConfig};
 pub use consistent_hash::{ConsistentHashBalancer, ConsistentHashConfig};
 pub use health::{ActiveHealthChecker, HealthCheckRunner};
 pub use inference_health::InferenceHealthCheck;
-pub use least_tokens::{LeastTokensQueuedBalancer, LeastTokensQueuedConfig, LeastTokensQueuedTargetStats};
+pub use least_tokens::{
+    LeastTokensQueuedBalancer, LeastTokensQueuedConfig, LeastTokensQueuedTargetStats,
+};
 pub use locality::{LocalityAwareBalancer, LocalityAwareConfig};
 pub use maglev::{MaglevBalancer, MaglevConfig};
 pub use p2c::{P2cBalancer, P2cConfig};
@@ -814,8 +816,7 @@ impl UpstreamPool {
             algorithm = ?config.load_balancing,
             "Creating load balancer"
         );
-        let load_balancer =
-            Self::create_load_balancer(&config.load_balancing, &targets, &config)?;
+        let load_balancer = Self::create_load_balancer(&config.load_balancing, &targets, &config)?;
 
         // Create connection pool configuration (Pingora handles actual pooling)
         debug!(
@@ -927,9 +928,7 @@ impl UpstreamPool {
                 targets: targets.to_vec(),
                 health_status: Arc::new(RwLock::new(HashMap::new())),
             }),
-            LoadBalancingAlgorithm::Random => {
-                Arc::new(RandomBalancer::new(targets.to_vec()))
-            }
+            LoadBalancingAlgorithm::Random => Arc::new(RandomBalancer::new(targets.to_vec())),
             LoadBalancingAlgorithm::ConsistentHash => Arc::new(ConsistentHashBalancer::new(
                 targets.to_vec(),
                 ConsistentHashConfig::default(),
@@ -1028,9 +1027,7 @@ impl UpstreamPool {
                 targets: targets.to_vec(),
                 health_status: Arc::new(RwLock::new(HashMap::new())),
             }),
-            LoadBalancingAlgorithm::Random => {
-                Arc::new(RandomBalancer::new(targets.to_vec()))
-            }
+            LoadBalancingAlgorithm::Random => Arc::new(RandomBalancer::new(targets.to_vec())),
             LoadBalancingAlgorithm::ConsistentHash => Arc::new(ConsistentHashBalancer::new(
                 targets.to_vec(),
                 ConsistentHashConfig::default(),
@@ -1550,13 +1547,21 @@ impl UpstreamPool {
             if parts.len() == 2 {
                 (
                     parts[1].to_string(),
-                    parts[0].parse::<u16>().unwrap_or(if self.tls_enabled { 443 } else { 80 }),
+                    parts[0]
+                        .parse::<u16>()
+                        .unwrap_or(if self.tls_enabled { 443 } else { 80 }),
                 )
             } else {
-                (selection.address.clone(), if self.tls_enabled { 443 } else { 80 })
+                (
+                    selection.address.clone(),
+                    if self.tls_enabled { 443 } else { 80 },
+                )
             }
         } else {
-            (selection.address.clone(), if self.tls_enabled { 443 } else { 80 })
+            (
+                selection.address.clone(),
+                if self.tls_enabled { 443 } else { 80 },
+            )
         };
 
         Ok(ShadowTarget {

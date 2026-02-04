@@ -432,30 +432,18 @@ mod tests {
         let evaluator = FallbackEvaluator::new(&config, &[], 0);
 
         // 503 should trigger fallback
-        let decision = evaluator.should_fallback_after_response(
-            "openai-primary",
-            503,
-            1000,
-            Some("gpt-4"),
-        );
+        let decision =
+            evaluator.should_fallback_after_response("openai-primary", 503, 1000, Some("gpt-4"));
         assert!(decision.is_some());
 
         // 200 should not trigger fallback
-        let decision = evaluator.should_fallback_after_response(
-            "openai-primary",
-            200,
-            1000,
-            Some("gpt-4"),
-        );
+        let decision =
+            evaluator.should_fallback_after_response("openai-primary", 200, 1000, Some("gpt-4"));
         assert!(decision.is_none());
 
         // 404 should not trigger fallback (not in the list)
-        let decision = evaluator.should_fallback_after_response(
-            "openai-primary",
-            404,
-            1000,
-            Some("gpt-4"),
-        );
+        let decision =
+            evaluator.should_fallback_after_response("openai-primary", 404, 1000, Some("gpt-4"));
         assert!(decision.is_none());
     }
 
@@ -539,9 +527,15 @@ mod tests {
 
         assert_eq!(evaluator.map_model(upstream, "gpt-4"), "claude-3-opus");
         assert_eq!(evaluator.map_model(upstream, "gpt-4o"), "claude-3-5-sonnet");
-        assert_eq!(evaluator.map_model(upstream, "gpt-3.5-turbo"), "claude-3-haiku");
+        assert_eq!(
+            evaluator.map_model(upstream, "gpt-3.5-turbo"),
+            "claude-3-haiku"
+        );
         // Unknown model returns as-is
-        assert_eq!(evaluator.map_model(upstream, "unknown-model"), "unknown-model");
+        assert_eq!(
+            evaluator.map_model(upstream, "unknown-model"),
+            "unknown-model"
+        );
     }
 
     #[test]

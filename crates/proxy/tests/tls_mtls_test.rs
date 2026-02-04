@@ -412,6 +412,10 @@ mod edge_cases {
 
         // Combined PEM file should work for both cert and key
         let result = build_upstream_tls_config(&config);
-        assert!(result.is_ok(), "Combined PEM should work: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Combined PEM should work: {:?}",
+            result.err()
+        );
     }
 }

@@ -17,9 +17,7 @@ use sentinel_common::ids::{QualifiedId, Scope};
 use sentinel_common::limits::Limits;
 use std::collections::HashMap;
 
-use crate::{
-    AgentConfig, Config, FilterConfig, ListenerConfig, RouteConfig, UpstreamConfig,
-};
+use crate::{AgentConfig, Config, FilterConfig, ListenerConfig, RouteConfig, UpstreamConfig};
 
 // ============================================================================
 // Flattened Configuration
@@ -116,13 +114,23 @@ impl FlattenedConfig {
     }
 
     /// Get all routes in a specific scope.
-    pub fn routes_in_scope<'a>(&'a self, scope: &'a Scope) -> impl Iterator<Item = &'a (QualifiedId, RouteConfig)> {
-        self.routes.iter().filter(move |(qid, _)| &qid.scope == scope)
+    pub fn routes_in_scope<'a>(
+        &'a self,
+        scope: &'a Scope,
+    ) -> impl Iterator<Item = &'a (QualifiedId, RouteConfig)> {
+        self.routes
+            .iter()
+            .filter(move |(qid, _)| &qid.scope == scope)
     }
 
     /// Get all listeners in a specific scope.
-    pub fn listeners_in_scope<'a>(&'a self, scope: &'a Scope) -> impl Iterator<Item = &'a (QualifiedId, ListenerConfig)> {
-        self.listeners.iter().filter(move |(qid, _)| &qid.scope == scope)
+    pub fn listeners_in_scope<'a>(
+        &'a self,
+        scope: &'a Scope,
+    ) -> impl Iterator<Item = &'a (QualifiedId, ListenerConfig)> {
+        self.listeners
+            .iter()
+            .filter(move |(qid, _)| &qid.scope == scope)
     }
 
     /// Check if an upstream name is exported.
@@ -171,17 +179,20 @@ impl Config {
     fn flatten_global(&self, flat: &mut FlattenedConfig) {
         // Global upstreams
         for (id, upstream) in &self.upstreams {
-            flat.upstreams.insert(QualifiedId::global(id), upstream.clone());
+            flat.upstreams
+                .insert(QualifiedId::global(id), upstream.clone());
         }
 
         // Global routes
         for route in &self.routes {
-            flat.routes.push((QualifiedId::global(&route.id), route.clone()));
+            flat.routes
+                .push((QualifiedId::global(&route.id), route.clone()));
         }
 
         // Global agents
         for agent in &self.agents {
-            flat.agents.insert(QualifiedId::global(&agent.id), agent.clone());
+            flat.agents
+                .insert(QualifiedId::global(&agent.id), agent.clone());
         }
 
         // Global filters
@@ -191,7 +202,8 @@ impl Config {
 
         // Global listeners
         for listener in &self.listeners {
-            flat.listeners.push((QualifiedId::global(&listener.id), listener.clone()));
+            flat.listeners
+                .push((QualifiedId::global(&listener.id), listener.clone()));
         }
     }
 
@@ -216,10 +228,8 @@ impl Config {
 
         // Namespace routes
         for route in &ns.routes {
-            flat.routes.push((
-                QualifiedId::namespaced(&ns.id, &route.id),
-                route.clone(),
-            ));
+            flat.routes
+                .push((QualifiedId::namespaced(&ns.id, &route.id), route.clone()));
         }
 
         // Namespace agents
@@ -258,12 +268,7 @@ impl Config {
         }
     }
 
-    fn flatten_service(
-        &self,
-        ns_id: &str,
-        svc: &crate::ServiceConfig,
-        flat: &mut FlattenedConfig,
-    ) {
+    fn flatten_service(&self, ns_id: &str, svc: &crate::ServiceConfig, flat: &mut FlattenedConfig) {
         let svc_scope = Scope::Service {
             namespace: ns_id.to_string(),
             service: svc.id.clone(),
@@ -300,10 +305,8 @@ impl Config {
 
         // Service filters
         for (id, filter) in &svc.filters {
-            flat.filters.insert(
-                QualifiedId::in_service(ns_id, &svc.id, id),
-                filter.clone(),
-            );
+            flat.filters
+                .insert(QualifiedId::in_service(ns_id, &svc.id, id), filter.clone());
         }
 
         // Service listener (singular)
@@ -352,12 +355,19 @@ mod tests {
         let mut config = Config::default_for_testing();
 
         // Add global upstream
-        config.upstreams.insert("global-backend".to_string(), test_upstream("global-backend"));
+        config.upstreams.insert(
+            "global-backend".to_string(),
+            test_upstream("global-backend"),
+        );
 
         // Add namespace with upstream
         let mut ns = NamespaceConfig::new("api");
-        ns.upstreams.insert("ns-backend".to_string(), test_upstream("ns-backend"));
-        ns.upstreams.insert("shared-backend".to_string(), test_upstream("shared-backend"));
+        ns.upstreams
+            .insert("ns-backend".to_string(), test_upstream("ns-backend"));
+        ns.upstreams.insert(
+            "shared-backend".to_string(),
+            test_upstream("shared-backend"),
+        );
         ns.exports = ExportConfig {
             upstreams: vec!["shared-backend".to_string()],
             agents: vec![],
@@ -366,7 +376,8 @@ mod tests {
 
         // Add service with upstream
         let mut svc = ServiceConfig::new("payments");
-        svc.upstreams.insert("svc-backend".to_string(), test_upstream("svc-backend"));
+        svc.upstreams
+            .insert("svc-backend".to_string(), test_upstream("svc-backend"));
         ns.services.push(svc);
 
         config.namespaces.push(ns);
@@ -428,7 +439,9 @@ mod tests {
         let upstream = flat.get_upstream_by_canonical("api:ns-backend").unwrap();
         assert_eq!(upstream.id, "ns-backend");
 
-        let service_upstream = flat.get_upstream_by_canonical("api:payments:svc-backend").unwrap();
+        let service_upstream = flat
+            .get_upstream_by_canonical("api:payments:svc-backend")
+            .unwrap();
         assert_eq!(service_upstream.id, "svc-backend");
     }
 
@@ -446,7 +459,9 @@ mod tests {
         assert!(flat.scope_limits.contains_key(&Scope::Global));
 
         // Should have namespace limits
-        assert!(flat.scope_limits.contains_key(&Scope::Namespace("api".to_string())));
+        assert!(flat
+            .scope_limits
+            .contains_key(&Scope::Namespace("api".to_string())));
     }
 
     #[test]

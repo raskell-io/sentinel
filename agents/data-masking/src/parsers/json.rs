@@ -173,7 +173,12 @@ fn parse_path_segments(path: &str) -> Result<Vec<PathSegment>, MaskingError> {
 }
 
 /// Find paths matching a pattern (field name).
-fn find_paths_recursive(value: &Value, pattern: &str, current_path: &str, results: &mut Vec<String>) {
+fn find_paths_recursive(
+    value: &Value,
+    pattern: &str,
+    current_path: &str,
+    results: &mut Vec<String>,
+) {
     // If pattern starts with $, try exact match
     if pattern.starts_with('$') {
         if let Ok(segments) = parse_path_segments(pattern) {

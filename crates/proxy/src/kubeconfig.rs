@@ -302,7 +302,10 @@ impl Kubeconfig {
     }
 
     /// Resolve a specific context to a complete configuration
-    pub fn resolve_context(&self, context_name: &str) -> Result<ResolvedKubeConfig, KubeconfigError> {
+    pub fn resolve_context(
+        &self,
+        context_name: &str,
+    ) -> Result<ResolvedKubeConfig, KubeconfigError> {
         let context = self.get_context(context_name)?;
         let cluster = self.get_cluster(&context.cluster)?;
         let user = self.get_user(&context.user)?;
@@ -421,9 +424,9 @@ impl Kubeconfig {
             cmd.env(&env_var.name, &env_var.value);
         }
 
-        let output = cmd
-            .output()
-            .map_err(|e| KubeconfigError::ExecError(format!("Failed to execute {}: {}", exec.command, e)))?;
+        let output = cmd.output().map_err(|e| {
+            KubeconfigError::ExecError(format!("Failed to execute {}: {}", exec.command, e))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -434,15 +437,18 @@ impl Kubeconfig {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let cred: ExecCredential = serde_json::from_str(&stdout)
-            .map_err(|e| KubeconfigError::ExecParseError(format!("Failed to parse exec output: {}", e)))?;
+        let cred: ExecCredential = serde_json::from_str(&stdout).map_err(|e| {
+            KubeconfigError::ExecParseError(format!("Failed to parse exec output: {}", e))
+        })?;
 
         if let Some(status) = cred.status {
             if let Some(token) = status.token {
                 return Ok(KubeAuth::Token(token));
             }
 
-            if let (Some(cert_data), Some(key_data)) = (status.client_certificate_data, status.client_key_data) {
+            if let (Some(cert_data), Some(key_data)) =
+                (status.client_certificate_data, status.client_key_data)
+            {
                 let cert = BASE64.decode(&cert_data)?;
                 let key = BASE64.decode(&key_data)?;
                 return Ok(KubeAuth::ClientCert { cert, key });

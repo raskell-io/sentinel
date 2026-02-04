@@ -846,9 +846,8 @@ routes {{
 
         // Simultaneously trigger reload
         let manager_reload = Arc::clone(&manager);
-        let reload_handle = tokio::spawn(async move {
-            manager_reload.reload(ReloadTrigger::Manual).await
-        });
+        let reload_handle =
+            tokio::spawn(async move { manager_reload.reload(ReloadTrigger::Manual).await });
 
         // Wait for all readers and the reload
         let mut total_reads = 0;
@@ -885,9 +884,9 @@ routes {{
             } else {
                 ReloadTrigger::Signal
             };
-            reload_handles.push(tokio::spawn(async move {
-                manager_clone.reload(trigger).await
-            }));
+            reload_handles.push(tokio::spawn(
+                async move { manager_clone.reload(trigger).await },
+            ));
         }
 
         // All reloads should complete (some may fail due to racing, but no panics)
@@ -1056,22 +1055,31 @@ routes {{
 
         // Collect events (non-blocking with timeout)
         let mut events = Vec::new();
-        while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await {
+        while let Ok(Ok(event)) =
+            tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await
+        {
             events.push(event);
         }
 
         // Verify we received the expected events
-        assert!(events.len() >= 2, "Should receive at least Started and Applied/Validated events");
+        assert!(
+            events.len() >= 2,
+            "Should receive at least Started and Applied/Validated events"
+        );
 
         // Check for Started event
         assert!(
-            events.iter().any(|e| matches!(e, ReloadEvent::Started { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, ReloadEvent::Started { .. })),
             "Should receive Started event"
         );
 
         // Check for Applied event (successful reload)
         assert!(
-            events.iter().any(|e| matches!(e, ReloadEvent::Applied { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, ReloadEvent::Applied { .. })),
             "Should receive Applied event on success"
         );
     }
@@ -1094,9 +1102,7 @@ routes {{
         // Start drain in background
         let coord_clone = Arc::new(coordinator);
         let coord_for_drain = Arc::clone(&coord_clone);
-        let drain_handle = tokio::spawn(async move {
-            coord_for_drain.wait_for_drain().await
-        });
+        let drain_handle = tokio::spawn(async move { coord_for_drain.wait_for_drain().await });
 
         // Simulate remaining requests completing
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1121,6 +1127,10 @@ routes {{
         // Start drain - should timeout
         let drained = coordinator.wait_for_drain().await;
         assert!(!drained, "Drain should timeout with stuck requests");
-        assert_eq!(coordinator.active_count(), 2, "Requests should still be tracked");
+        assert_eq!(
+            coordinator.active_count(),
+            2,
+            "Requests should still be tracked"
+        );
     }
 }

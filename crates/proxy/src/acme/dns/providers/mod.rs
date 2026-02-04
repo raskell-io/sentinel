@@ -36,12 +36,8 @@ pub fn create_provider(config: &DnsProviderConfig) -> DnsResult<Arc<dyn DnsProvi
             Ok(Arc::new(provider))
         }
         DnsProviderType::Webhook { url, auth_header } => {
-            let provider = WebhookProvider::new(
-                url.clone(),
-                auth_header.clone(),
-                Some(credentials),
-                timeout,
-            )?;
+            let provider =
+                WebhookProvider::new(url.clone(), auth_header.clone(), Some(credentials), timeout)?;
             Ok(Arc::new(provider))
         }
     }
@@ -58,6 +54,7 @@ fn load_credentials(config: &DnsProviderConfig) -> DnsResult<Credentials> {
     }
 
     Err(DnsProviderError::Credentials(
-        "No credentials configured. Specify either 'credentials-file' or 'credentials-env'".to_string(),
+        "No credentials configured. Specify either 'credentials-file' or 'credentials-env'"
+            .to_string(),
     ))
 }

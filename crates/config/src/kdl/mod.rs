@@ -288,7 +288,9 @@ fn kdl_to_json(node: &kdl::KdlNode) -> Result<serde_json::Value> {
                 serde_json::Value::Object(child_obj)
             } else if args.len() == 1 {
                 // Single argument - safe to unwrap since we checked len == 1
-                args.into_iter().next().expect("args has exactly one element")
+                args.into_iter()
+                    .next()
+                    .expect("args has exactly one element")
             } else if !args.is_empty() {
                 // Multiple arguments -> array
                 serde_json::Value::Array(args)
@@ -1923,10 +1925,7 @@ mod tests {
 
         let result = parse_cache_config(node);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("disk-path"));
+        assert!(result.unwrap_err().to_string().contains("disk-path"));
     }
 
     #[test]
@@ -2342,7 +2341,10 @@ mod tests {
         assert!(fallback.triggers.on_health_failure);
         assert!(fallback.triggers.on_budget_exhausted);
         assert_eq!(fallback.triggers.on_latency_threshold_ms, Some(5000));
-        assert_eq!(fallback.triggers.on_error_codes, vec![429, 500, 502, 503, 504]);
+        assert_eq!(
+            fallback.triggers.on_error_codes,
+            vec![429, 500, 502, 503, 504]
+        );
         assert!(fallback.triggers.on_connection_error);
 
         // Check fallback upstreams
@@ -2355,19 +2357,31 @@ mod tests {
             crate::InferenceProvider::Anthropic
         ));
         assert!(anthropic.skip_if_unhealthy);
-        assert_eq!(anthropic.model_mapping.get("gpt-4"), Some(&"claude-3-opus".to_string()));
-        assert_eq!(anthropic.model_mapping.get("gpt-4o"), Some(&"claude-3-5-sonnet".to_string()));
-        assert_eq!(anthropic.model_mapping.get("gpt-3.5-turbo"), Some(&"claude-3-haiku".to_string()));
+        assert_eq!(
+            anthropic.model_mapping.get("gpt-4"),
+            Some(&"claude-3-opus".to_string())
+        );
+        assert_eq!(
+            anthropic.model_mapping.get("gpt-4o"),
+            Some(&"claude-3-5-sonnet".to_string())
+        );
+        assert_eq!(
+            anthropic.model_mapping.get("gpt-3.5-turbo"),
+            Some(&"claude-3-haiku".to_string())
+        );
 
         let local = &fallback.upstreams[1];
         assert_eq!(local.upstream, "local-gpu");
-        assert!(matches!(
-            local.provider,
-            crate::InferenceProvider::Generic
-        ));
+        assert!(matches!(local.provider, crate::InferenceProvider::Generic));
         assert!(local.skip_if_unhealthy);
-        assert_eq!(local.model_mapping.get("gpt-4*"), Some(&"llama-3-70b".to_string()));
-        assert_eq!(local.model_mapping.get("gpt-3.5*"), Some(&"llama-3-8b".to_string()));
+        assert_eq!(
+            local.model_mapping.get("gpt-4*"),
+            Some(&"llama-3-70b".to_string())
+        );
+        assert_eq!(
+            local.model_mapping.get("gpt-3.5*"),
+            Some(&"llama-3-8b".to_string())
+        );
     }
 
     #[test]
@@ -2498,7 +2512,10 @@ mod tests {
             .expect("Route not found");
 
         // Check inference config exists
-        let inference = route.inference.as_ref().expect("Inference config not found");
+        let inference = route
+            .inference
+            .as_ref()
+            .expect("Inference config not found");
         assert_eq!(inference.provider, crate::InferenceProvider::OpenAi);
 
         // Check model routing config
@@ -2592,7 +2609,10 @@ mod tests {
             .find(|r| r.id == "inference")
             .expect("Route not found");
 
-        let inference = route.inference.as_ref().expect("Inference config not found");
+        let inference = route
+            .inference
+            .as_ref()
+            .expect("Inference config not found");
         let model_routing = inference
             .model_routing
             .as_ref()
@@ -2739,7 +2759,9 @@ mod tests {
         let waf_node = doc.get("waf").unwrap();
         let waf = parse_waf_config(waf_node).unwrap();
 
-        assert!(matches!(waf.engine, crate::waf::WafEngine::Custom(ref name) if name == "my-custom-waf"));
+        assert!(
+            matches!(waf.engine, crate::waf::WafEngine::Custom(ref name) if name == "my-custom-waf")
+        );
     }
 
     #[test]

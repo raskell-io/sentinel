@@ -47,7 +47,11 @@ impl BufferPool {
 
     fn get(&mut self, min_capacity: usize) -> BytesMut {
         // Try to find a buffer with sufficient capacity
-        if let Some(idx) = self.buffers.iter().position(|b| b.capacity() >= min_capacity) {
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.capacity() >= min_capacity)
+        {
             let mut buf = self.buffers.remove(idx).unwrap();
             buf.clear();
             self.reused += 1;
@@ -348,9 +352,7 @@ mod tests {
         clear_pool();
 
         // Create more buffers than the pool can hold
-        let buffers: Vec<_> = (0..MAX_POOL_SIZE + 5)
-            .map(|_| acquire(1024))
-            .collect();
+        let buffers: Vec<_> = (0..MAX_POOL_SIZE + 5).map(|_| acquire(1024)).collect();
 
         // Drop all buffers
         drop(buffers);

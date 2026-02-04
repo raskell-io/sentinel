@@ -148,7 +148,9 @@ impl AgentHandler for DataMaskingAgent {
 
                 if let Some(values) = event.headers.get(&rule.name.to_lowercase()) {
                     for value in values {
-                        match engine.apply_header_action(correlation_id, value, &rule.action).await
+                        match engine
+                            .apply_header_action(correlation_id, value, &rule.action)
+                            .await
                         {
                             Ok(new_value) if new_value != *value => {
                                 response = response.add_request_header(HeaderOp::Set {
@@ -232,8 +234,7 @@ impl AgentHandler for DataMaskingAgent {
             Some(e) => e,
             None => {
                 // No engine, pass through
-                let encoded =
-                    base64::engine::general_purpose::STANDARD.encode(&complete_body);
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&complete_body);
                 return AgentResponse::default_allow()
                     .with_request_body_mutation(BodyMutation::replace(event.chunk_index, encoded));
             }
@@ -268,8 +269,7 @@ impl AgentHandler for DataMaskingAgent {
                 error!(error = %e, "Failed to mask request body");
 
                 // Re-encode original and pass through
-                let encoded =
-                    base64::engine::general_purpose::STANDARD.encode(&complete_body);
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&complete_body);
 
                 AgentResponse::default_allow()
                     .with_request_body_mutation(BodyMutation::replace(event.chunk_index, encoded))
@@ -299,7 +299,9 @@ impl AgentHandler for DataMaskingAgent {
 
                 if let Some(values) = event.headers.get(&rule.name.to_lowercase()) {
                     for value in values {
-                        match engine.apply_header_action(correlation_id, value, &rule.action).await
+                        match engine
+                            .apply_header_action(correlation_id, value, &rule.action)
+                            .await
                         {
                             Ok(new_value) if new_value != *value => {
                                 response = response.add_response_header(HeaderOp::Set {
@@ -375,10 +377,10 @@ impl AgentHandler for DataMaskingAgent {
         let engine = match &*engine_guard {
             Some(e) => e,
             None => {
-                let encoded =
-                    base64::engine::general_purpose::STANDARD.encode(&complete_body);
-                return AgentResponse::default_allow()
-                    .with_response_body_mutation(BodyMutation::replace(event.chunk_index, encoded));
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&complete_body);
+                return AgentResponse::default_allow().with_response_body_mutation(
+                    BodyMutation::replace(event.chunk_index, encoded),
+                );
             }
         };
 
@@ -389,8 +391,7 @@ impl AgentHandler for DataMaskingAgent {
             Ok(unmasked_body) => {
                 let modified = unmasked_body != complete_body;
 
-                let encoded =
-                    base64::engine::general_purpose::STANDARD.encode(&unmasked_body);
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&unmasked_body);
 
                 let response = AgentResponse::default_allow()
                     .with_response_body_mutation(BodyMutation::replace(event.chunk_index, encoded));
@@ -409,8 +410,7 @@ impl AgentHandler for DataMaskingAgent {
             Err(e) => {
                 error!(error = %e, "Failed to unmask response body");
 
-                let encoded =
-                    base64::engine::general_purpose::STANDARD.encode(&complete_body);
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&complete_body);
 
                 AgentResponse::default_allow()
                     .with_response_body_mutation(BodyMutation::replace(event.chunk_index, encoded))

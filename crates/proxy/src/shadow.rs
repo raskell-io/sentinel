@@ -134,7 +134,11 @@ impl ShadowManager {
             );
             // Record error metric
             if let Some(ref metrics) = self.metrics {
-                metrics.record_shadow_error(&self.route_id, &self.config.upstream, "upstream_not_found");
+                metrics.record_shadow_error(
+                    &self.route_id,
+                    &self.config.upstream,
+                    "upstream_not_found",
+                );
             }
             return;
         }
@@ -280,8 +284,8 @@ impl ShadowManager {
         }
 
         // Build the request based on method
-        let method = reqwest::Method::from_bytes(ctx.method.as_bytes())
-            .unwrap_or(reqwest::Method::GET);
+        let method =
+            reqwest::Method::from_bytes(ctx.method.as_bytes()).unwrap_or(reqwest::Method::GET);
 
         let mut request_builder = client.request(method, &url).headers(reqwest_headers);
 
@@ -346,13 +350,14 @@ pub async fn buffer_request_body(
 
     loop {
         // Read next chunk from the session
-        let chunk = session.read_request_body().await.map_err(|e| {
-            SentinelError::Internal {
+        let chunk = session
+            .read_request_body()
+            .await
+            .map_err(|e| SentinelError::Internal {
                 message: format!("Failed to read request body for shadow: {}", e),
                 correlation_id: None,
                 source: None,
-            }
-        })?;
+            })?;
 
         match chunk {
             Some(data) => {

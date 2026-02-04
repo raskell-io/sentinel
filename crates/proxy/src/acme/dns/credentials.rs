@@ -68,10 +68,7 @@ impl CredentialLoader {
     /// Load credentials from an environment variable
     pub fn load_from_env(var_name: &str) -> Result<Credentials, DnsProviderError> {
         let value = std::env::var(var_name).map_err(|_| {
-            DnsProviderError::Credentials(format!(
-                "Environment variable '{}' not set",
-                var_name
-            ))
+            DnsProviderError::Credentials(format!("Environment variable '{}' not set", var_name))
         })?;
 
         // Try JSON first, fall back to plain token
@@ -224,7 +221,11 @@ mod tests {
     #[test]
     fn test_load_json_key_secret() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"{{"api_key": "key123", "api_secret": "secret456"}}"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"api_key": "key123", "api_secret": "secret456"}}"#
+        )
+        .unwrap();
 
         let creds = CredentialLoader::load_from_file(file.path()).unwrap();
         assert_eq!(creds.key(), Some("key123"));
@@ -278,7 +279,11 @@ mod tests {
     #[test]
     fn test_load_json_with_extra_fields() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"{{"token": "my-token", "extra": "field", "another": 123}}"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"token": "my-token", "extra": "field", "another": 123}}"#
+        )
+        .unwrap();
 
         let creds = CredentialLoader::load_from_file(file.path()).unwrap();
         assert_eq!(creds.token(), Some("my-token"));
@@ -340,7 +345,9 @@ mod tests {
 
     #[test]
     fn test_nonexistent_file() {
-        let result = CredentialLoader::load_from_file(std::path::Path::new("/nonexistent/path/to/creds.json"));
+        let result = CredentialLoader::load_from_file(std::path::Path::new(
+            "/nonexistent/path/to/creds.json",
+        ));
         assert!(result.is_err());
     }
 

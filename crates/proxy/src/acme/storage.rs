@@ -194,7 +194,10 @@ impl CertificateStorage {
     }
 
     /// Load a stored certificate for a domain
-    pub fn load_certificate(&self, domain: &str) -> Result<Option<StoredCertificate>, StorageError> {
+    pub fn load_certificate(
+        &self,
+        domain: &str,
+    ) -> Result<Option<StoredCertificate>, StorageError> {
         let domain_path = self.domain_path(domain);
         let cert_path = domain_path.join("cert.pem");
         let key_path = domain_path.join("key.pem");
@@ -274,7 +277,11 @@ impl CertificateStorage {
     /// Returns `true` if:
     /// - No certificate exists for the domain
     /// - Certificate expires within `renew_before_days` days
-    pub fn needs_renewal(&self, domain: &str, renew_before_days: u32) -> Result<bool, StorageError> {
+    pub fn needs_renewal(
+        &self,
+        domain: &str,
+        renew_before_days: u32,
+    ) -> Result<bool, StorageError> {
         let Some(cert) = self.load_certificate(domain)? else {
             debug!(domain = %domain, "No certificate exists, needs issuance");
             return Ok(true);

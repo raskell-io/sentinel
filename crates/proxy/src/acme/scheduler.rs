@@ -121,7 +121,10 @@ impl RenewalScheduler {
     async fn check_renewals(&self) -> Result<(), AcmeError> {
         let domains = self.client.config().domains.clone();
 
-        info!(domain_count = domains.len(), "Checking certificates for renewal");
+        info!(
+            domain_count = domains.len(),
+            "Checking certificates for renewal"
+        );
 
         for domain in &domains {
             match self.client.needs_renewal(domain) {
@@ -333,7 +336,9 @@ impl RenewalScheduler {
         let domains = self.client.config().domains.clone();
 
         if domains.is_empty() {
-            return Err(AcmeError::OrderCreation("No domains configured".to_string()));
+            return Err(AcmeError::OrderCreation(
+                "No domains configured".to_string(),
+            ));
         }
 
         let primary_domain = &domains[0];

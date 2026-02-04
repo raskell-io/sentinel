@@ -398,19 +398,28 @@ mod tests {
         manager.record_failure(&scope, "backend").await;
         manager.record_failure(&scope, "backend").await;
 
-        assert_eq!(manager.state(&scope, "backend").await, CircuitBreakerState::Open);
+        assert_eq!(
+            manager.state(&scope, "backend").await,
+            CircuitBreakerState::Open
+        );
 
         // Wait for timeout and trigger half-open
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         manager.is_allowed(&scope, "backend").await;
 
-        assert_eq!(manager.state(&scope, "backend").await, CircuitBreakerState::HalfOpen);
+        assert_eq!(
+            manager.state(&scope, "backend").await,
+            CircuitBreakerState::HalfOpen
+        );
 
         // Record successes to close
         manager.record_success(&scope, "backend").await;
         manager.record_success(&scope, "backend").await;
 
-        assert_eq!(manager.state(&scope, "backend").await, CircuitBreakerState::Closed);
+        assert_eq!(
+            manager.state(&scope, "backend").await,
+            CircuitBreakerState::Closed
+        );
     }
 
     #[test]

@@ -45,7 +45,10 @@ impl GrpcTlsConfig {
     }
 
     /// Load CA certificate from a file
-    pub async fn with_ca_cert_file(mut self, path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+    pub async fn with_ca_cert_file(
+        mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<Self, std::io::Error> {
         self.ca_cert_pem = Some(tokio::fs::read(path).await?);
         Ok(self)
     }
@@ -68,7 +71,11 @@ impl GrpcTlsConfig {
     }
 
     /// Set client certificate and key from PEM data (for mTLS)
-    pub fn with_client_identity(mut self, cert_pem: impl Into<Vec<u8>>, key_pem: impl Into<Vec<u8>>) -> Self {
+    pub fn with_client_identity(
+        mut self,
+        cert_pem: impl Into<Vec<u8>>,
+        key_pem: impl Into<Vec<u8>>,
+    ) -> Self {
         self.client_cert_pem = Some(cert_pem.into());
         self.client_key_pem = Some(key_pem.into());
         self
@@ -107,7 +114,10 @@ impl HttpTlsConfig {
     }
 
     /// Load CA certificate from a file
-    pub async fn with_ca_cert_file(mut self, path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+    pub async fn with_ca_cert_file(
+        mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<Self, std::io::Error> {
         self.ca_cert_pem = Some(tokio::fs::read(path).await?);
         Ok(self)
     }
@@ -130,7 +140,11 @@ impl HttpTlsConfig {
     }
 
     /// Set client certificate and key from PEM data (for mTLS)
-    pub fn with_client_identity(mut self, cert_pem: impl Into<Vec<u8>>, key_pem: impl Into<Vec<u8>>) -> Self {
+    pub fn with_client_identity(
+        mut self,
+        cert_pem: impl Into<Vec<u8>>,
+        key_pem: impl Into<Vec<u8>>,
+    ) -> Self {
         self.client_cert_pem = Some(cert_pem.into());
         self.client_key_pem = Some(key_pem.into());
         self
@@ -322,7 +336,9 @@ impl AgentClient {
         }
 
         // Add client identity for mTLS if provided
-        if let (Some(cert_pem), Some(key_pem)) = (&tls_config.client_cert_pem, &tls_config.client_key_pem) {
+        if let (Some(cert_pem), Some(key_pem)) =
+            (&tls_config.client_cert_pem, &tls_config.client_key_pem)
+        {
             let identity = Identity::from_pem(cert_pem, key_pem);
             client_tls_config = client_tls_config.identity(identity);
             debug!(
@@ -399,7 +415,10 @@ impl AgentClient {
         let address = address.trim();
 
         // Handle URLs like "https://example.com:443" or "http://example.com:8080"
-        if let Some(rest) = address.strip_prefix("https://").or_else(|| address.strip_prefix("http://")) {
+        if let Some(rest) = address
+            .strip_prefix("https://")
+            .or_else(|| address.strip_prefix("http://"))
+        {
             // Split off port and path
             let host = rest.split(':').next()?.split('/').next()?;
             if !host.is_empty() {
@@ -484,9 +503,7 @@ impl AgentClient {
             "Creating HTTP agent client with TLS"
         );
 
-        let mut client_builder = reqwest::Client::builder()
-            .timeout(timeout)
-            .use_rustls_tls();
+        let mut client_builder = reqwest::Client::builder().timeout(timeout).use_rustls_tls();
 
         // Add CA certificate if provided
         if let Some(ca_pem) = &tls_config.ca_cert_pem {
@@ -506,7 +523,9 @@ impl AgentClient {
         }
 
         // Add client identity for mTLS if provided
-        if let (Some(cert_pem), Some(key_pem)) = (&tls_config.client_cert_pem, &tls_config.client_key_pem) {
+        if let (Some(cert_pem), Some(key_pem)) =
+            (&tls_config.client_cert_pem, &tls_config.client_key_pem)
+        {
             // Combine cert and key into identity PEM
             let mut identity_pem = cert_pem.clone();
             identity_pem.extend_from_slice(b"\n");
@@ -587,7 +606,8 @@ impl AgentClient {
             AgentConnection::Grpc(_) => self.send_event_grpc(event_type, payload).await,
             AgentConnection::Http(_) => {
                 // Use the cloned Arc
-                self.send_event_http(http_conn.unwrap(), event_type, payload).await
+                self.send_event_http(http_conn.unwrap(), event_type, payload)
+                    .await
             }
         }
     }
@@ -651,7 +671,7 @@ impl AgentClient {
 
         let AgentConnection::Grpc(client) = &mut self.connection else {
             return Err(AgentProtocolError::WrongConnectionType(
-                "Expected gRPC connection but found Unix socket".to_string()
+                "Expected gRPC connection but found Unix socket".to_string(),
             ));
         };
 
@@ -739,8 +759,7 @@ impl AgentClient {
             );
             return Err(AgentProtocolError::ConnectionFailed(format!(
                 "HTTP {} from agent: {}",
-                status,
-                body
+                status, body
             )));
         }
 
@@ -757,8 +776,10 @@ impl AgentClient {
             });
         }
 
-        let agent_response: AgentResponse = serde_json::from_slice(&response_bytes)
-            .map_err(|e| AgentProtocolError::InvalidMessage(format!("Invalid JSON response: {}", e)))?;
+        let agent_response: AgentResponse =
+            serde_json::from_slice(&response_bytes).map_err(|e| {
+                AgentProtocolError::InvalidMessage(format!("Invalid JSON response: {}", e))
+            })?;
 
         // Verify protocol version
         if agent_response.version != PROTOCOL_VERSION {
@@ -807,9 +828,9 @@ impl AgentClient {
         let event = match event_type {
             EventType::Configure => {
                 return Err(AgentProtocolError::InvalidMessage(
-                    "Configure event should be handled separately".to_string()
+                    "Configure event should be handled separately".to_string(),
                 ));
-            },
+            }
             EventType::RequestHeaders => {
                 let event: RequestHeadersEvent = serde_json::from_value(payload_json)
                     .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?;
@@ -891,7 +912,7 @@ impl AgentClient {
             }
             EventType::GuardrailInspect => {
                 return Err(AgentProtocolError::InvalidMessage(
-                    "GuardrailInspect events are not yet supported via gRPC".to_string()
+                    "GuardrailInspect events are not yet supported via gRPC".to_string(),
                 ));
             }
         };
@@ -1033,7 +1054,7 @@ impl AgentClient {
     async fn send_raw_unix(&mut self, data: &[u8]) -> Result<(), AgentProtocolError> {
         let AgentConnection::UnixSocket(stream) = &mut self.connection else {
             return Err(AgentProtocolError::WrongConnectionType(
-                "Expected Unix socket connection but found gRPC".to_string()
+                "Expected Unix socket connection but found gRPC".to_string(),
             ));
         };
         // Write message length (4 bytes, big-endian)
@@ -1049,7 +1070,7 @@ impl AgentClient {
     async fn receive_raw_unix(&mut self) -> Result<Vec<u8>, AgentProtocolError> {
         let AgentConnection::UnixSocket(stream) = &mut self.connection else {
             return Err(AgentProtocolError::WrongConnectionType(
-                "Expected Unix socket connection but found gRPC".to_string()
+                "Expected Unix socket connection but found gRPC".to_string(),
             ));
         };
         // Read message length (4 bytes, big-endian)
@@ -1079,7 +1100,7 @@ impl AgentClient {
                 Ok(())
             }
             AgentConnection::Grpc(_) => Ok(()), // gRPC channels close automatically
-            AgentConnection::Http(_) => Ok(()),  // HTTP clients are stateless, no cleanup needed
+            AgentConnection::Http(_) => Ok(()), // HTTP clients are stateless, no cleanup needed
         }
     }
 }

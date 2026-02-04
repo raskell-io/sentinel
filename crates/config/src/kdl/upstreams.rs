@@ -243,15 +243,13 @@ fn parse_load_balancing(s: &str) -> LoadBalancingAlgorithm {
 fn parse_sticky_session_config(children: &kdl::KdlDocument) -> StickySessionConfig {
     let nodes = children.nodes();
 
-    let cookie_name = find_string_entry(nodes, "cookie-name")
-        .unwrap_or_else(|| "SERVERID".to_string());
+    let cookie_name =
+        find_string_entry(nodes, "cookie-name").unwrap_or_else(|| "SERVERID".to_string());
 
     // Parse cookie TTL - support both integer seconds and duration strings
     let cookie_ttl_secs = find_int_entry(nodes, "cookie-ttl")
         .map(|v| v as u64)
-        .or_else(|| {
-            find_string_entry(nodes, "cookie-ttl").and_then(|s| parse_duration_string(&s))
-        })
+        .or_else(|| find_string_entry(nodes, "cookie-ttl").and_then(|s| parse_duration_string(&s)))
         .unwrap_or(3600); // Default 1 hour
 
     let cookie_path = find_string_entry(nodes, "cookie-path").unwrap_or_else(|| "/".to_string());
@@ -432,7 +430,8 @@ fn parse_upstream_timeouts(node: &kdl::KdlNode) -> UpstreamTimeouts {
 fn parse_upstream_tls(node: &kdl::KdlNode) -> UpstreamTlsConfig {
     let sni = find_string_entry_from_node(node, "sni");
 
-    let insecure_skip_verify = find_bool_entry_from_node(node, "insecure-skip-verify").unwrap_or(false);
+    let insecure_skip_verify =
+        find_bool_entry_from_node(node, "insecure-skip-verify").unwrap_or(false);
 
     let client_cert = find_string_entry_from_node(node, "client-cert").map(PathBuf::from);
 
@@ -750,10 +749,7 @@ mod tests {
 
         assert_eq!(tls.sni, Some("backend.example.com".to_string()));
         assert!(!tls.insecure_skip_verify);
-        assert_eq!(
-            tls.client_cert,
-            Some(PathBuf::from("/path/to/client.crt"))
-        );
+        assert_eq!(tls.client_cert, Some(PathBuf::from("/path/to/client.crt")));
         assert_eq!(tls.client_key, Some(PathBuf::from("/path/to/client.key")));
         assert_eq!(tls.ca_cert, Some(PathBuf::from("/path/to/ca.crt")));
     }
@@ -844,10 +840,7 @@ mod tests {
         let tls = upstream.tls.as_ref().unwrap();
 
         assert_eq!(tls.client_cert, Some(PathBuf::from("/certs/client.pem")));
-        assert_eq!(
-            tls.client_key,
-            Some(PathBuf::from("/certs/client-key.pem"))
-        );
+        assert_eq!(tls.client_key, Some(PathBuf::from("/certs/client-key.pem")));
         assert!(tls.sni.is_none());
         assert!(tls.ca_cert.is_none());
     }

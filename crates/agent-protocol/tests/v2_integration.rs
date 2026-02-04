@@ -7,7 +7,7 @@
 //! - Capability negotiation
 //! - Streaming protocol types
 
-use bytes::{Bytes, BufMut};
+use bytes::{BufMut, Bytes};
 use sentinel_agent_protocol::binary::{
     BinaryAgentResponse, BinaryBodyChunk, BinaryFrame, BinaryRequestHeaders, MessageType,
 };
@@ -29,7 +29,10 @@ fn test_binary_request_headers_roundtrip() {
     // Create a request headers message
     let mut headers = HashMap::new();
     headers.insert("host".to_string(), vec!["example.com".to_string()]);
-    headers.insert("content-type".to_string(), vec!["application/json".to_string()]);
+    headers.insert(
+        "content-type".to_string(),
+        vec!["application/json".to_string()],
+    );
 
     let request = BinaryRequestHeaders {
         correlation_id: "corr-12345".to_string(),
@@ -136,7 +139,11 @@ fn test_binary_response_block_decision() {
     let decoded = BinaryAgentResponse::decode(encoded).unwrap();
 
     match decoded.decision {
-        Decision::Block { status, body, headers } => {
+        Decision::Block {
+            status,
+            body,
+            headers,
+        } => {
             assert_eq!(status, 403);
             assert_eq!(body, Some("Access Denied".to_string()));
             assert!(headers.is_some());
@@ -192,8 +199,16 @@ fn test_buffer_pool_with_binary_protocol() {
 
     let stats = pool_stats();
     // Most buffers should be reused after first allocation
-    assert!(stats.reused > 50, "Expected high reuse rate, got: {:?}", stats);
-    assert!(stats.hit_rate() > 0.5, "Expected hit rate > 0.5, got: {}", stats.hit_rate());
+    assert!(
+        stats.reused > 50,
+        "Expected high reuse rate, got: {:?}",
+        stats
+    );
+    assert!(
+        stats.hit_rate() > 0.5,
+        "Expected hit rate > 0.5, got: {}",
+        stats.hit_rate()
+    );
 }
 
 #[test]
@@ -231,8 +246,14 @@ fn test_buffer_pool_efficiency() {
 #[test]
 fn test_headers_cow_no_allocation_on_read() {
     let mut original = HashMap::new();
-    original.insert("content-type".to_string(), vec!["application/json".to_string()]);
-    original.insert("accept".to_string(), vec!["text/html".to_string(), "application/xml".to_string()]);
+    original.insert(
+        "content-type".to_string(),
+        vec!["application/json".to_string()],
+    );
+    original.insert(
+        "accept".to_string(),
+        vec!["text/html".to_string(), "application/xml".to_string()],
+    );
 
     // Borrowed headers - no allocation
     let cow = HeadersCow::borrowed(&original);
@@ -274,12 +295,18 @@ fn test_headers_cow_allocation_on_write() {
 #[test]
 fn test_headers_iterator_efficiency() {
     let mut headers = HashMap::new();
-    headers.insert("accept".to_string(), vec![
-        "text/html".to_string(),
-        "application/json".to_string(),
-        "application/xml".to_string(),
-    ]);
-    headers.insert("accept-encoding".to_string(), vec!["gzip".to_string(), "deflate".to_string()]);
+    headers.insert(
+        "accept".to_string(),
+        vec![
+            "text/html".to_string(),
+            "application/json".to_string(),
+            "application/xml".to_string(),
+        ],
+    );
+    headers.insert(
+        "accept-encoding".to_string(),
+        vec!["gzip".to_string(), "deflate".to_string()],
+    );
 
     let iter = HeaderIterator::new(&headers);
     let pairs: Vec<_> = iter.collect();
@@ -298,8 +325,14 @@ fn test_headers_iterator_efficiency() {
 fn test_headers_ref_operations() {
     let mut raw_headers = HashMap::new();
     raw_headers.insert("host".to_string(), vec!["api.example.com".to_string()]);
-    raw_headers.insert("content-type".to_string(), vec!["application/json".to_string()]);
-    raw_headers.insert("authorization".to_string(), vec!["Bearer token123".to_string()]);
+    raw_headers.insert(
+        "content-type".to_string(),
+        vec!["application/json".to_string()],
+    );
+    raw_headers.insert(
+        "authorization".to_string(),
+        vec!["Bearer token123".to_string()],
+    );
 
     let headers = HeadersRef::new(&raw_headers);
 
@@ -350,7 +383,7 @@ fn test_full_capability_handshake() {
         limits: AgentLimits {
             max_body_size: 10 * 1024 * 1024, // 10MB
             max_concurrency: 100,
-            preferred_chunk_size: 64 * 1024, // 64KB
+            preferred_chunk_size: 64 * 1024,     // 64KB
             max_memory: Some(512 * 1024 * 1024), // 512MB
             max_processing_time_ms: Some(5000),
         },
@@ -386,14 +419,13 @@ fn test_health_status_transitions() {
     assert!(matches!(healthy.state, HealthState::Healthy));
 
     // Degraded state
-    let degraded = HealthStatus::degraded(
-        "test-agent",
-        vec!["body_inspection".to_string()],
-        1.5,
-    );
+    let degraded = HealthStatus::degraded("test-agent", vec!["body_inspection".to_string()], 1.5);
 
     match &degraded.state {
-        HealthState::Degraded { disabled_features, timeout_multiplier } => {
+        HealthState::Degraded {
+            disabled_features,
+            timeout_multiplier,
+        } => {
             assert_eq!(disabled_features.len(), 1);
             assert_eq!(*timeout_multiplier, 1.5);
         }
@@ -404,7 +436,10 @@ fn test_health_status_transitions() {
     let unhealthy = HealthStatus::unhealthy("test-agent", "Database connection failed", true);
 
     match &unhealthy.state {
-        HealthState::Unhealthy { reason, recoverable } => {
+        HealthState::Unhealthy {
+            reason,
+            recoverable,
+        } => {
             assert!(reason.contains("Database"));
             assert!(*recoverable);
         }
@@ -458,8 +493,14 @@ fn test_request_processing_flow() {
     // 1. Build request headers with zero-copy
     let mut raw_headers = HashMap::new();
     raw_headers.insert("host".to_string(), vec!["api.example.com".to_string()]);
-    raw_headers.insert("content-type".to_string(), vec!["application/json".to_string()]);
-    raw_headers.insert("authorization".to_string(), vec!["Bearer token123".to_string()]);
+    raw_headers.insert(
+        "content-type".to_string(),
+        vec!["application/json".to_string()],
+    );
+    raw_headers.insert(
+        "authorization".to_string(),
+        vec!["Bearer token123".to_string()],
+    );
 
     let headers = HeadersRef::new(&raw_headers);
     assert_eq!(headers.get_first("host"), Some("api.example.com"));
@@ -515,7 +556,7 @@ fn test_streaming_body_flow() {
 
     // Simulate streaming body processing with multiple chunks
     let total_size = 256 * 1024; // 256KB body
-    let chunk_size = 64 * 1024;  // 64KB chunks
+    let chunk_size = 64 * 1024; // 64KB chunks
     let chunks = total_size / chunk_size;
 
     for chunk_idx in 0..chunks {
@@ -554,7 +595,10 @@ fn test_combined_binary_and_headers() {
     // Source headers (would come from HTTP parsing)
     let mut source_headers = HashMap::new();
     source_headers.insert("host".to_string(), vec!["test.example.com".to_string()]);
-    source_headers.insert("x-custom".to_string(), vec!["value1".to_string(), "value2".to_string()]);
+    source_headers.insert(
+        "x-custom".to_string(),
+        vec!["value1".to_string(), "value2".to_string()],
+    );
 
     // Use HeadersCow for read operations (no allocation)
     let cow = HeadersCow::borrowed(&source_headers);

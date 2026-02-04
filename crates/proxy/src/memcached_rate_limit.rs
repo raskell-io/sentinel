@@ -268,9 +268,7 @@ pub async fn create_memcached_rate_limiter(
     _backend_config: &MemcachedBackendConfig,
     _rate_config: &RateLimitConfig,
 ) -> Option<MemcachedRateLimiter> {
-    warn!(
-        "Memcached rate limiting requested but feature is disabled. Using local rate limiting."
-    );
+    warn!("Memcached rate limiting requested but feature is disabled. Using local rate limiting.");
     None
 }
 

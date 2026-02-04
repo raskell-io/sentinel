@@ -260,7 +260,10 @@ impl LoadBalancer for StickySessionBalancer {
                         metadata: {
                             let mut meta = HashMap::new();
                             meta.insert("sticky_session_hit".to_string(), "true".to_string());
-                            meta.insert("sticky_target_index".to_string(), target_index.to_string());
+                            meta.insert(
+                                "sticky_target_index".to_string(),
+                                target_index.to_string(),
+                            );
                             meta.insert("algorithm".to_string(), "sticky_session".to_string());
                             meta
                         },

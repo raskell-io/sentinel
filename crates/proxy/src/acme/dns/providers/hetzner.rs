@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, trace};
 
 use crate::acme::dns::provider::{
-    challenge_record_fqdn, normalize_domain, DnsProvider, DnsProviderError, DnsResult, CHALLENGE_TTL,
+    challenge_record_fqdn, normalize_domain, DnsProvider, DnsProviderError, DnsResult,
+    CHALLENGE_TTL,
 };
 
 /// Hetzner DNS API base URL
@@ -37,10 +38,9 @@ impl HetznerProvider {
     /// * `token` - Hetzner DNS API token
     /// * `timeout` - Request timeout
     pub fn new(token: &str, timeout: Duration) -> DnsResult<Self> {
-        let client = Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| DnsProviderError::Configuration(format!("Failed to create HTTP client: {}", e)))?;
+        let client = Client::builder().timeout(timeout).build().map_err(|e| {
+            DnsProviderError::Configuration(format!("Failed to create HTTP client: {}", e))
+        })?;
 
         Ok(Self {
             client,
@@ -233,12 +233,14 @@ impl DnsProvider for HetznerProvider {
             });
         }
 
-        let record_response: RecordResponse = response.json().await.map_err(|e| {
-            DnsProviderError::RecordCreation {
-                record_name: relative_name.clone(),
-                message: format!("Failed to parse response: {}", e),
-            }
-        })?;
+        let record_response: RecordResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| DnsProviderError::RecordCreation {
+                    record_name: relative_name.clone(),
+                    message: format!("Failed to parse response: {}", e),
+                })?;
 
         debug!(
             record_id = %record_response.record.id,

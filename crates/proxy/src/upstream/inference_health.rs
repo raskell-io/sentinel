@@ -243,9 +243,9 @@ impl InferenceHealthCheck {
 
         for expected in &self.expected_models {
             // Check for exact match or prefix match (for versioned models)
-            let found = available_models.iter().any(|m| {
-                m == expected || m.starts_with(expected) || expected.starts_with(m)
-            });
+            let found = available_models
+                .iter()
+                .any(|m| m == expected || m.starts_with(expected) || expected.starts_with(m));
 
             if !found {
                 missing.push(expected.as_str());
@@ -388,16 +388,10 @@ mod tests {
 
     #[test]
     fn test_parse_status_code() {
-        let check = InferenceHealthCheck::new(
-            "/v1/models".to_string(),
-            vec![],
-            Duration::from_secs(5),
-        );
+        let check =
+            InferenceHealthCheck::new("/v1/models".to_string(), vec![], Duration::from_secs(5));
 
-        assert_eq!(
-            check.parse_status_code("HTTP/1.1 200 OK\r\n"),
-            Ok(200)
-        );
+        assert_eq!(check.parse_status_code("HTTP/1.1 200 OK\r\n"), Ok(200));
         assert_eq!(
             check.parse_status_code("HTTP/1.1 404 Not Found\r\n"),
             Ok(404)
@@ -406,11 +400,8 @@ mod tests {
 
     #[test]
     fn test_extract_body() {
-        let check = InferenceHealthCheck::new(
-            "/v1/models".to_string(),
-            vec![],
-            Duration::from_secs(5),
-        );
+        let check =
+            InferenceHealthCheck::new("/v1/models".to_string(), vec![], Duration::from_secs(5));
 
         let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"data\":[]}";
         let body = check.extract_body(response).unwrap();

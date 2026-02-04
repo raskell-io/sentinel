@@ -253,7 +253,9 @@ impl V2Transport {
         match self {
             V2Transport::Grpc(client) => client.send_request_headers(correlation_id, event).await,
             V2Transport::Uds(client) => client.send_request_headers(correlation_id, event).await,
-            V2Transport::Reverse(client) => client.send_request_headers(correlation_id, event).await,
+            V2Transport::Reverse(client) => {
+                client.send_request_headers(correlation_id, event).await
+            }
         }
     }
 
@@ -264,9 +266,13 @@ impl V2Transport {
         event: &RequestBodyChunkEvent,
     ) -> Result<AgentResponse, AgentProtocolError> {
         match self {
-            V2Transport::Grpc(client) => client.send_request_body_chunk(correlation_id, event).await,
+            V2Transport::Grpc(client) => {
+                client.send_request_body_chunk(correlation_id, event).await
+            }
             V2Transport::Uds(client) => client.send_request_body_chunk(correlation_id, event).await,
-            V2Transport::Reverse(client) => client.send_request_body_chunk(correlation_id, event).await,
+            V2Transport::Reverse(client) => {
+                client.send_request_body_chunk(correlation_id, event).await
+            }
         }
     }
 
@@ -279,7 +285,9 @@ impl V2Transport {
         match self {
             V2Transport::Grpc(client) => client.send_response_headers(correlation_id, event).await,
             V2Transport::Uds(client) => client.send_response_headers(correlation_id, event).await,
-            V2Transport::Reverse(client) => client.send_response_headers(correlation_id, event).await,
+            V2Transport::Reverse(client) => {
+                client.send_response_headers(correlation_id, event).await
+            }
         }
     }
 
@@ -290,9 +298,15 @@ impl V2Transport {
         event: &ResponseBodyChunkEvent,
     ) -> Result<AgentResponse, AgentProtocolError> {
         match self {
-            V2Transport::Grpc(client) => client.send_response_body_chunk(correlation_id, event).await,
-            V2Transport::Uds(client) => client.send_response_body_chunk(correlation_id, event).await,
-            V2Transport::Reverse(client) => client.send_response_body_chunk(correlation_id, event).await,
+            V2Transport::Grpc(client) => {
+                client.send_response_body_chunk(correlation_id, event).await
+            }
+            V2Transport::Uds(client) => {
+                client.send_response_body_chunk(correlation_id, event).await
+            }
+            V2Transport::Reverse(client) => {
+                client.send_response_body_chunk(correlation_id, event).await
+            }
         }
     }
 
@@ -483,7 +497,8 @@ impl AgentEntry {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        self.last_reconnect_attempt_ms.store(now_ms, Ordering::Relaxed);
+        self.last_reconnect_attempt_ms
+            .store(now_ms, Ordering::Relaxed);
     }
 }
 
@@ -722,7 +737,9 @@ impl AgentPool {
 
     /// Get the agent ID bound to a sticky session.
     pub fn sticky_session_agent(&self, session_id: &str) -> Option<String> {
-        self.sticky_sessions.get(session_id).map(|s| s.agent_id.clone())
+        self.sticky_sessions
+            .get(session_id)
+            .map(|s| s.agent_id.clone())
     }
 
     /// Send a request using a sticky session.
@@ -747,11 +764,12 @@ impl AgentPool {
         self.protocol_metrics.inc_in_flight();
 
         // Try sticky session first
-        let (conn, used_sticky) = if let Some(sticky_conn) = self.get_sticky_session_conn(session_id) {
-            (sticky_conn, true)
-        } else {
-            (self.select_connection(agent_id)?, false)
-        };
+        let (conn, used_sticky) =
+            if let Some(sticky_conn) = self.get_sticky_session_conn(session_id) {
+                (sticky_conn, true)
+            } else {
+                (self.select_connection(agent_id)?, false)
+            };
 
         // Check flow control
         match self.check_flow_control(&conn, agent_id).await {
@@ -767,28 +785,29 @@ impl AgentPool {
         }
 
         // Acquire concurrency permit
-        let _permit = conn
-            .concurrency_limiter
-            .acquire()
-            .await
-            .map_err(|_| {
-                self.protocol_metrics.dec_in_flight();
-                self.protocol_metrics.inc_connection_errors();
-                AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
-            })?;
+        let _permit = conn.concurrency_limiter.acquire().await.map_err(|_| {
+            self.protocol_metrics.dec_in_flight();
+            self.protocol_metrics.inc_connection_errors();
+            AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
+        })?;
 
         conn.in_flight.fetch_add(1, Ordering::Relaxed);
         conn.touch();
 
         // Store correlation affinity
-        self.correlation_affinity.insert(correlation_id.to_string(), Arc::clone(&conn));
+        self.correlation_affinity
+            .insert(correlation_id.to_string(), Arc::clone(&conn));
 
-        let result = conn.client.send_request_headers(correlation_id, event).await;
+        let result = conn
+            .client
+            .send_request_headers(correlation_id, event)
+            .await;
 
         conn.in_flight.fetch_sub(1, Ordering::Relaxed);
         conn.request_count.fetch_add(1, Ordering::Relaxed);
         self.protocol_metrics.dec_in_flight();
-        self.protocol_metrics.record_request_duration(start.elapsed());
+        self.protocol_metrics
+            .record_request_duration(start.elapsed());
 
         match &result {
             Ok(_) => {
@@ -802,7 +821,8 @@ impl AgentPool {
 
                 match e {
                     AgentProtocolError::Timeout(_) => self.protocol_metrics.inc_timeouts(),
-                    AgentProtocolError::ConnectionFailed(_) | AgentProtocolError::ConnectionClosed => {
+                    AgentProtocolError::ConnectionFailed(_)
+                    | AgentProtocolError::ConnectionClosed => {
                         self.protocol_metrics.inc_connection_errors();
                     }
                     AgentProtocolError::Serialization(_) => {
@@ -860,7 +880,11 @@ impl AgentPool {
     /// Push a configuration update to a specific agent.
     ///
     /// Returns the push ID if the agent supports config push, None otherwise.
-    pub fn push_config_to_agent(&self, agent_id: &str, update_type: ConfigUpdateType) -> Option<String> {
+    pub fn push_config_to_agent(
+        &self,
+        agent_id: &str,
+        update_type: ConfigUpdateType,
+    ) -> Option<String> {
         self.config_pusher.push_to_agent(agent_id, update_type)
     }
 
@@ -928,11 +952,8 @@ impl AgentPool {
                 // Register with ConfigPusher based on capabilities
                 let supports_config_push = caps.features.config_push;
                 let agent_name = caps.name.clone();
-                self.config_pusher.register_agent(
-                    &agent_id,
-                    &agent_name,
-                    supports_config_push,
-                );
+                self.config_pusher
+                    .register_agent(&agent_id, &agent_name, supports_config_push);
                 debug!(
                     agent_id = %agent_id,
                     supports_config_push = supports_config_push,
@@ -964,10 +985,9 @@ impl AgentPool {
         // Unregister from ConfigPusher
         self.config_pusher.unregister_agent(agent_id);
 
-        let (_, entry) = self
-            .agents
-            .remove(agent_id)
-            .ok_or_else(|| AgentProtocolError::InvalidMessage(format!("Agent {} not found", agent_id)))?;
+        let (_, entry) = self.agents.remove(agent_id).ok_or_else(|| {
+            AgentProtocolError::InvalidMessage(format!("Agent {} not found", agent_id))
+        })?;
 
         // Close all connections
         let connections = entry.connections.read().await;
@@ -1037,11 +1057,8 @@ impl AgentPool {
             // Register with ConfigPusher
             let supports_config_push = capabilities.features.config_push;
             let agent_name = capabilities.name.clone();
-            self.config_pusher.register_agent(
-                agent_id,
-                &agent_name,
-                supports_config_push,
-            );
+            self.config_pusher
+                .register_agent(agent_id, &agent_name, supports_config_push);
             debug!(
                 agent_id = %agent_id,
                 supports_config_push = supports_config_push,
@@ -1145,28 +1162,29 @@ impl AgentPool {
         }
 
         // Acquire concurrency permit
-        let _permit = conn
-            .concurrency_limiter
-            .acquire()
-            .await
-            .map_err(|_| {
-                self.protocol_metrics.dec_in_flight();
-                self.protocol_metrics.inc_connection_errors();
-                AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
-            })?;
+        let _permit = conn.concurrency_limiter.acquire().await.map_err(|_| {
+            self.protocol_metrics.dec_in_flight();
+            self.protocol_metrics.inc_connection_errors();
+            AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
+        })?;
 
         conn.in_flight.fetch_add(1, Ordering::Relaxed);
         conn.touch(); // Atomic, no lock
 
         // Store connection affinity for body chunk routing
-        self.correlation_affinity.insert(correlation_id.to_string(), Arc::clone(&conn));
+        self.correlation_affinity
+            .insert(correlation_id.to_string(), Arc::clone(&conn));
 
-        let result = conn.client.send_request_headers(correlation_id, event).await;
+        let result = conn
+            .client
+            .send_request_headers(correlation_id, event)
+            .await;
 
         conn.in_flight.fetch_sub(1, Ordering::Relaxed);
         conn.request_count.fetch_add(1, Ordering::Relaxed);
         self.protocol_metrics.dec_in_flight();
-        self.protocol_metrics.record_request_duration(start.elapsed());
+        self.protocol_metrics
+            .record_request_duration(start.elapsed());
 
         match &result {
             Ok(_) => {
@@ -1181,7 +1199,8 @@ impl AgentPool {
                 // Record error type
                 match e {
                     AgentProtocolError::Timeout(_) => self.protocol_metrics.inc_timeouts(),
-                    AgentProtocolError::ConnectionFailed(_) | AgentProtocolError::ConnectionClosed => {
+                    AgentProtocolError::ConnectionFailed(_)
+                    | AgentProtocolError::ConnectionClosed => {
                         self.protocol_metrics.inc_connection_errors();
                     }
                     AgentProtocolError::Serialization(_) => {
@@ -1232,16 +1251,17 @@ impl AgentPool {
             Err(e) => return Err(e),
         }
 
-        let _permit = conn
-            .concurrency_limiter
-            .acquire()
-            .await
-            .map_err(|_| AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string()))?;
+        let _permit = conn.concurrency_limiter.acquire().await.map_err(|_| {
+            AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
+        })?;
 
         conn.in_flight.fetch_add(1, Ordering::Relaxed);
         conn.touch();
 
-        let result = conn.client.send_request_body_chunk(correlation_id, event).await;
+        let result = conn
+            .client
+            .send_request_body_chunk(correlation_id, event)
+            .await;
 
         conn.in_flight.fetch_sub(1, Ordering::Relaxed);
         conn.request_count.fetch_add(1, Ordering::Relaxed);
@@ -1277,16 +1297,17 @@ impl AgentPool {
 
         let conn = self.select_connection(agent_id)?;
 
-        let _permit = conn
-            .concurrency_limiter
-            .acquire()
-            .await
-            .map_err(|_| AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string()))?;
+        let _permit = conn.concurrency_limiter.acquire().await.map_err(|_| {
+            AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
+        })?;
 
         conn.in_flight.fetch_add(1, Ordering::Relaxed);
         conn.touch();
 
-        let result = conn.client.send_response_headers(correlation_id, event).await;
+        let result = conn
+            .client
+            .send_response_headers(correlation_id, event)
+            .await;
 
         conn.in_flight.fetch_sub(1, Ordering::Relaxed);
         conn.request_count.fetch_add(1, Ordering::Relaxed);
@@ -1332,16 +1353,17 @@ impl AgentPool {
             Err(e) => return Err(e),
         }
 
-        let _permit = conn
-            .concurrency_limiter
-            .acquire()
-            .await
-            .map_err(|_| AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string()))?;
+        let _permit = conn.concurrency_limiter.acquire().await.map_err(|_| {
+            AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
+        })?;
 
         conn.in_flight.fetch_add(1, Ordering::Relaxed);
         conn.touch();
 
-        let result = conn.client.send_response_body_chunk(correlation_id, event).await;
+        let result = conn
+            .client
+            .send_response_body_chunk(correlation_id, event)
+            .await;
 
         conn.in_flight.fetch_sub(1, Ordering::Relaxed);
         conn.request_count.fetch_add(1, Ordering::Relaxed);
@@ -1370,10 +1392,9 @@ impl AgentPool {
         correlation_id: &str,
         reason: CancelReason,
     ) -> Result<(), AgentProtocolError> {
-        let entry = self
-            .agents
-            .get(agent_id)
-            .ok_or_else(|| AgentProtocolError::InvalidMessage(format!("Agent {} not found", agent_id)))?;
+        let entry = self.agents.get(agent_id).ok_or_else(|| {
+            AgentProtocolError::InvalidMessage(format!("Agent {} not found", agent_id))
+        })?;
 
         let connections = entry.connections.read().await;
         for conn in connections.iter() {
@@ -1565,12 +1586,13 @@ impl AgentPool {
 
                 // Try to reconnect failed connections
                 if healthy_count < self.config.connections_per_agent
-                    && entry.should_reconnect(self.config.reconnect_interval) {
-                        drop(connections); // Release read lock before reconnect
-                        if let Err(e) = self.reconnect_agent(&agent_id, &entry).await {
-                            trace!(agent_id = %agent_id, error = %e, "Reconnect failed");
-                        }
+                    && entry.should_reconnect(self.config.reconnect_interval)
+                {
+                    drop(connections); // Release read lock before reconnect
+                    if let Err(e) = self.reconnect_agent(&agent_id, &entry).await {
+                        trace!(agent_id = %agent_id, error = %e, "Reconnect failed");
                     }
+                }
             }
         }
     }
@@ -1587,9 +1609,7 @@ impl AgentPool {
         // Detect transport type from endpoint
         let transport = if is_uds_endpoint(endpoint) {
             // Unix Domain Socket transport
-            let socket_path = endpoint
-                .strip_prefix("unix:")
-                .unwrap_or(endpoint);
+            let socket_path = endpoint.strip_prefix("unix:").unwrap_or(endpoint);
 
             let mut client =
                 AgentClientV2Uds::new(agent_id, socket_path, self.config.request_timeout).await?;
@@ -1636,10 +1656,9 @@ impl AgentPool {
         &self,
         agent_id: &str,
     ) -> Result<Arc<PooledConnection>, AgentProtocolError> {
-        let entry = self
-            .agents
-            .get(agent_id)
-            .ok_or_else(|| AgentProtocolError::InvalidMessage(format!("Agent {} not found", agent_id)))?;
+        let entry = self.agents.get(agent_id).ok_or_else(|| {
+            AgentProtocolError::InvalidMessage(format!("Agent {} not found", agent_id))
+        })?;
 
         // Try non-blocking read first; fall back to blocking if contended
         let connections_guard = match entry.connections.try_read() {
@@ -1677,13 +1696,11 @@ impl AgentPool {
                 let idx = entry.round_robin_index.fetch_add(1, Ordering::Relaxed);
                 healthy[idx % healthy.len()].clone()
             }
-            LoadBalanceStrategy::LeastConnections => {
-                healthy
-                    .iter()
-                    .min_by_key(|c| c.in_flight())
-                    .cloned()
-                    .unwrap()
-            }
+            LoadBalanceStrategy::LeastConnections => healthy
+                .iter()
+                .min_by_key(|c| c.in_flight())
+                .cloned()
+                .unwrap(),
             LoadBalanceStrategy::HealthBased => {
                 // Prefer connections with lower error rates
                 healthy
@@ -1752,7 +1769,10 @@ impl std::fmt::Debug for AgentPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentPool")
             .field("config", &self.config)
-            .field("total_requests", &self.total_requests.load(Ordering::Relaxed))
+            .field(
+                "total_requests",
+                &self.total_requests.load(Ordering::Relaxed),
+            )
             .field("total_errors", &self.total_errors.load(Ordering::Relaxed))
             .finish()
     }
@@ -1765,9 +1785,7 @@ impl std::fmt::Debug for AgentPool {
 /// - Are absolute paths (start with "/")
 /// - Have ".sock" extension
 fn is_uds_endpoint(endpoint: &str) -> bool {
-    endpoint.starts_with("unix:")
-        || endpoint.starts_with('/')
-        || endpoint.ends_with(".sock")
+    endpoint.starts_with("unix:") || endpoint.starts_with('/') || endpoint.ends_with(".sock")
 }
 
 #[cfg(test)]
@@ -1778,12 +1796,18 @@ mod tests {
     fn test_pool_config_default() {
         let config = AgentPoolConfig::default();
         assert_eq!(config.connections_per_agent, 4);
-        assert_eq!(config.load_balance_strategy, LoadBalanceStrategy::RoundRobin);
+        assert_eq!(
+            config.load_balance_strategy,
+            LoadBalanceStrategy::RoundRobin
+        );
     }
 
     #[test]
     fn test_load_balance_strategy() {
-        assert_eq!(LoadBalanceStrategy::default(), LoadBalanceStrategy::RoundRobin);
+        assert_eq!(
+            LoadBalanceStrategy::default(),
+            LoadBalanceStrategy::RoundRobin
+        );
     }
 
     #[test]

@@ -13,7 +13,10 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
 use super::propagation::{PropagationChecker, PropagationConfig};
-use super::provider::{challenge_record_fqdn, normalize_domain, DnsProvider, DnsProviderError, DnsResult, ACME_CHALLENGE_RECORD};
+use super::provider::{
+    challenge_record_fqdn, normalize_domain, DnsProvider, DnsProviderError, DnsResult,
+    ACME_CHALLENGE_RECORD,
+};
 
 /// Information about a pending DNS-01 challenge
 #[derive(Debug, Clone)]
@@ -137,7 +140,11 @@ impl Dns01ChallengeManager {
             "Cleaning up DNS-01 challenge record"
         );
 
-        match self.provider.delete_txt_record(normalized_domain, record_id).await {
+        match self
+            .provider
+            .delete_txt_record(normalized_domain, record_id)
+            .await
+        {
             Ok(()) => {
                 info!(domain = %challenge.domain, "DNS-01 challenge record cleaned up");
                 Ok(())

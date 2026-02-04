@@ -741,7 +741,11 @@ fn validate_namespaces(config: &Config, ctx: &ValidationContext, errors: &mut Ve
     }
 }
 
-fn validate_namespace_resources(ns: &NamespaceConfig, ctx: &ValidationContext, errors: &mut Vec<String>) {
+fn validate_namespace_resources(
+    ns: &NamespaceConfig,
+    ctx: &ValidationContext,
+    errors: &mut Vec<String>,
+) {
     let scope = Scope::Namespace(ns.id.clone());
 
     // Validate namespace routes reference valid upstreams/filters
@@ -920,7 +924,7 @@ mod tests {
     use super::*;
     use crate::namespace::{ExportConfig, NamespaceConfig, ServiceConfig};
     use crate::{
-        ConnectionPoolConfig, HttpVersionConfig, MatchCondition, RoutePolicies, RouteConfig,
+        ConnectionPoolConfig, HttpVersionConfig, MatchCondition, RouteConfig, RoutePolicies,
         UpstreamConfig, UpstreamTarget, UpstreamTimeouts,
     };
     use sentinel_common::types::LoadBalancingAlgorithm;
@@ -1001,8 +1005,10 @@ mod tests {
 
         // Add a namespace with exported upstream
         let mut ns = NamespaceConfig::new("shared");
-        ns.upstreams
-            .insert("shared-backend".to_string(), test_upstream("shared-backend"));
+        ns.upstreams.insert(
+            "shared-backend".to_string(),
+            test_upstream("shared-backend"),
+        );
         ns.exports = ExportConfig {
             upstreams: vec!["shared-backend".to_string()],
             agents: vec![],

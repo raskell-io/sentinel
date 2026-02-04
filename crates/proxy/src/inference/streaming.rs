@@ -431,9 +431,8 @@ pub struct StreamingTokenResult {
 
 /// Check if a response appears to be SSE based on content type.
 pub fn is_sse_response(content_type: Option<&str>) -> bool {
-    content_type.is_some_and(|ct| {
-        ct.contains("text/event-stream") || ct.contains("application/x-ndjson")
-    })
+    content_type
+        .is_some_and(|ct| ct.contains("text/event-stream") || ct.contains("application/x-ndjson"))
 }
 
 // ============================================================================
@@ -446,7 +445,8 @@ mod tests {
 
     #[test]
     fn test_openai_streaming() {
-        let mut counter = StreamingTokenCounter::new(InferenceProvider::OpenAi, Some("gpt-4".to_string()));
+        let mut counter =
+            StreamingTokenCounter::new(InferenceProvider::OpenAi, Some("gpt-4".to_string()));
 
         // Simulate OpenAI SSE chunks
         let chunk1 = b"data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n";
@@ -484,8 +484,10 @@ mod tests {
 
     #[test]
     fn test_anthropic_streaming() {
-        let mut counter =
-            StreamingTokenCounter::new(InferenceProvider::Anthropic, Some("claude-3-opus".to_string()));
+        let mut counter = StreamingTokenCounter::new(
+            InferenceProvider::Anthropic,
+            Some("claude-3-opus".to_string()),
+        );
 
         // Simulate Anthropic SSE chunks
         let chunk1 = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":25}}}\n\n";
@@ -514,7 +516,8 @@ mod tests {
 
     #[test]
     fn test_tiktoken_fallback() {
-        let mut counter = StreamingTokenCounter::new(InferenceProvider::OpenAi, Some("gpt-4".to_string()));
+        let mut counter =
+            StreamingTokenCounter::new(InferenceProvider::OpenAi, Some("gpt-4".to_string()));
 
         // Chunks without usage info
         let chunk1 = b"data: {\"choices\":[{\"delta\":{\"content\":\"Hello world\"}}]}\n\n";
@@ -531,7 +534,8 @@ mod tests {
 
     #[test]
     fn test_split_chunks() {
-        let mut counter = StreamingTokenCounter::new(InferenceProvider::OpenAi, Some("gpt-4".to_string()));
+        let mut counter =
+            StreamingTokenCounter::new(InferenceProvider::OpenAi, Some("gpt-4".to_string()));
 
         // Data split across chunk boundaries
         let chunk1 = b"data: {\"choices\":[{\"delta\":{\"content\":\"He";

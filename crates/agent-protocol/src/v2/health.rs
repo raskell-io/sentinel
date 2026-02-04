@@ -30,7 +30,10 @@ impl HealthStatus {
     pub fn degraded(agent_id: impl Into<String>, disabled: Vec<String>, multiplier: f32) -> Self {
         Self {
             agent_id: agent_id.into(),
-            state: HealthState::Degraded { disabled_features: disabled, timeout_multiplier: multiplier },
+            state: HealthState::Degraded {
+                disabled_features: disabled,
+                timeout_multiplier: multiplier,
+            },
             message: None,
             load: None,
             resources: None,
@@ -39,10 +42,17 @@ impl HealthStatus {
         }
     }
 
-    pub fn unhealthy(agent_id: impl Into<String>, reason: impl Into<String>, recoverable: bool) -> Self {
+    pub fn unhealthy(
+        agent_id: impl Into<String>,
+        reason: impl Into<String>,
+        recoverable: bool,
+    ) -> Self {
         Self {
             agent_id: agent_id.into(),
-            state: HealthState::Unhealthy { reason: reason.into(), recoverable },
+            state: HealthState::Unhealthy {
+                reason: reason.into(),
+                recoverable,
+            },
             message: None,
             load: None,
             resources: None,
@@ -61,9 +71,17 @@ impl HealthStatus {
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum HealthState {
     Healthy,
-    Degraded { disabled_features: Vec<String>, timeout_multiplier: f32 },
-    Draining { eta_ms: Option<u64> },
-    Unhealthy { reason: String, recoverable: bool },
+    Degraded {
+        disabled_features: Vec<String>,
+        timeout_multiplier: f32,
+    },
+    Draining {
+        eta_ms: Option<u64>,
+    },
+    Unhealthy {
+        reason: String,
+        recoverable: bool,
+    },
 }
 
 /// Load metrics.

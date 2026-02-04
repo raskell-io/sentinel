@@ -15,12 +15,7 @@ pub async fn validate_upstreams(config: &Config) -> ValidationResult {
     for (name, upstream) in &config.upstreams {
         for target in &upstream.targets {
             // Try to connect to upstream with timeout
-            match timeout(
-                Duration::from_secs(5),
-                TcpStream::connect(&target.address),
-            )
-            .await
-            {
+            match timeout(Duration::from_secs(5), TcpStream::connect(&target.address)).await {
                 Ok(Ok(_)) => {
                     // Connection successful
                 }
@@ -49,7 +44,9 @@ pub async fn validate_upstreams(config: &Config) -> ValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ConnectionPoolConfig, HttpVersionConfig, UpstreamConfig, UpstreamTarget, UpstreamTimeouts};
+    use crate::{
+        ConnectionPoolConfig, HttpVersionConfig, UpstreamConfig, UpstreamTarget, UpstreamTimeouts,
+    };
     use std::collections::HashMap;
 
     #[tokio::test]

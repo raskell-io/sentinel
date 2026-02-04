@@ -6,8 +6,8 @@
 //! - Generic: `x-tokens-used` header, estimation fallback
 
 use http::HeaderMap;
-use serde_json::Value;
 use sentinel_config::{InferenceProvider, TokenEstimation};
+use serde_json::Value;
 use tracing::trace;
 
 use super::tiktoken::tiktoken_manager;
@@ -58,7 +58,10 @@ impl InferenceProviderAdapter for OpenAiProvider {
         if let Some(value) = headers.get("x-ratelimit-used-tokens") {
             if let Ok(s) = value.to_str() {
                 if let Ok(n) = s.parse::<u64>() {
-                    trace!(tokens = n, "Got token count from OpenAI x-ratelimit-used-tokens");
+                    trace!(
+                        tokens = n,
+                        "Got token count from OpenAI x-ratelimit-used-tokens"
+                    );
                     return Some(n);
                 }
             }
@@ -77,7 +80,12 @@ impl InferenceProviderAdapter for OpenAiProvider {
 
         if let (Some(l), Some(r)) = (limit, remaining) {
             let used = l.saturating_sub(r);
-            trace!(limit = l, remaining = r, used = used, "Calculated token usage from OpenAI headers");
+            trace!(
+                limit = l,
+                remaining = r,
+                used = used,
+                "Calculated token usage from OpenAI headers"
+            );
             return Some(used);
         }
 
@@ -139,7 +147,12 @@ impl InferenceProviderAdapter for AnthropicProvider {
 
         if let (Some(l), Some(r)) = (limit, remaining) {
             let used = l.saturating_sub(r);
-            trace!(limit = l, remaining = r, used = used, "Calculated token usage from Anthropic headers");
+            trace!(
+                limit = l,
+                remaining = r,
+                used = used,
+                "Calculated token usage from Anthropic headers"
+            );
             return Some(used);
         }
 
@@ -156,7 +169,12 @@ impl InferenceProviderAdapter for AnthropicProvider {
         let output = usage.get("output_tokens")?.as_u64().unwrap_or(0);
         let total = input + output;
 
-        trace!(input = input, output = output, total = total, "Got token count from Anthropic response body");
+        trace!(
+            input = input,
+            output = output,
+            total = total,
+            "Got token count from Anthropic response body"
+        );
         Some(total)
     }
 
@@ -189,17 +207,17 @@ impl InferenceProviderAdapter for GenericProvider {
 
     fn tokens_from_headers(&self, headers: &HeaderMap) -> Option<u64> {
         // Generic provider looks for common headers
-        let candidates = [
-            "x-tokens-used",
-            "x-token-count",
-            "x-total-tokens",
-        ];
+        let candidates = ["x-tokens-used", "x-token-count", "x-total-tokens"];
 
         for header in candidates {
             if let Some(value) = headers.get(header) {
                 if let Ok(s) = value.to_str() {
                     if let Ok(n) = s.parse::<u64>() {
-                        trace!(header = header, tokens = n, "Got token count from generic header");
+                        trace!(
+                            header = header,
+                            tokens = n,
+                            "Got token count from generic header"
+                        );
                         return Some(n);
                     }
                 }
@@ -214,14 +232,24 @@ impl InferenceProviderAdapter for GenericProvider {
         let json: Value = serde_json::from_slice(body).ok()?;
 
         // Try usage.total_tokens (OpenAI style)
-        if let Some(total) = json.get("usage").and_then(|u| u.get("total_tokens")).and_then(|t| t.as_u64()) {
+        if let Some(total) = json
+            .get("usage")
+            .and_then(|u| u.get("total_tokens"))
+            .and_then(|t| t.as_u64())
+        {
             return Some(total);
         }
 
         // Try usage.input_tokens + output_tokens (Anthropic style)
         if let Some(usage) = json.get("usage") {
-            let input = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-            let output = usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+            let input = usage
+                .get("input_tokens")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0);
+            let output = usage
+                .get("output_tokens")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0);
             if input > 0 || output > 0 {
                 return Some(input + output);
             }
@@ -272,9 +300,7 @@ fn estimate_tokens_with_model(body: &[u8], method: TokenEstimation, model: Optio
             let word_count = text.split_whitespace().count();
             ((word_count as f64 * 1.3).ceil() as u64).max(1)
         }
-        TokenEstimation::Tiktoken => {
-            estimate_tokens_tiktoken(body, model)
-        }
+        TokenEstimation::Tiktoken => estimate_tokens_tiktoken(body, model),
     }
 }
 
@@ -307,7 +333,8 @@ mod tests {
 
     #[test]
     fn test_openai_body_parsing() {
-        let body = br#"{"usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}}"#;
+        let body =
+            br#"{"usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}}"#;
         let provider = OpenAiProvider;
         assert_eq!(provider.tokens_from_body(body), Some(150));
     }
@@ -332,7 +359,10 @@ mod tests {
         let body = br#"{"model": "gpt-4", "messages": []}"#;
         let provider = OpenAiProvider;
         let headers = HeaderMap::new();
-        assert_eq!(provider.extract_model(&headers, body), Some("gpt-4".to_string()));
+        assert_eq!(
+            provider.extract_model(&headers, body),
+            Some("gpt-4".to_string())
+        );
     }
 
     #[test]

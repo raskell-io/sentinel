@@ -22,7 +22,10 @@ pub enum DnsProviderError {
 
     /// Record creation failed
     #[error("Failed to create TXT record for '{record_name}': {message}")]
-    RecordCreation { record_name: String, message: String },
+    RecordCreation {
+        record_name: String,
+        message: String,
+    },
 
     /// Record deletion failed
     #[error("Failed to delete TXT record '{record_id}': {message}")]
@@ -143,9 +146,9 @@ pub fn challenge_record_fqdn(domain: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::Mutex;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use parking_lot::Mutex;
 
     #[test]
     fn test_normalize_domain() {
@@ -176,7 +179,9 @@ mod tests {
         let err = DnsProviderError::Authentication("bad token".to_string());
         assert!(err.to_string().contains("Authentication failed"));
 
-        let err = DnsProviderError::ZoneNotFound { domain: "test.com".to_string() };
+        let err = DnsProviderError::ZoneNotFound {
+            domain: "test.com".to_string(),
+        };
         assert!(err.to_string().contains("test.com"));
 
         let err = DnsProviderError::RecordCreation {
@@ -185,7 +190,9 @@ mod tests {
         };
         assert!(err.to_string().contains("_acme-challenge"));
 
-        let err = DnsProviderError::RateLimited { retry_after_secs: 60 };
+        let err = DnsProviderError::RateLimited {
+            retry_after_secs: 60,
+        };
         assert!(err.to_string().contains("60"));
 
         let err = DnsProviderError::Timeout { elapsed_secs: 30 };
@@ -229,7 +236,10 @@ mod tests {
         }
 
         pub fn get_record(&self, domain: &str, record_name: &str) -> Option<(String, String)> {
-            self.records.lock().get(&(domain.to_string(), record_name.to_string())).cloned()
+            self.records
+                .lock()
+                .get(&(domain.to_string(), record_name.to_string()))
+                .cloned()
         }
 
         pub fn record_count(&self) -> usize {
@@ -256,7 +266,10 @@ mod tests {
                 });
             }
 
-            let record_id = format!("record-{}", self.record_counter.fetch_add(1, Ordering::SeqCst));
+            let record_id = format!(
+                "record-{}",
+                self.record_counter.fetch_add(1, Ordering::SeqCst)
+            );
             self.records.lock().insert(
                 (domain.to_string(), record_name.to_string()),
                 (record_id.clone(), record_value.to_string()),
@@ -280,9 +293,10 @@ mod tests {
 
         async fn supports_domain(&self, domain: &str) -> DnsResult<bool> {
             let normalized = normalize_domain(domain);
-            Ok(self.supported_domains.iter().any(|d| {
-                normalized == *d || normalized.ends_with(&format!(".{}", d))
-            }))
+            Ok(self
+                .supported_domains
+                .iter()
+                .any(|d| normalized == *d || normalized.ends_with(&format!(".{}", d))))
         }
     }
 
@@ -334,25 +348,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_provider_failure_on_create() {
-        let provider = MockDnsProvider::new(vec!["example.com".to_string()])
-            .with_failure_on_create();
+        let provider =
+            MockDnsProvider::new(vec!["example.com".to_string()]).with_failure_on_create();
 
         let result = provider
             .create_txt_record("example.com", "_acme-challenge", "test-value")
             .await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DnsProviderError::RecordCreation { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            DnsProviderError::RecordCreation { .. }
+        ));
     }
 
     #[tokio::test]
     async fn test_mock_provider_failure_on_delete() {
-        let provider = MockDnsProvider::new(vec!["example.com".to_string()])
-            .with_failure_on_delete();
+        let provider =
+            MockDnsProvider::new(vec!["example.com".to_string()]).with_failure_on_delete();
 
         let result = provider.delete_txt_record("example.com", "record-1").await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DnsProviderError::RecordDeletion { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            DnsProviderError::RecordDeletion { .. }
+        ));
     }
 }

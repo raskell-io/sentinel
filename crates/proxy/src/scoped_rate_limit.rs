@@ -290,18 +290,36 @@ mod tests {
         // Check from namespace scope - should use namespace limit (5 rps)
         let ns_scope = Scope::Namespace("api".to_string());
         for _ in 0..5 {
-            let result = manager.check(&ns_scope, "route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+            let result = manager.check(
+                &ns_scope,
+                "route",
+                "127.0.0.1",
+                "/",
+                Option::<&NoHeaders>::None,
+            );
             assert!(result.allowed());
         }
 
         // 6th request should be limited
-        let result = manager.check(&ns_scope, "route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        let result = manager.check(
+            &ns_scope,
+            "route",
+            "127.0.0.1",
+            "/",
+            Option::<&NoHeaders>::None,
+        );
         assert!(!result.allowed());
         assert!(matches!(result.scope, Scope::Namespace(_)));
 
         // Different namespace should still have quota (uses global)
         let other_ns = Scope::Namespace("other".to_string());
-        let result = manager.check(&other_ns, "route", "127.0.0.2", "/", Option::<&NoHeaders>::None);
+        let result = manager.check(
+            &other_ns,
+            "route",
+            "127.0.0.2",
+            "/",
+            Option::<&NoHeaders>::None,
+        );
         assert!(result.allowed());
     }
 
@@ -319,12 +337,24 @@ mod tests {
         };
 
         for _ in 0..3 {
-            let result = manager.check(&svc_scope, "route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+            let result = manager.check(
+                &svc_scope,
+                "route",
+                "127.0.0.1",
+                "/",
+                Option::<&NoHeaders>::None,
+            );
             assert!(result.allowed());
         }
 
         // 4th request should be limited by global
-        let result = manager.check(&svc_scope, "route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        let result = manager.check(
+            &svc_scope,
+            "route",
+            "127.0.0.1",
+            "/",
+            Option::<&NoHeaders>::None,
+        );
         assert!(!result.allowed());
         assert_eq!(result.scope, Scope::Global);
     }
@@ -341,13 +371,31 @@ mod tests {
         manager.set_scope_limits(svc_scope.clone(), test_limits_with_rate_limit(2, 1));
 
         // Service should use its own limits
-        let result1 = manager.check(&svc_scope, "route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
-        let result2 = manager.check(&svc_scope, "route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        let result1 = manager.check(
+            &svc_scope,
+            "route",
+            "127.0.0.1",
+            "/",
+            Option::<&NoHeaders>::None,
+        );
+        let result2 = manager.check(
+            &svc_scope,
+            "route",
+            "127.0.0.1",
+            "/",
+            Option::<&NoHeaders>::None,
+        );
         assert!(result1.allowed());
         assert!(result2.allowed());
 
         // 3rd should be limited
-        let result3 = manager.check(&svc_scope, "route", "127.0.0.1", "/", Option::<&NoHeaders>::None);
+        let result3 = manager.check(
+            &svc_scope,
+            "route",
+            "127.0.0.1",
+            "/",
+            Option::<&NoHeaders>::None,
+        );
         assert!(!result3.allowed());
         assert!(matches!(result3.scope, Scope::Service { .. }));
     }

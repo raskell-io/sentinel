@@ -5,18 +5,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use futures::future::join_all;
 use pingora_timeout::timeout;
 use sentinel_agent_protocol::{
-    v2::MetricsCollector,
-    AgentResponse, EventType, RequestBodyChunkEvent, RequestHeadersEvent, ResponseBodyChunkEvent,
-    ResponseHeadersEvent, WebSocketFrameEvent,
+    v2::MetricsCollector, AgentResponse, EventType, RequestBodyChunkEvent, RequestHeadersEvent,
+    ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketFrameEvent,
 };
 use sentinel_common::{
     errors::{SentinelError, SentinelResult},
     types::CircuitBreakerConfig,
     CircuitBreaker,
 };
-use futures::future::join_all;
 use sentinel_config::{AgentConfig, AgentProtocolVersion, FailureMode};
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, trace, warn};
@@ -106,40 +105,52 @@ impl UnifiedAgent {
 
                 match event_type {
                     EventType::RequestHeaders => {
-                        let typed_event: RequestHeadersEvent =
-                            serde_json::from_value(json).map_err(|e| SentinelError::Agent {
+                        let typed_event: RequestHeadersEvent = serde_json::from_value(json)
+                            .map_err(|e| SentinelError::Agent {
                                 agent: agent.id().to_string(),
-                                message: format!("Failed to deserialize RequestHeadersEvent: {}", e),
+                                message: format!(
+                                    "Failed to deserialize RequestHeadersEvent: {}",
+                                    e
+                                ),
                                 event: format!("{:?}", event_type),
                                 source: None,
                             })?;
                         agent.call_request_headers(&typed_event).await
                     }
                     EventType::RequestBodyChunk => {
-                        let typed_event: RequestBodyChunkEvent =
-                            serde_json::from_value(json).map_err(|e| SentinelError::Agent {
+                        let typed_event: RequestBodyChunkEvent = serde_json::from_value(json)
+                            .map_err(|e| SentinelError::Agent {
                                 agent: agent.id().to_string(),
-                                message: format!("Failed to deserialize RequestBodyChunkEvent: {}", e),
+                                message: format!(
+                                    "Failed to deserialize RequestBodyChunkEvent: {}",
+                                    e
+                                ),
                                 event: format!("{:?}", event_type),
                                 source: None,
                             })?;
                         agent.call_request_body_chunk(&typed_event).await
                     }
                     EventType::ResponseHeaders => {
-                        let typed_event: ResponseHeadersEvent =
-                            serde_json::from_value(json).map_err(|e| SentinelError::Agent {
+                        let typed_event: ResponseHeadersEvent = serde_json::from_value(json)
+                            .map_err(|e| SentinelError::Agent {
                                 agent: agent.id().to_string(),
-                                message: format!("Failed to deserialize ResponseHeadersEvent: {}", e),
+                                message: format!(
+                                    "Failed to deserialize ResponseHeadersEvent: {}",
+                                    e
+                                ),
                                 event: format!("{:?}", event_type),
                                 source: None,
                             })?;
                         agent.call_response_headers(&typed_event).await
                     }
                     EventType::ResponseBodyChunk => {
-                        let typed_event: ResponseBodyChunkEvent =
-                            serde_json::from_value(json).map_err(|e| SentinelError::Agent {
+                        let typed_event: ResponseBodyChunkEvent = serde_json::from_value(json)
+                            .map_err(|e| SentinelError::Agent {
                                 agent: agent.id().to_string(),
-                                message: format!("Failed to deserialize ResponseBodyChunkEvent: {}", e),
+                                message: format!(
+                                    "Failed to deserialize ResponseBodyChunkEvent: {}",
+                                    e
+                                ),
                                 event: format!("{:?}", event_type),
                                 source: None,
                             })?;
@@ -343,10 +354,7 @@ impl AgentManager {
                         "Creating v2 agent instance with internal pool"
                     );
 
-                    let agent = Arc::new(AgentV2::new(
-                        config.clone(),
-                        circuit_breaker,
-                    ));
+                    let agent = Arc::new(AgentV2::new(config.clone(), circuit_breaker));
 
                     v2_count += 1;
 
@@ -394,11 +402,23 @@ impl AgentManager {
     ) -> SentinelResult<AgentDecision> {
         let method = headers
             .remove(":method")
-            .and_then(|mut v| if v.is_empty() { None } else { Some(v.swap_remove(0)) })
+            .and_then(|mut v| {
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v.swap_remove(0))
+                }
+            })
             .unwrap_or_else(|| "GET".to_string());
         let uri = headers
             .remove(":path")
-            .and_then(|mut v| if v.is_empty() { None } else { Some(v.swap_remove(0)) })
+            .and_then(|mut v| {
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v.swap_remove(0))
+                }
+            })
             .unwrap_or_else(|| "/".to_string());
         let event = RequestHeadersEvent {
             metadata: ctx.metadata.clone(),
@@ -891,9 +911,7 @@ impl AgentManager {
         let agents = self.agents.read().await;
         let relevant_agents: Vec<_> = route_agents
             .iter()
-            .filter_map(|(id, failure_mode)| {
-                agents.get(id).map(|agent| (agent, *failure_mode))
-            })
+            .filter_map(|(id, failure_mode)| agents.get(id).map(|agent| (agent, *failure_mode)))
             .filter(|(agent, _)| agent.handles_event(event_type))
             .collect();
 

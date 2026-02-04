@@ -27,14 +27,9 @@ pub struct MaskingEngine {
 
 impl MaskingEngine {
     /// Create a new masking engine.
-    pub fn new(
-        config: DataMaskingConfig,
-        store: Arc<dyn TokenStore>,
-    ) -> MaskingResult<Self> {
+    pub fn new(config: DataMaskingConfig, store: Arc<dyn TokenStore>) -> MaskingResult<Self> {
         // Initialize FPE cipher if configured
-        let fpe_cipher = if config.fpe.key.is_some()
-            || std::env::var(&config.fpe.key_env).is_ok()
-        {
+        let fpe_cipher = if config.fpe.key.is_some() || std::env::var(&config.fpe.key_env).is_ok() {
             Some(FpeCipher::from_config(&config.fpe)?)
         } else {
             None
@@ -63,8 +58,14 @@ impl MaskingEngine {
         body: &[u8],
         content_type: &str,
     ) -> MaskingResult<Vec<u8>> {
-        self.process_body(correlation_id, body, content_type, Direction::Request, MaskDirection::Mask)
-            .await
+        self.process_body(
+            correlation_id,
+            body,
+            content_type,
+            Direction::Request,
+            MaskDirection::Mask,
+        )
+        .await
     }
 
     /// Unmask response body (detokenize/decrypt).
@@ -74,8 +75,14 @@ impl MaskingEngine {
         body: &[u8],
         content_type: &str,
     ) -> MaskingResult<Vec<u8>> {
-        self.process_body(correlation_id, body, content_type, Direction::Response, MaskDirection::Unmask)
-            .await
+        self.process_body(
+            correlation_id,
+            body,
+            content_type,
+            Direction::Response,
+            MaskDirection::Unmask,
+        )
+        .await
     }
 
     /// Process body content.
@@ -141,27 +148,31 @@ impl MaskingEngine {
     ) -> MaskingResult<String> {
         match (action, direction) {
             // Tokenization
-            (MaskingAction::Tokenize { format }, MaskDirection::Mask) => {
-                self.store
-                    .tokenize(correlation_id, value, format)
-                    .await
-                    .map_err(MaskingError::Store)
-            }
-            (MaskingAction::Tokenize { .. }, MaskDirection::Unmask) => {
-                self.store
-                    .detokenize(correlation_id, value)
-                    .await
-                    .map_err(MaskingError::Store)?
-                    .ok_or_else(|| MaskingError::TokenNotFound(value.to_string()))
-            }
+            (MaskingAction::Tokenize { format }, MaskDirection::Mask) => self
+                .store
+                .tokenize(correlation_id, value, format)
+                .await
+                .map_err(MaskingError::Store),
+            (MaskingAction::Tokenize { .. }, MaskDirection::Unmask) => self
+                .store
+                .detokenize(correlation_id, value)
+                .await
+                .map_err(MaskingError::Store)?
+                .ok_or_else(|| MaskingError::TokenNotFound(value.to_string())),
 
             // Format-preserving encryption
             (MaskingAction::Fpe { alphabet }, MaskDirection::Mask) => {
-                let cipher = self.fpe_cipher.as_ref().ok_or(MaskingError::FpeNotConfigured)?;
+                let cipher = self
+                    .fpe_cipher
+                    .as_ref()
+                    .ok_or(MaskingError::FpeNotConfigured)?;
                 cipher.encrypt(value, alphabet, correlation_id)
             }
             (MaskingAction::Fpe { alphabet }, MaskDirection::Unmask) => {
-                let cipher = self.fpe_cipher.as_ref().ok_or(MaskingError::FpeNotConfigured)?;
+                let cipher = self
+                    .fpe_cipher
+                    .as_ref()
+                    .ok_or(MaskingError::FpeNotConfigured)?;
                 cipher.decrypt(value, alphabet, correlation_id)
             }
 
@@ -173,27 +184,30 @@ impl MaskingEngine {
                     preserve_end,
                 },
                 MaskDirection::Mask,
-            ) => Ok(apply_char_mask(value, *mask_char, *preserve_start, *preserve_end)),
+            ) => Ok(apply_char_mask(
+                value,
+                *mask_char,
+                *preserve_start,
+                *preserve_end,
+            )),
             (MaskingAction::Mask { .. }, MaskDirection::Unmask) => {
                 // Cannot reverse, return as-is
                 Ok(value.to_string())
             }
 
             // Redaction (irreversible)
-            (MaskingAction::Redact { replacement }, MaskDirection::Mask) => {
-                Ok(replacement.clone())
-            }
-            (MaskingAction::Redact { .. }, MaskDirection::Unmask) => {
-                Ok(value.to_string())
-            }
+            (MaskingAction::Redact { replacement }, MaskDirection::Mask) => Ok(replacement.clone()),
+            (MaskingAction::Redact { .. }, MaskDirection::Unmask) => Ok(value.to_string()),
 
             // Hashing (irreversible)
-            (MaskingAction::Hash { algorithm, truncate }, MaskDirection::Mask) => {
-                Ok(compute_hash(value, algorithm, *truncate))
-            }
-            (MaskingAction::Hash { .. }, MaskDirection::Unmask) => {
-                Ok(value.to_string())
-            }
+            (
+                MaskingAction::Hash {
+                    algorithm,
+                    truncate,
+                },
+                MaskDirection::Mask,
+            ) => Ok(compute_hash(value, algorithm, *truncate)),
+            (MaskingAction::Hash { .. }, MaskDirection::Unmask) => Ok(value.to_string()),
         }
     }
 
@@ -210,7 +224,12 @@ impl MaskingEngine {
 }
 
 /// Apply character masking while preserving start and end characters.
-fn apply_char_mask(value: &str, mask_char: char, preserve_start: usize, preserve_end: usize) -> String {
+fn apply_char_mask(
+    value: &str,
+    mask_char: char,
+    preserve_start: usize,
+    preserve_end: usize,
+) -> String {
     let chars: Vec<char> = value.chars().collect();
     let len = chars.len();
 
@@ -258,10 +277,7 @@ mod tests {
             apply_char_mask("4111111111111111", '*', 4, 4),
             "4111********1111"
         );
-        assert_eq!(
-            apply_char_mask("123-45-6789", '*', 0, 4),
-            "*******6789"
-        );
+        assert_eq!(apply_char_mask("123-45-6789", '*', 0, 4), "*******6789");
         assert_eq!(
             apply_char_mask("test@example.com", '*', 2, 0),
             "te**************"

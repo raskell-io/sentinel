@@ -623,8 +623,7 @@ fn default_shadow_max_body_bytes() -> usize {
 ///
 /// Provides token-based rate limiting, model-aware load balancing,
 /// and multi-provider support for inference traffic.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InferenceConfig {
     /// Inference provider (determines token extraction strategy)
     #[serde(default)]
@@ -651,7 +650,6 @@ pub struct InferenceConfig {
     /// Semantic guardrails configuration (prompt injection, PII detection)
     pub guardrails: Option<GuardrailsConfig>,
 }
-
 
 /// Inference provider type (determines token counting strategy)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

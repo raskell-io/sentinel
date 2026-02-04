@@ -120,11 +120,9 @@ impl ValidationResult {
 }
 
 /// Validation options
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ValidationOpts {
     pub skip_network: bool,
     pub skip_agents: bool,
     pub skip_certs: bool,
 }
-

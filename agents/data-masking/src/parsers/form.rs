@@ -10,8 +10,8 @@ pub struct FormParser;
 
 impl BodyParser for FormParser {
     fn parse(&self, body: &[u8]) -> Result<Box<dyn FieldAccessor>, MaskingError> {
-        let body_str = std::str::from_utf8(body)
-            .map_err(|e| MaskingError::InvalidUtf8(e.to_string()))?;
+        let body_str =
+            std::str::from_utf8(body).map_err(|e| MaskingError::InvalidUtf8(e.to_string()))?;
 
         let fields: HashMap<String, String> = serde_urlencoded::from_str(body_str)
             .map_err(|e| MaskingError::InvalidForm(e.to_string()))?;

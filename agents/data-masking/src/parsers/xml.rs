@@ -55,7 +55,10 @@ pub struct XmlAccessor {
 impl FieldAccessor for XmlAccessor {
     fn get(&self, path: &str) -> Option<String> {
         let segments = parse_xpath(path);
-        self.doc.root.as_ref().and_then(|root| get_element_text(root, &segments))
+        self.doc
+            .root
+            .as_ref()
+            .and_then(|root| get_element_text(root, &segments))
     }
 
     fn set(&mut self, path: &str, value: String) -> Result<(), MaskingError> {
@@ -102,7 +105,9 @@ fn parse_xml(data: &[u8]) -> Result<XmlDocument, MaskingError> {
 }
 
 /// Parse a single XML element recursively.
-fn parse_element<R: std::io::BufRead>(reader: &mut Reader<R>) -> Result<Option<XmlElement>, MaskingError> {
+fn parse_element<R: std::io::BufRead>(
+    reader: &mut Reader<R>,
+) -> Result<Option<XmlElement>, MaskingError> {
     let mut buf = Vec::new();
 
     loop {
@@ -208,7 +213,9 @@ fn parse_children<R: std::io::BufRead>(
                 }));
             }
             Ok(Event::Text(e)) => {
-                let text = e.decode().map_err(|e| MaskingError::InvalidXml(e.to_string()))?;
+                let text = e
+                    .decode()
+                    .map_err(|e| MaskingError::InvalidXml(e.to_string()))?;
                 if !text.trim().is_empty() {
                     children.push(XmlNode::Text(text.to_string()));
                 }
@@ -325,7 +332,11 @@ fn get_element_text(element: &XmlElement, segments: &[String]) -> Option<String>
 }
 
 /// Set text content at path.
-fn set_element_text(element: &mut XmlElement, segments: &[String], value: String) -> Result<(), MaskingError> {
+fn set_element_text(
+    element: &mut XmlElement,
+    segments: &[String],
+    value: String,
+) -> Result<(), MaskingError> {
     if segments.is_empty() {
         return Err(MaskingError::FieldAccess("empty path".to_string()));
     }
@@ -360,7 +371,12 @@ fn set_element_text(element: &mut XmlElement, segments: &[String], value: String
 }
 
 /// Find all paths matching the pattern.
-fn find_matching_paths(element: &XmlElement, pattern: &str, current_path: &str, results: &mut Vec<String>) {
+fn find_matching_paths(
+    element: &XmlElement,
+    pattern: &str,
+    current_path: &str,
+    results: &mut Vec<String>,
+) {
     if element.name == pattern || pattern == "*" {
         results.push(current_path.to_string());
     }

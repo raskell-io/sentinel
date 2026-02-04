@@ -290,7 +290,8 @@ impl AgentConnectionPool {
 
         let evicted = before - pool.len();
         if evicted > 0 {
-            self.total_timed_out.fetch_add(evicted as u64, Ordering::Relaxed);
+            self.total_timed_out
+                .fetch_add(evicted as u64, Ordering::Relaxed);
             debug!(evicted = evicted, "Evicted expired connections");
         }
         evicted

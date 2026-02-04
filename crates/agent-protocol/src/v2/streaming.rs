@@ -1,7 +1,7 @@
 //! Bidirectional streaming types for Protocol v2.
 
-use serde::{Deserialize, Serialize};
 use crate::{AuditMetadata, Decision, HeaderOp};
+use serde::{Deserialize, Serialize};
 
 /// Flow control signal for backpressure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,14 +13,24 @@ pub struct FlowControlSignal {
 
 impl FlowControlSignal {
     pub fn pause_all() -> Self {
-        Self { correlation_id: None, action: FlowAction::Pause, timestamp_ms: now_ms() }
+        Self {
+            correlation_id: None,
+            action: FlowAction::Pause,
+            timestamp_ms: now_ms(),
+        }
     }
 
     pub fn resume_all() -> Self {
-        Self { correlation_id: None, action: FlowAction::Resume, timestamp_ms: now_ms() }
+        Self {
+            correlation_id: None,
+            action: FlowAction::Resume,
+            timestamp_ms: now_ms(),
+        }
     }
 
-    pub fn is_global(&self) -> bool { self.correlation_id.is_none() }
+    pub fn is_global(&self) -> bool {
+        self.correlation_id.is_none()
+    }
 }
 
 /// Flow control action.
@@ -76,7 +86,11 @@ impl AgentResponse {
     pub fn block(correlation_id: impl Into<String>, status: u16) -> Self {
         Self {
             correlation_id: correlation_id.into(),
-            decision: Decision::Block { status, body: None, headers: None },
+            decision: Decision::Block {
+                status,
+                body: None,
+                headers: None,
+            },
             request_headers: Vec::new(),
             response_headers: Vec::new(),
             audit: AuditMetadata::default(),
@@ -114,8 +128,12 @@ pub enum StreamState {
 }
 
 impl StreamState {
-    pub fn can_accept_requests(&self) -> bool { matches!(self, StreamState::Active) }
-    pub fn is_connected(&self) -> bool { !matches!(self, StreamState::Disconnected | StreamState::Closed) }
+    pub fn can_accept_requests(&self) -> bool {
+        matches!(self, StreamState::Active)
+    }
+    pub fn is_connected(&self) -> bool {
+        !matches!(self, StreamState::Disconnected | StreamState::Closed)
+    }
 }
 
 fn now_ms() -> u64 {

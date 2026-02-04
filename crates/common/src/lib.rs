@@ -72,10 +72,10 @@ pub use scoped_registry::ScopedRegistry;
 
 // Re-export scoped metrics (runtime only)
 #[cfg(feature = "runtime")]
-pub use scoped_metrics::{ScopedMetrics, ScopeLabels};
+pub use scoped_metrics::{ScopeLabels, ScopedMetrics};
 
 // Re-export budget types
 pub use budget::{
-    BudgetAlert, BudgetCheckResult, BudgetPeriod, CostAttributionConfig, CostResult,
-    ModelPricing, TenantBudgetStatus, TokenBudgetConfig,
+    BudgetAlert, BudgetCheckResult, BudgetPeriod, CostAttributionConfig, CostResult, ModelPricing,
+    TenantBudgetStatus, TokenBudgetConfig,
 };

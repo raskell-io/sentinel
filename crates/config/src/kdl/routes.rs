@@ -5,11 +5,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::trace;
 
-use sentinel_common::budget::{BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig};
+use sentinel_common::budget::{
+    BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig,
+};
 
 use crate::routes::*;
 
-use super::helpers::{get_bool_entry, get_first_arg_string, get_float_entry, get_int_entry, get_string_entry};
+use super::helpers::{
+    get_bool_entry, get_first_arg_string, get_float_entry, get_int_entry, get_string_entry,
+};
 
 /// Parse routes configuration block
 pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
@@ -497,7 +501,9 @@ fn parse_shadow_config(node: &kdl::KdlNode) -> Result<ShadowConfig> {
     let percentage = if let Some(pct_str) = get_string_entry(node, "percentage") {
         pct_str.parse::<f64>().unwrap_or(100.0)
     } else {
-        get_int_entry(node, "percentage").map(|v| v as f64).unwrap_or(100.0)
+        get_int_entry(node, "percentage")
+            .map(|v| v as f64)
+            .unwrap_or(100.0)
     };
 
     let timeout_ms = get_int_entry(node, "timeout-ms").unwrap_or(5000) as u64;
@@ -509,9 +515,13 @@ fn parse_shadow_config(node: &kdl::KdlNode) -> Result<ShadowConfig> {
         if let Some(header_node) = children.get("sample-header") {
             let entries: Vec<_> = header_node.entries().iter().collect();
             if entries.len() >= 2 {
-                let name = entries[0].value().as_string()
+                let name = entries[0]
+                    .value()
+                    .as_string()
                     .ok_or_else(|| anyhow::anyhow!("sample-header name must be a string"))?;
-                let value = entries[1].value().as_string()
+                let value = entries[1]
+                    .value()
+                    .as_string()
                     .ok_or_else(|| anyhow::anyhow!("sample-header value must be a string"))?;
                 Some((name.to_string(), value.to_string()))
             } else {
@@ -1187,11 +1197,15 @@ fn parse_model_pricing_list(node: &kdl::KdlNode) -> Result<Vec<ModelPricing>> {
                 let pattern = get_first_arg_string(child)
                     .ok_or_else(|| anyhow::anyhow!("Model pricing requires a pattern argument"))?;
 
-                let input_cost = get_float_entry(child, "input-cost-per-million")
-                    .ok_or_else(|| anyhow::anyhow!("Model pricing requires 'input-cost-per-million'"))?;
+                let input_cost =
+                    get_float_entry(child, "input-cost-per-million").ok_or_else(|| {
+                        anyhow::anyhow!("Model pricing requires 'input-cost-per-million'")
+                    })?;
 
-                let output_cost = get_float_entry(child, "output-cost-per-million")
-                    .ok_or_else(|| anyhow::anyhow!("Model pricing requires 'output-cost-per-million'"))?;
+                let output_cost =
+                    get_float_entry(child, "output-cost-per-million").ok_or_else(|| {
+                        anyhow::anyhow!("Model pricing requires 'output-cost-per-million'")
+                    })?;
 
                 let currency = get_string_entry(child, "currency");
 

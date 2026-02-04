@@ -24,11 +24,9 @@ mod webhook_provider {
 
         Mock::given(method("POST"))
             .and(path("/records"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "record_id": "webhook-record-123"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "record_id": "webhook-record-123"
+            })))
             .mount(&mock_server)
             .await;
 
@@ -90,21 +88,17 @@ mod webhook_provider {
 
         Mock::given(method("GET"))
             .and(path("/domains/example.com/supported"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "supported": true
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "supported": true
+            })))
             .mount(&mock_server)
             .await;
 
         Mock::given(method("GET"))
             .and(path("/domains/other.com/supported"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "supported": false
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "supported": false
+            })))
             .mount(&mock_server)
             .await;
 
@@ -210,22 +204,18 @@ mod webhook_provider {
 
         Mock::given(method("POST"))
             .and(path("/records"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "record_id": "record-1"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "record_id": "record-1"
+            })))
             .up_to_n_times(1)
             .mount(&mock_server)
             .await;
 
         Mock::given(method("POST"))
             .and(path("/records"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "record_id": "record-2"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "record_id": "record-2"
+            })))
             .mount(&mock_server)
             .await;
 
@@ -337,9 +327,7 @@ mod challenge_info {
 // ============================================================================
 
 mod config_parsing {
-    use sentinel_config::server::{
-        AcmeChallengeType, DnsProviderType, PropagationCheckConfig,
-    };
+    use sentinel_config::server::{AcmeChallengeType, DnsProviderType, PropagationCheckConfig};
 
     #[test]
     fn test_acme_challenge_type_default() {
@@ -449,7 +437,9 @@ mod provider_errors {
 
     #[test]
     fn test_rate_limited_error_display() {
-        let err = DnsProviderError::RateLimited { retry_after_secs: 60 };
+        let err = DnsProviderError::RateLimited {
+            retry_after_secs: 60,
+        };
         let msg = err.to_string();
         assert!(msg.contains("60"));
         assert!(msg.contains("Rate limited"));

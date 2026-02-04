@@ -3,8 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Root configuration for the Data Masking Agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DataMaskingConfig {
     /// Token store configuration.
     #[serde(default)]
@@ -30,7 +29,6 @@ pub struct DataMaskingConfig {
     #[serde(default)]
     pub buffering: BufferingConfig,
 }
-
 
 /// Token store configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -249,7 +249,11 @@ impl MetricsCollector {
                 output.push_str(&format!("# TYPE {} counter\n", name));
             }
             for metric in metrics {
-                output.push_str(&format_metric_line(name, &metric.labels, metric.value as f64));
+                output.push_str(&format_metric_line(
+                    name,
+                    &metric.labels,
+                    metric.value as f64,
+                ));
             }
         }
 
@@ -450,7 +454,13 @@ impl UnifiedMetricsAggregator {
     }
 
     /// Increment a proxy counter.
-    pub fn increment_counter(&self, name: &str, help: &str, labels: HashMap<String, String>, delta: u64) {
+    pub fn increment_counter(
+        &self,
+        name: &str,
+        help: &str,
+        labels: HashMap<String, String>,
+        delta: u64,
+    ) {
         let key = Self::metric_key(name, &labels);
         let mut counters = self.proxy_counters.write();
 
@@ -536,7 +546,9 @@ impl UnifiedMetricsAggregator {
         let mut output = String::new();
 
         // Add service info metric
-        output.push_str("# HELP sentinel_info Sentinel proxy information\n# TYPE sentinel_info gauge\n");
+        output.push_str(
+            "# HELP sentinel_info Sentinel proxy information\n# TYPE sentinel_info gauge\n",
+        );
         output.push_str(&format!(
             "sentinel_info{{service=\"{}\",instance=\"{}\"}} 1\n",
             escape_label_value(&self.service_name),
@@ -556,7 +568,11 @@ impl UnifiedMetricsAggregator {
                 output.push_str(&format!("# TYPE {} counter\n", name));
             }
             for metric in metrics {
-                output.push_str(&format_metric_line(name, &metric.labels, metric.value as f64));
+                output.push_str(&format_metric_line(
+                    name,
+                    &metric.labels,
+                    metric.value as f64,
+                ));
             }
         }
 
@@ -700,7 +716,9 @@ pub struct ConfigUpdateHandler {
     pending: RwLock<HashMap<String, PendingUpdate>>,
     /// Callback for rule updates
     #[allow(clippy::type_complexity)]
-    on_rule_update: Option<Box<dyn Fn(&str, &[crate::v2::control::RuleDefinition], &[String]) -> bool + Send + Sync>>,
+    on_rule_update: Option<
+        Box<dyn Fn(&str, &[crate::v2::control::RuleDefinition], &[String]) -> bool + Send + Sync>,
+    >,
     /// Callback for list updates
     #[allow(clippy::type_complexity)]
     on_list_update: Option<Box<dyn Fn(&str, &[String], &[String]) -> bool + Send + Sync>>,
@@ -724,7 +742,10 @@ impl ConfigUpdateHandler {
     /// Set the rule update callback.
     pub fn on_rule_update<F>(mut self, f: F) -> Self
     where
-        F: Fn(&str, &[crate::v2::control::RuleDefinition], &[String]) -> bool + Send + Sync + 'static,
+        F: Fn(&str, &[crate::v2::control::RuleDefinition], &[String]) -> bool
+            + Send
+            + Sync
+            + 'static,
     {
         self.on_rule_update = Some(Box::new(f));
         self
@@ -755,7 +776,11 @@ impl ConfigUpdateHandler {
                 );
                 ConfigUpdateResponse::success(request_id)
             }
-            ConfigUpdateType::RuleUpdate { rule_set, rules, remove_rules } => {
+            ConfigUpdateType::RuleUpdate {
+                rule_set,
+                rules,
+                remove_rules,
+            } => {
                 if let Some(ref callback) = self.on_rule_update {
                     if callback(rule_set, rules, remove_rules) {
                         ConfigUpdateResponse::success(request_id)
@@ -766,7 +791,11 @@ impl ConfigUpdateHandler {
                     ConfigUpdateResponse::failure(request_id, "Rule updates not supported")
                 }
             }
-            ConfigUpdateType::ListUpdate { list_id, add, remove } => {
+            ConfigUpdateType::ListUpdate {
+                list_id,
+                add,
+                remove,
+            } => {
                 if let Some(ref callback) = self.on_list_update {
                     if callback(list_id, add, remove) {
                         ConfigUpdateResponse::success(request_id)
@@ -777,7 +806,10 @@ impl ConfigUpdateHandler {
                     ConfigUpdateResponse::failure(request_id, "List updates not supported")
                 }
             }
-            ConfigUpdateType::RestartRequired { reason, grace_period_ms } => {
+            ConfigUpdateType::RestartRequired {
+                reason,
+                grace_period_ms,
+            } => {
                 // Log and acknowledge - actual restart is handled by orchestrator
                 tracing::warn!(
                     reason = reason,
@@ -935,7 +967,12 @@ impl ConfigPusher {
     }
 
     /// Register a connected agent.
-    pub fn register_agent(&self, agent_id: impl Into<String>, name: impl Into<String>, supports_push: bool) {
+    pub fn register_agent(
+        &self,
+        agent_id: impl Into<String>,
+        name: impl Into<String>,
+        supports_push: bool,
+    ) {
         let agent_id = agent_id.into();
         let now = Instant::now();
         self.agents.write().insert(
@@ -1153,8 +1190,12 @@ mod tests {
         let collector = MetricsCollector::new();
 
         let mut report = MetricsReport::new("test-agent", 10_000);
-        report.counters.push(CounterMetric::new(standard::REQUESTS_TOTAL, 100));
-        report.gauges.push(GaugeMetric::new(standard::IN_FLIGHT_REQUESTS, 5.0));
+        report
+            .counters
+            .push(CounterMetric::new(standard::REQUESTS_TOTAL, 100));
+        report
+            .gauges
+            .push(GaugeMetric::new(standard::IN_FLIGHT_REQUESTS, 5.0));
 
         collector.record(&report);
 
@@ -1168,7 +1209,9 @@ mod tests {
 
         let mut report = MetricsReport::new("agent-1", 10_000);
         let mut counter = CounterMetric::new(standard::REQUESTS_TOTAL, 50);
-        counter.labels.insert("route".to_string(), "/api".to_string());
+        counter
+            .labels
+            .insert("route".to_string(), "/api".to_string());
         report.counters.push(counter);
 
         collector.record(&report);
@@ -1346,7 +1389,9 @@ mod tests {
         let collector = MetricsCollector::new();
 
         let mut report = MetricsReport::new("test", 10_000);
-        report.counters.push(CounterMetric::new("requests_total", 100));
+        report
+            .counters
+            .push(CounterMetric::new("requests_total", 100));
         report.gauges.push(GaugeMetric::new("connections", 5.0));
 
         collector.record(&report);
@@ -1410,12 +1455,32 @@ mod tests {
     #[test]
     fn test_unified_aggregator_histogram() {
         let aggregator = UnifiedMetricsAggregator::new("test", "1");
-        let buckets = vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
+        let buckets = vec![
+            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+        ];
 
         // Record some observations
-        aggregator.observe_histogram("request_duration", "Request duration", HashMap::new(), &buckets, 0.05);
-        aggregator.observe_histogram("request_duration", "Request duration", HashMap::new(), &buckets, 0.2);
-        aggregator.observe_histogram("request_duration", "Request duration", HashMap::new(), &buckets, 1.5);
+        aggregator.observe_histogram(
+            "request_duration",
+            "Request duration",
+            HashMap::new(),
+            &buckets,
+            0.05,
+        );
+        aggregator.observe_histogram(
+            "request_duration",
+            "Request duration",
+            HashMap::new(),
+            &buckets,
+            0.2,
+        );
+        aggregator.observe_histogram(
+            "request_duration",
+            "Request duration",
+            HashMap::new(),
+            &buckets,
+            1.5,
+        );
 
         let output = aggregator.export_prometheus();
         assert!(output.contains("request_duration_bucket"));

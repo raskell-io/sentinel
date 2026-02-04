@@ -43,12 +43,7 @@ impl CostCalculator {
     /// Calculate the cost for a request/response.
     ///
     /// Uses the first matching pricing rule, or falls back to default pricing.
-    pub fn calculate(
-        &self,
-        model: &str,
-        input_tokens: u64,
-        output_tokens: u64,
-    ) -> CostResult {
+    pub fn calculate(&self, model: &str, input_tokens: u64, output_tokens: u64) -> CostResult {
         if !self.config.enabled {
             return CostResult::new(model, input_tokens, output_tokens, 0.0, 0.0, "USD");
         }
@@ -91,7 +86,14 @@ impl CostCalculator {
             "Calculated cost"
         );
 
-        CostResult::new(model, input_tokens, output_tokens, input_cost, output_cost, currency)
+        CostResult::new(
+            model,
+            input_tokens,
+            output_tokens,
+            input_cost,
+            output_cost,
+            currency,
+        )
     }
 
     /// Find the pricing rule for a model.

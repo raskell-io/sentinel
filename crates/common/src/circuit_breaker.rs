@@ -545,9 +545,7 @@ mod tests {
         let state = cb.state();
         assert!(matches!(
             state,
-            CircuitBreakerState::Closed
-                | CircuitBreakerState::Open
-                | CircuitBreakerState::HalfOpen
+            CircuitBreakerState::Closed | CircuitBreakerState::Open | CircuitBreakerState::HalfOpen
         ));
     }
 

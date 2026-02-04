@@ -38,8 +38,8 @@ use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::v2::client::FlowState;
-use crate::v2::uds::{read_message, write_message, MessageType, UdsCapabilities};
 use crate::v2::pool::CHANNEL_BUFFER_SIZE;
+use crate::v2::uds::{read_message, write_message, MessageType, UdsCapabilities};
 use crate::v2::{AgentCapabilities, AgentPool, PROTOCOL_VERSION_2};
 use crate::{AgentProtocolError, AgentResponse};
 
@@ -154,9 +154,10 @@ impl ReverseConnectionListener {
     ///
     /// Returns the agent_id of the registered agent on success.
     pub async fn accept_one(&self, pool: &AgentPool) -> Result<String, AgentProtocolError> {
-        let (stream, _addr) = self.listener.accept().await.map_err(|e| {
-            AgentProtocolError::ConnectionFailed(format!("Accept failed: {}", e))
-        })?;
+        let (stream, _addr) =
+            self.listener.accept().await.map_err(|e| {
+                AgentProtocolError::ConnectionFailed(format!("Accept failed: {}", e))
+            })?;
 
         debug!("Accepted reverse connection");
 
@@ -212,9 +213,7 @@ impl ReverseConnectionListener {
             self.read_registration(&mut reader),
         )
         .await
-        .map_err(|_| {
-            AgentProtocolError::Timeout(self.config.handshake_timeout)
-        })??;
+        .map_err(|_| AgentProtocolError::Timeout(self.config.handshake_timeout))??;
 
         let agent_id = registration.agent_id.clone();
 
@@ -227,7 +226,8 @@ impl ReverseConnectionListener {
                 proxy_version: env!("CARGO_PKG_VERSION").to_string(),
                 connection_id: String::new(),
             };
-            self.send_registration_response(&mut writer, &response).await?;
+            self.send_registration_response(&mut writer, &response)
+                .await?;
             return Err(e);
         }
 
@@ -249,7 +249,8 @@ impl ReverseConnectionListener {
             proxy_version: env!("CARGO_PKG_VERSION").to_string(),
             connection_id: connection_id.clone(),
         };
-        self.send_registration_response(&mut writer, &response).await?;
+        self.send_registration_response(&mut writer, &response)
+            .await?;
 
         info!(
             agent_id = %agent_id,
@@ -420,7 +421,8 @@ impl ReverseConnectionClient {
                 match read_message(&mut reader).await {
                     Ok((msg_type, payload)) => {
                         if msg_type == MessageType::AgentResponse {
-                            if let Ok(response) = serde_json::from_slice::<AgentResponse>(&payload) {
+                            if let Ok(response) = serde_json::from_slice::<AgentResponse>(&payload)
+                            {
                                 let correlation_id = response
                                     .audit
                                     .custom

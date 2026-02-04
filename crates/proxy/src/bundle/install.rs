@@ -205,7 +205,11 @@ fn parse_version_output(output: &str) -> Option<String> {
 
         // Look for semver-like pattern
         for word in line.split_whitespace() {
-            if word.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            if word
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false)
                 && word.contains('.')
             {
                 // Remove any trailing metadata (e.g., "0.2.0-beta" -> "0.2.0")
@@ -415,10 +419,7 @@ mod tests {
             parse_version_output("version 1.0.0"),
             Some("1.0.0".to_string())
         );
-        assert_eq!(
-            parse_version_output("0.3.1"),
-            Some("0.3.1".to_string())
-        );
+        assert_eq!(parse_version_output("0.3.1"), Some("0.3.1".to_string()));
         assert_eq!(
             parse_version_output("0.2.0-beta+build123"),
             Some("0.2.0".to_string())
@@ -584,7 +585,10 @@ mod tests {
 
         let config_path = result.unwrap();
         assert!(config_path.exists());
-        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), "test: content");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).unwrap(),
+            "test: content"
+        );
     }
 
     #[test]
@@ -601,7 +605,10 @@ mod tests {
         assert!(result.is_ok());
 
         // Should not have overwritten
-        assert_eq!(std::fs::read_to_string(&existing_path).unwrap(), "original content");
+        assert_eq!(
+            std::fs::read_to_string(&existing_path).unwrap(),
+            "original content"
+        );
     }
 
     #[test]
@@ -618,7 +625,10 @@ mod tests {
         assert!(result.is_ok());
 
         // Should have overwritten
-        assert_eq!(std::fs::read_to_string(&existing_path).unwrap(), "new content");
+        assert_eq!(
+            std::fs::read_to_string(&existing_path).unwrap(),
+            "new content"
+        );
     }
 
     #[test]

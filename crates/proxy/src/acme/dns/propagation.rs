@@ -35,9 +35,9 @@ impl Default for PropagationConfig {
             check_interval: Duration::from_secs(5),
             timeout: Duration::from_secs(120),
             nameservers: vec![
-                IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),       // Google DNS
-                IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),       // Cloudflare DNS
-                IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)),       // Quad9
+                IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), // Google DNS
+                IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), // Cloudflare DNS
+                IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)), // Quad9
             ],
         }
     }
@@ -86,9 +86,10 @@ impl PropagationChecker {
         opts.cache_size = 0; // Disable caching for propagation checks
 
         // hickory-resolver 0.25 uses builder pattern
-        let resolver = Resolver::builder_with_config(resolver_config, TokioConnectionProvider::default())
-            .with_options(opts)
-            .build();
+        let resolver =
+            Resolver::builder_with_config(resolver_config, TokioConnectionProvider::default())
+                .with_options(opts)
+                .build();
         Ok(resolver)
     }
 
@@ -151,14 +152,20 @@ impl PropagationChecker {
     }
 
     /// Check if a TXT record exists with the expected value
-    async fn check_record(&self, record_name: &str, expected_value: &str) -> Result<bool, DnsProviderError> {
+    async fn check_record(
+        &self,
+        record_name: &str,
+        expected_value: &str,
+    ) -> Result<bool, DnsProviderError> {
         let lookup = self.resolver.txt_lookup(record_name).await;
 
         match lookup {
             Ok(records) => {
                 for record in records.iter() {
                     // TXT records can have multiple strings, join them
-                    let value: String = record.txt_data().iter()
+                    let value: String = record
+                        .txt_data()
+                        .iter()
                         .map(|data| String::from_utf8_lossy(data))
                         .collect();
 

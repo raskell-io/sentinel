@@ -481,8 +481,9 @@ impl OcspStapler {
             .map_err(|e| TlsError::OcspFetch(format!("Failed to parse certificate: {}", e)))?;
 
         // Parse the issuer certificate
-        let (_, issuer) = X509Certificate::from_der(issuer_der)
-            .map_err(|e| TlsError::OcspFetch(format!("Failed to parse issuer certificate: {}", e)))?;
+        let (_, issuer) = X509Certificate::from_der(issuer_der).map_err(|e| {
+            TlsError::OcspFetch(format!("Failed to parse issuer certificate: {}", e))
+        })?;
 
         // Extract OCSP responder URL from AIA extension
         let ocsp_url = extract_ocsp_responder_url(&cert)?;
@@ -523,8 +524,9 @@ impl OcspStapler {
             .map_err(|e| TlsError::OcspFetch(format!("Failed to parse certificate: {}", e)))?;
 
         // Parse the issuer certificate
-        let (_, issuer) = X509Certificate::from_der(issuer_der)
-            .map_err(|e| TlsError::OcspFetch(format!("Failed to parse issuer certificate: {}", e)))?;
+        let (_, issuer) = X509Certificate::from_der(issuer_der).map_err(|e| {
+            TlsError::OcspFetch(format!("Failed to parse issuer certificate: {}", e))
+        })?;
 
         // Extract OCSP responder URL from AIA extension
         let ocsp_url = extract_ocsp_responder_url(&cert)?;
@@ -587,7 +589,9 @@ impl Default for OcspStapler {
 // ============================================================================
 
 /// Extract OCSP responder URL from certificate's Authority Information Access extension
-fn extract_ocsp_responder_url(cert: &x509_parser::certificate::X509Certificate) -> Result<String, TlsError> {
+fn extract_ocsp_responder_url(
+    cert: &x509_parser::certificate::X509Certificate,
+) -> Result<String, TlsError> {
     use x509_parser::prelude::*;
 
     // Find the AIA extension
@@ -595,16 +599,20 @@ fn extract_ocsp_responder_url(cert: &x509_parser::certificate::X509Certificate) 
         .extensions()
         .iter()
         .find(|ext| ext.oid == oid_registry::OID_PKIX_AUTHORITY_INFO_ACCESS)
-        .ok_or_else(|| TlsError::OcspFetch(
-            "Certificate does not have Authority Information Access extension".to_string()
-        ))?;
+        .ok_or_else(|| {
+            TlsError::OcspFetch(
+                "Certificate does not have Authority Information Access extension".to_string(),
+            )
+        })?;
 
     // Parse AIA extension
     let aia_value = match aia.parsed_extension() {
         ParsedExtension::AuthorityInfoAccess(aia) => aia,
-        _ => return Err(TlsError::OcspFetch(
-            "Failed to parse Authority Information Access extension".to_string()
-        )),
+        _ => {
+            return Err(TlsError::OcspFetch(
+                "Failed to parse Authority Information Access extension".to_string(),
+            ))
+        }
     };
 
     // Find OCSP access method
@@ -620,7 +628,7 @@ fn extract_ocsp_responder_url(cert: &x509_parser::certificate::X509Certificate) 
     }
 
     Err(TlsError::OcspFetch(
-        "Certificate AIA does not contain OCSP responder URL".to_string()
+        "Certificate AIA does not contain OCSP responder URL".to_string(),
     ))
 }
 
@@ -631,7 +639,7 @@ fn build_ocsp_request(
     cert: &x509_parser::certificate::X509Certificate,
     issuer: &x509_parser::certificate::X509Certificate,
 ) -> Result<Vec<u8>, TlsError> {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     // Per RFC 6960, an OCSP request contains:
     // - Hash of issuer name
@@ -657,11 +665,7 @@ fn build_ocsp_request(
 
     // Build ASN.1 DER encoded OCSP request
     // This is a minimal implementation of the OCSP request structure
-    let request = build_ocsp_request_der(
-        &issuer_name_hash,
-        &issuer_key_hash,
-        &serial,
-    );
+    let request = build_ocsp_request_der(&issuer_name_hash, &issuer_key_hash, &serial);
 
     Ok(request)
 }
@@ -676,10 +680,7 @@ fn build_ocsp_request_der(
     let sha256_oid: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
 
     // Build CertID structure
-    let hash_algorithm = der_sequence(&[
-        &der_oid(sha256_oid),
-        &der_null(),
-    ]);
+    let hash_algorithm = der_sequence(&[&der_oid(sha256_oid), &der_null()]);
 
     let cert_id = der_sequence(&[
         &hash_algorithm,
@@ -733,7 +734,7 @@ fn der_octet_string(data: &[u8]) -> Vec<u8> {
 
 fn der_integer(data: &[u8]) -> Vec<u8> {
     let mut result = vec![0x02]; // INTEGER tag
-    // Remove leading zeros but ensure at least one byte
+                                 // Remove leading zeros but ensure at least one byte
     let data = match data.iter().position(|&b| b != 0) {
         Some(pos) => &data[pos..],
         None => &[0],
@@ -769,19 +770,26 @@ fn send_ocsp_request_sync(url: &str, request: &[u8]) -> Result<Vec<u8>, TlsError
     let url = url::Url::parse(url)
         .map_err(|e| TlsError::OcspFetch(format!("Invalid OCSP URL: {}", e)))?;
 
-    let host = url.host_str()
+    let host = url
+        .host_str()
         .ok_or_else(|| TlsError::OcspFetch("OCSP URL has no host".to_string()))?;
     let port = url.port().unwrap_or(80);
-    let path = if url.path().is_empty() { "/" } else { url.path() };
+    let path = if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    };
 
     // Connect to server
     let addr = format!("{}:{}", host, port);
     let mut stream = TcpStream::connect(&addr)
         .map_err(|e| TlsError::OcspFetch(format!("Failed to connect to OCSP responder: {}", e)))?;
 
-    stream.set_read_timeout(Some(Duration::from_secs(10)))
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| TlsError::OcspFetch(format!("Failed to set timeout: {}", e)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))
+    stream
+        .set_write_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| TlsError::OcspFetch(format!("Failed to set timeout: {}", e)))?;
 
     // Build HTTP POST request
@@ -792,22 +800,28 @@ fn send_ocsp_request_sync(url: &str, request: &[u8]) -> Result<Vec<u8>, TlsError
          Content-Length: {}\r\n\
          Connection: close\r\n\
          \r\n",
-        path, host, request.len()
+        path,
+        host,
+        request.len()
     );
 
     // Send request
-    stream.write_all(http_request.as_bytes())
+    stream
+        .write_all(http_request.as_bytes())
         .map_err(|e| TlsError::OcspFetch(format!("Failed to send OCSP request: {}", e)))?;
-    stream.write_all(request)
+    stream
+        .write_all(request)
         .map_err(|e| TlsError::OcspFetch(format!("Failed to send OCSP request body: {}", e)))?;
 
     // Read response
     let mut response = Vec::new();
-    stream.read_to_end(&mut response)
+    stream
+        .read_to_end(&mut response)
         .map_err(|e| TlsError::OcspFetch(format!("Failed to read OCSP response: {}", e)))?;
 
     // Parse HTTP response - find body after headers
-    let headers_end = response.windows(4)
+    let headers_end = response
+        .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .ok_or_else(|| TlsError::OcspFetch("Invalid HTTP response: no headers end".to_string()))?;
 
@@ -841,7 +855,9 @@ async fn send_ocsp_request_async(url: &str, request: &[u8]) -> Result<Vec<u8>, T
         )));
     }
 
-    let body = response.bytes().await
+    let body = response
+        .bytes()
+        .await
         .map_err(|e| TlsError::OcspFetch(format!("Failed to read OCSP response: {}", e)))?;
 
     Ok(body.to_vec())
@@ -849,7 +865,7 @@ async fn send_ocsp_request_async(url: &str, request: &[u8]) -> Result<Vec<u8>, T
 
 /// Calculate certificate fingerprint for cache key
 fn calculate_cert_fingerprint(cert_der: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(cert_der);
     let result = hasher.finalize();

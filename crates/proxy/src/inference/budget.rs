@@ -321,7 +321,10 @@ impl TokenBudgetTracker {
         self.config.enforce
     }
 
-    fn get_or_create_tenant(&self, tenant: &str) -> dashmap::mapref::one::Ref<'_, String, TenantBudgetState> {
+    fn get_or_create_tenant(
+        &self,
+        tenant: &str,
+    ) -> dashmap::mapref::one::Ref<'_, String, TenantBudgetState> {
         self.tenants
             .entry(tenant.to_string())
             .or_insert_with(TenantBudgetState::new);

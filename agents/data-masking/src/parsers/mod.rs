@@ -51,6 +51,8 @@ pub fn get_parser(content_type: &str) -> Result<Box<dyn BodyParser>, MaskingErro
     } else if ct_lower.contains("application/x-www-form-urlencoded") {
         Ok(Box::new(FormParser))
     } else {
-        Err(MaskingError::UnsupportedContentType(content_type.to_string()))
+        Err(MaskingError::UnsupportedContentType(
+            content_type.to_string(),
+        ))
     }
 }

@@ -326,9 +326,21 @@ mod tests {
         let addr2 = "backend-2:8080".to_string();
 
         // Update latencies: backend-1 has lowest
-        balancer.stats.get(&addr0).unwrap().update(Duration::from_millis(100), Duration::from_secs(10));
-        balancer.stats.get(&addr1).unwrap().update(Duration::from_millis(10), Duration::from_secs(10));
-        balancer.stats.get(&addr2).unwrap().update(Duration::from_millis(50), Duration::from_secs(10));
+        balancer
+            .stats
+            .get(&addr0)
+            .unwrap()
+            .update(Duration::from_millis(100), Duration::from_secs(10));
+        balancer
+            .stats
+            .get(&addr1)
+            .unwrap()
+            .update(Duration::from_millis(10), Duration::from_secs(10));
+        balancer
+            .stats
+            .get(&addr2)
+            .unwrap()
+            .update(Duration::from_millis(50), Duration::from_secs(10));
 
         // Should select backend-1 (lowest latency)
         let selection = balancer.select(None).await.unwrap();
@@ -344,8 +356,16 @@ mod tests {
         let addr1 = "backend-1:8080".to_string();
 
         // Same latency, but backend-0 has active connections
-        balancer.stats.get(&addr0).unwrap().update(Duration::from_millis(10), Duration::from_secs(10));
-        balancer.stats.get(&addr1).unwrap().update(Duration::from_millis(10), Duration::from_secs(10));
+        balancer
+            .stats
+            .get(&addr0)
+            .unwrap()
+            .update(Duration::from_millis(10), Duration::from_secs(10));
+        balancer
+            .stats
+            .get(&addr1)
+            .unwrap()
+            .update(Duration::from_millis(10), Duration::from_secs(10));
 
         // Add active connections to backend-0
         for _ in 0..5 {

@@ -66,8 +66,9 @@ pub type MetricsCallback = Arc<dyn Fn(crate::v2::MetricsReport) + Send + Sync>;
 ///
 /// The callback receives the agent ID and the config update request.
 /// It should return a response indicating whether the update was accepted.
-pub type ConfigUpdateCallback =
-    Arc<dyn Fn(String, crate::v2::ConfigUpdateRequest) -> crate::v2::ConfigUpdateResponse + Send + Sync>;
+pub type ConfigUpdateCallback = Arc<
+    dyn Fn(String, crate::v2::ConfigUpdateRequest) -> crate::v2::ConfigUpdateResponse + Send + Sync,
+>;
 
 /// v2 agent client with connection multiplexing.
 ///
@@ -204,7 +205,9 @@ impl AgentClientV2 {
             .await
             .map_err(|_| AgentProtocolError::Timeout(self.timeout))?
             .map_err(|e| AgentProtocolError::ConnectionFailed(format!("Stream error: {}", e)))?
-            .ok_or_else(|| AgentProtocolError::ConnectionFailed("Empty handshake response".to_string()))?;
+            .ok_or_else(|| {
+                AgentProtocolError::ConnectionFailed("Empty handshake response".to_string())
+            })?;
 
         // Process handshake response
         if let Some(grpc_v2::agent_to_proxy::Message::Handshake(resp)) = handshake_resp.message {
@@ -291,8 +294,8 @@ impl AgentClientV2 {
                     Some(grpc_v2::agent_to_proxy::Message::FlowControl(fc)) => {
                         // Handle flow control signals
                         let new_state = match fc.action {
-                            1 => FlowState::Paused,  // PAUSE
-                            2 => FlowState::Normal,  // RESUME
+                            1 => FlowState::Paused, // PAUSE
+                            2 => FlowState::Normal, // RESUME
                             _ => FlowState::Normal,
                         };
                         debug!(
@@ -327,9 +330,15 @@ impl AgentClientV2 {
                     Some(grpc_v2::agent_to_proxy::Message::Log(log_msg)) => {
                         // Handle log messages from agent
                         match log_msg.level {
-                            1 => trace!(agent_id = %agent_id, msg = %log_msg.message, "Agent debug log"),
-                            2 => debug!(agent_id = %agent_id, msg = %log_msg.message, "Agent info log"),
-                            3 => warn!(agent_id = %agent_id, msg = %log_msg.message, "Agent warning"),
+                            1 => {
+                                trace!(agent_id = %agent_id, msg = %log_msg.message, "Agent debug log")
+                            }
+                            2 => {
+                                debug!(agent_id = %agent_id, msg = %log_msg.message, "Agent info log")
+                            }
+                            3 => {
+                                warn!(agent_id = %agent_id, msg = %log_msg.message, "Agent warning")
+                            }
                             4 => warn!(agent_id = %agent_id, msg = %log_msg.message, "Agent error"),
                             _ => trace!(agent_id = %agent_id, msg = %log_msg.message, "Agent log"),
                         }
@@ -768,38 +777,51 @@ pub enum DrainReason {
 fn convert_capabilities_from_grpc(caps: grpc_v2::AgentCapabilities) -> AgentCapabilities {
     use crate::v2::{AgentFeatures, AgentLimits, HealthConfig};
 
-    let features = caps.features.map(|f| AgentFeatures {
-        streaming_body: f.streaming_body,
-        websocket: f.websocket,
-        guardrails: f.guardrails,
-        config_push: f.config_push,
-        metrics_export: f.metrics_export,
-        concurrent_requests: f.concurrent_requests,
-        cancellation: f.cancellation,
-        flow_control: f.flow_control,
-        health_reporting: f.health_reporting,
-    }).unwrap_or_default();
+    let features = caps
+        .features
+        .map(|f| AgentFeatures {
+            streaming_body: f.streaming_body,
+            websocket: f.websocket,
+            guardrails: f.guardrails,
+            config_push: f.config_push,
+            metrics_export: f.metrics_export,
+            concurrent_requests: f.concurrent_requests,
+            cancellation: f.cancellation,
+            flow_control: f.flow_control,
+            health_reporting: f.health_reporting,
+        })
+        .unwrap_or_default();
 
-    let limits = caps.limits.map(|l| AgentLimits {
-        max_body_size: l.max_body_size as usize,
-        max_concurrency: l.max_concurrency,
-        preferred_chunk_size: l.preferred_chunk_size as usize,
-        max_memory: l.max_memory.map(|m| m as usize),
-        max_processing_time_ms: l.max_processing_time_ms,
-    }).unwrap_or_default();
+    let limits = caps
+        .limits
+        .map(|l| AgentLimits {
+            max_body_size: l.max_body_size as usize,
+            max_concurrency: l.max_concurrency,
+            preferred_chunk_size: l.preferred_chunk_size as usize,
+            max_memory: l.max_memory.map(|m| m as usize),
+            max_processing_time_ms: l.max_processing_time_ms,
+        })
+        .unwrap_or_default();
 
-    let health = caps.health_config.map(|h| HealthConfig {
-        report_interval_ms: h.report_interval_ms,
-        include_load_metrics: h.include_load_metrics,
-        include_resource_metrics: h.include_resource_metrics,
-    }).unwrap_or_default();
+    let health = caps
+        .health_config
+        .map(|h| HealthConfig {
+            report_interval_ms: h.report_interval_ms,
+            include_load_metrics: h.include_load_metrics,
+            include_resource_metrics: h.include_resource_metrics,
+        })
+        .unwrap_or_default();
 
     AgentCapabilities {
         protocol_version: caps.protocol_version,
         agent_id: caps.agent_id,
         name: caps.name,
         version: caps.version,
-        supported_events: caps.supported_events.into_iter().filter_map(i32_to_event_type).collect(),
+        supported_events: caps
+            .supported_events
+            .into_iter()
+            .filter_map(i32_to_event_type)
+            .collect(),
         features,
         limits,
         health,
@@ -820,7 +842,9 @@ fn i32_to_event_type(i: i32) -> Option<EventType> {
     }
 }
 
-fn convert_request_headers_to_grpc(event: &crate::RequestHeadersEvent) -> grpc_v2::RequestHeadersEvent {
+fn convert_request_headers_to_grpc(
+    event: &crate::RequestHeadersEvent,
+) -> grpc_v2::RequestHeadersEvent {
     let metadata = Some(grpc_v2::RequestMetadata {
         correlation_id: event.metadata.correlation_id.clone(),
         request_id: event.metadata.request_id.clone(),
@@ -861,7 +885,9 @@ fn convert_body_chunk_to_grpc(event: &crate::RequestBodyChunkEvent) -> grpc_v2::
 /// Convert binary body chunk directly to gRPC (no base64 decode needed).
 ///
 /// This is the efficient path for binary transports (UDS binary mode, direct Bytes).
-fn convert_binary_body_chunk_to_grpc(event: &crate::BinaryRequestBodyChunkEvent) -> grpc_v2::BodyChunkEvent {
+fn convert_binary_body_chunk_to_grpc(
+    event: &crate::BinaryRequestBodyChunkEvent,
+) -> grpc_v2::BodyChunkEvent {
     grpc_v2::BodyChunkEvent {
         correlation_id: event.correlation_id.clone(),
         chunk_index: event.chunk_index,
@@ -874,7 +900,9 @@ fn convert_binary_body_chunk_to_grpc(event: &crate::BinaryRequestBodyChunkEvent)
     }
 }
 
-fn convert_response_headers_to_grpc(event: &crate::ResponseHeadersEvent) -> grpc_v2::ResponseHeadersEvent {
+fn convert_response_headers_to_grpc(
+    event: &crate::ResponseHeadersEvent,
+) -> grpc_v2::ResponseHeadersEvent {
     // Use iter_flat helper for cleaner iteration over flattened headers
     let headers: Vec<grpc_v2::Header> = iter_flat(&event.headers)
         .map(|(name, value)| grpc_v2::Header {
@@ -890,7 +918,9 @@ fn convert_response_headers_to_grpc(event: &crate::ResponseHeadersEvent) -> grpc
     }
 }
 
-fn convert_response_body_chunk_to_grpc(event: &crate::ResponseBodyChunkEvent) -> grpc_v2::BodyChunkEvent {
+fn convert_response_body_chunk_to_grpc(
+    event: &crate::ResponseBodyChunkEvent,
+) -> grpc_v2::BodyChunkEvent {
     // Convert through binary type to centralize the base64 decode logic
     let binary: crate::BinaryResponseBodyChunkEvent = event.into();
     convert_binary_response_body_chunk_to_grpc(&binary)
@@ -899,7 +929,9 @@ fn convert_response_body_chunk_to_grpc(event: &crate::ResponseBodyChunkEvent) ->
 /// Convert binary response body chunk directly to gRPC (no base64 decode needed).
 ///
 /// This is the efficient path for binary transports (UDS binary mode, direct Bytes).
-fn convert_binary_response_body_chunk_to_grpc(event: &crate::BinaryResponseBodyChunkEvent) -> grpc_v2::BodyChunkEvent {
+fn convert_binary_response_body_chunk_to_grpc(
+    event: &crate::BinaryResponseBodyChunkEvent,
+) -> grpc_v2::BodyChunkEvent {
     grpc_v2::BodyChunkEvent {
         correlation_id: event.correlation_id.clone(),
         chunk_index: event.chunk_index,
@@ -947,13 +979,20 @@ fn convert_response_from_grpc(resp: grpc_v2::AgentResponse) -> AgentResponse {
         .filter_map(convert_header_op_from_grpc)
         .collect();
 
-    let audit = resp.audit.map(|a| crate::AuditMetadata {
-        tags: a.tags,
-        rule_ids: a.rule_ids,
-        confidence: a.confidence,
-        reason_codes: a.reason_codes,
-        custom: a.custom.into_iter().map(|(k, v)| (k, serde_json::Value::String(v))).collect(),
-    }).unwrap_or_default();
+    let audit = resp
+        .audit
+        .map(|a| crate::AuditMetadata {
+            tags: a.tags,
+            rule_ids: a.rule_ids,
+            confidence: a.confidence,
+            reason_codes: a.reason_codes,
+            custom: a
+                .custom
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect(),
+        })
+        .unwrap_or_default();
 
     AgentResponse {
         version: PROTOCOL_VERSION_2,
@@ -984,7 +1023,10 @@ fn convert_header_op_from_grpc(op: grpc_v2::HeaderOp) -> Option<HeaderOp> {
     }
 }
 
-fn convert_metrics_from_grpc(report: grpc_v2::MetricsReport, agent_id: &str) -> crate::v2::MetricsReport {
+fn convert_metrics_from_grpc(
+    report: grpc_v2::MetricsReport,
+    agent_id: &str,
+) -> crate::v2::MetricsReport {
     use crate::v2::metrics::{CounterMetric, GaugeMetric, HistogramBucket, HistogramMetric};
 
     let counters = report
@@ -1021,7 +1063,10 @@ fn convert_metrics_from_grpc(report: grpc_v2::MetricsReport, agent_id: &str) -> 
             buckets: h
                 .buckets
                 .into_iter()
-                .map(|b| HistogramBucket { le: b.le, count: b.count })
+                .map(|b| HistogramBucket {
+                    le: b.le,
+                    count: b.count,
+                })
                 .collect(),
         })
         .collect();
@@ -1036,7 +1081,9 @@ fn convert_metrics_from_grpc(report: grpc_v2::MetricsReport, agent_id: &str) -> 
     }
 }
 
-fn convert_config_update_from_grpc(update: grpc_v2::ConfigUpdateRequest) -> crate::v2::ConfigUpdateRequest {
+fn convert_config_update_from_grpc(
+    update: grpc_v2::ConfigUpdateRequest,
+) -> crate::v2::ConfigUpdateRequest {
     use crate::v2::control::{ConfigUpdateType, RuleDefinition};
 
     let update_type = match update.update_type {

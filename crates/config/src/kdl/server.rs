@@ -10,8 +10,8 @@ use crate::server::{
     default_acme_storage, default_graceful_shutdown_timeout, default_keepalive_timeout,
     default_max_concurrent_streams, default_max_connections, default_renewal_days,
     default_request_timeout, default_worker_threads, AcmeChallengeType, AcmeConfig,
-    DnsProviderConfig, DnsProviderType, ListenerConfig, ListenerProtocol,
-    PropagationCheckConfig, ServerConfig, SniCertificate, TlsConfig,
+    DnsProviderConfig, DnsProviderType, ListenerConfig, ListenerProtocol, PropagationCheckConfig,
+    ServerConfig, SniCertificate, TlsConfig,
 };
 
 use super::helpers::{get_bool_entry, get_first_arg_string, get_int_entry, get_string_entry};

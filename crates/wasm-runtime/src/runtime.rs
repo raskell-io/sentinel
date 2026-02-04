@@ -90,7 +90,10 @@ impl WasmAgentRuntime {
             .write()
             .insert(component_id.to_string(), component);
 
-        info!(component_id = component_id, "WASM component compiled and cached");
+        info!(
+            component_id = component_id,
+            "WASM component compiled and cached"
+        );
         Ok(())
     }
 

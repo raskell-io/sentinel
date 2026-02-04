@@ -58,7 +58,9 @@ pub use manager::{InferenceCheckResult, InferenceRateLimitManager, InferenceRout
 pub use metrics::InferenceMetrics;
 pub use providers::{create_provider, InferenceProviderAdapter};
 pub use rate_limit::{TokenRateLimitResult, TokenRateLimiter};
-pub use streaming::{is_sse_response, StreamingTokenCounter, StreamingTokenResult, TokenCountSource};
+pub use streaming::{
+    is_sse_response, StreamingTokenCounter, StreamingTokenResult, TokenCountSource,
+};
 pub use tiktoken::{tiktoken_manager, TiktokenEncoding, TiktokenManager};
 pub use tokens::{TokenCounter, TokenEstimate, TokenSource};
 

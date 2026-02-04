@@ -39,7 +39,10 @@ pub struct TokenCounter {
 
 impl TokenCounter {
     /// Create a new token counter for the given provider
-    pub fn new(provider: Box<dyn InferenceProviderAdapter>, estimation_method: TokenEstimation) -> Self {
+    pub fn new(
+        provider: Box<dyn InferenceProviderAdapter>,
+        estimation_method: TokenEstimation,
+    ) -> Self {
         Self {
             provider,
             estimation_method,
@@ -52,7 +55,9 @@ impl TokenCounter {
         let model = self.provider.extract_model(headers, body);
 
         // Estimate based on body content
-        let tokens = self.provider.estimate_request_tokens(body, self.estimation_method);
+        let tokens = self
+            .provider
+            .estimate_request_tokens(body, self.estimation_method);
 
         trace!(
             provider = self.provider.name(),
@@ -132,7 +137,8 @@ mod tests {
         let provider = create_provider(&InferenceProvider::OpenAi);
         let counter = TokenCounter::new(provider, TokenEstimation::Chars);
 
-        let body = br#"{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello world"}]}"#;
+        let body =
+            br#"{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello world"}]}"#;
         let headers = HeaderMap::new();
 
         let estimate = counter.estimate_request(&headers, body);

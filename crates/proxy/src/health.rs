@@ -217,27 +217,33 @@ impl ActiveHealthChecker {
 
                 if let Some(ref readiness_config) = readiness {
                     // Create composite check with sub-checks
-                    let inference_probe = readiness_config.inference_probe.as_ref().map(|cfg| {
-                        InferenceProbeCheck {
-                            config: cfg.clone(),
-                            timeout: Duration::from_secs(cfg.timeout_secs),
-                        }
-                    });
+                    let inference_probe =
+                        readiness_config
+                            .inference_probe
+                            .as_ref()
+                            .map(|cfg| InferenceProbeCheck {
+                                config: cfg.clone(),
+                                timeout: Duration::from_secs(cfg.timeout_secs),
+                            });
 
-                    let model_status = readiness_config.model_status.as_ref().map(|cfg| {
-                        ModelStatusCheck {
-                            config: cfg.clone(),
-                            timeout: Duration::from_secs(cfg.timeout_secs),
-                        }
-                    });
+                    let model_status =
+                        readiness_config
+                            .model_status
+                            .as_ref()
+                            .map(|cfg| ModelStatusCheck {
+                                config: cfg.clone(),
+                                timeout: Duration::from_secs(cfg.timeout_secs),
+                            });
 
-                    let queue_depth = readiness_config.queue_depth.as_ref().map(|cfg| {
-                        QueueDepthCheck {
-                            config: cfg.clone(),
-                            models_endpoint: endpoint.clone(),
-                            timeout: Duration::from_secs(cfg.timeout_secs),
-                        }
-                    });
+                    let queue_depth =
+                        readiness_config
+                            .queue_depth
+                            .as_ref()
+                            .map(|cfg| QueueDepthCheck {
+                                config: cfg.clone(),
+                                models_endpoint: endpoint.clone(),
+                                timeout: Duration::from_secs(cfg.timeout_secs),
+                            });
 
                     Arc::new(CompositeInferenceHealthCheck {
                         base_check,
@@ -717,10 +723,7 @@ impl HealthCheckImpl for InferenceHealthCheck {
                 // Check if each expected model is mentioned in the response
                 for model in &self.expected_models {
                     if !body.contains(model) {
-                        return Err(format!(
-                            "Expected model '{}' not found in response",
-                            model
-                        ));
+                        return Err(format!("Expected model '{}' not found in response", model));
                     }
                 }
 
@@ -951,7 +954,11 @@ impl HealthCheckImpl for QueueDepthCheck {
             .parse()
             .map_err(|e| format!("Invalid address: {}", e))?;
 
-        let endpoint = self.config.endpoint.as_ref().unwrap_or(&self.models_endpoint);
+        let endpoint = self
+            .config
+            .endpoint
+            .as_ref()
+            .unwrap_or(&self.models_endpoint);
 
         // Connect with timeout
         let stream = time::timeout(self.timeout, TcpStream::connect(addr))
@@ -988,8 +995,7 @@ impl HealthCheckImpl for QueueDepthCheck {
 
         // Extract queue depth from header or body
         let queue_depth = if let Some(ref header_name) = self.config.header {
-            extract_header_value(&response_str, header_name)
-                .and_then(|v| v.parse::<u64>().ok())
+            extract_header_value(&response_str, header_name).and_then(|v| v.parse::<u64>().ok())
         } else if let Some(ref field) = self.config.body_field {
             if let Some(body_start) = response_str.find("\r\n\r\n") {
                 let body = &response_str[body_start + 4..];
@@ -1291,14 +1297,15 @@ impl TargetWarmthState {
             } else {
                 (current * count as u64 + latency_ms) / (count as u64 + 1)
             };
-            self.baseline_latency_ms.store(new_baseline, Ordering::Relaxed);
+            self.baseline_latency_ms
+                .store(new_baseline, Ordering::Relaxed);
         } else {
             // EWMA update: new = alpha * sample + (1 - alpha) * old
             // Using alpha = 0.1 for smooth updates
             let alpha = 0.1_f64;
-            let new_baseline =
-                (alpha * latency_ms as f64 + (1.0 - alpha) * current as f64) as u64;
-            self.baseline_latency_ms.store(new_baseline, Ordering::Relaxed);
+            let new_baseline = (alpha * latency_ms as f64 + (1.0 - alpha) * current as f64) as u64;
+            self.baseline_latency_ms
+                .store(new_baseline, Ordering::Relaxed);
         }
     }
 }
@@ -1454,7 +1461,9 @@ mod tests {
             checker.record_outcome("target1", true, None).await;
         }
         for _ in 0..3 {
-            checker.record_outcome("target1", false, Some("HTTP 503")).await;
+            checker
+                .record_outcome("target1", false, Some("HTTP 503"))
+                .await;
         }
 
         let failure_rate = checker.get_failure_rate("target1").await.unwrap();

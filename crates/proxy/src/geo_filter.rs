@@ -576,10 +576,7 @@ impl GeoDatabaseWatcher {
         let db_paths = self.manager.database_paths();
         let mut path_map: HashMap<PathBuf, Vec<String>> = HashMap::new();
         for (filter_id, path) in db_paths {
-            path_map
-                .entry(path)
-                .or_default()
-                .push(filter_id);
+            path_map.entry(path).or_default().push(filter_id);
         }
 
         if path_map.is_empty() {
@@ -605,9 +602,7 @@ impl GeoDatabaseWatcher {
                 }
             }
         })
-        .map_err(|e| {
-            GeoLookupError::LoadError(format!("Failed to create file watcher: {}", e))
-        })?;
+        .map_err(|e| GeoLookupError::LoadError(format!("Failed to create file watcher: {}", e)))?;
 
         // Store watcher
         *self.watcher.write() = Some(watcher);

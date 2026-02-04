@@ -78,7 +78,12 @@ mod redis_tests {
         // Should allow requests under the limit
         for i in 0..5 {
             let (outcome, count) = limiter.check(&format!("test-key-{}", i)).await.unwrap();
-            assert_eq!(outcome, RateLimitOutcome::Allowed, "Request {} should be allowed", i);
+            assert_eq!(
+                outcome,
+                RateLimitOutcome::Allowed,
+                "Request {} should be allowed",
+                i
+            );
             assert_eq!(count, 1, "First request for each key should have count 1");
         }
     }
@@ -97,12 +102,21 @@ mod redis_tests {
         // First 5 requests should be allowed
         for i in 0..5 {
             let (outcome, _) = limiter.check(key).await.unwrap();
-            assert_eq!(outcome, RateLimitOutcome::Allowed, "Request {} should be allowed", i);
+            assert_eq!(
+                outcome,
+                RateLimitOutcome::Allowed,
+                "Request {} should be allowed",
+                i
+            );
         }
 
         // 6th request should be limited
         let (outcome, count) = limiter.check(key).await.unwrap();
-        assert_eq!(outcome, RateLimitOutcome::Limited, "Request 6 should be limited");
+        assert_eq!(
+            outcome,
+            RateLimitOutcome::Limited,
+            "Request 6 should be limited"
+        );
         assert!(count > 5, "Count should be greater than limit");
     }
 
@@ -151,7 +165,11 @@ mod redis_tests {
 
         // Should be allowed again
         let (outcome, _) = limiter.check(key).await.unwrap();
-        assert_eq!(outcome, RateLimitOutcome::Allowed, "Should allow after window reset");
+        assert_eq!(
+            outcome,
+            RateLimitOutcome::Allowed,
+            "Should allow after window reset"
+        );
     }
 
     #[tokio::test]
@@ -244,9 +262,7 @@ mod redis_tests {
         for _ in 0..50 {
             let limiter = limiter.clone();
             let key = key.to_string();
-            handles.push(tokio::spawn(async move {
-                limiter.check(&key).await
-            }));
+            handles.push(tokio::spawn(async move { limiter.check(&key).await }));
         }
 
         // All should complete without error
@@ -362,7 +378,12 @@ mod memcached_tests {
         // Should allow requests under the limit
         for i in 0..5 {
             let (outcome, count) = limiter.check(&format!("mc-test-key-{}", i)).await.unwrap();
-            assert_eq!(outcome, RateLimitOutcome::Allowed, "Request {} should be allowed", i);
+            assert_eq!(
+                outcome,
+                RateLimitOutcome::Allowed,
+                "Request {} should be allowed",
+                i
+            );
             assert_eq!(count, 1, "First request for each key should have count 1");
         }
     }
@@ -381,12 +402,21 @@ mod memcached_tests {
         // First 5 requests should be allowed
         for i in 0..5 {
             let (outcome, _) = limiter.check(key).await.unwrap();
-            assert_eq!(outcome, RateLimitOutcome::Allowed, "Request {} should be allowed", i);
+            assert_eq!(
+                outcome,
+                RateLimitOutcome::Allowed,
+                "Request {} should be allowed",
+                i
+            );
         }
 
         // 6th request should be limited
         let (outcome, count) = limiter.check(key).await.unwrap();
-        assert_eq!(outcome, RateLimitOutcome::Limited, "Request 6 should be limited");
+        assert_eq!(
+            outcome,
+            RateLimitOutcome::Limited,
+            "Request 6 should be limited"
+        );
         assert!(count > 5, "Count should be greater than limit");
     }
 
@@ -435,7 +465,11 @@ mod memcached_tests {
 
         // Should be allowed again
         let (outcome, _) = limiter.check(key).await.unwrap();
-        assert_eq!(outcome, RateLimitOutcome::Allowed, "Should allow after TTL expiry");
+        assert_eq!(
+            outcome,
+            RateLimitOutcome::Allowed,
+            "Should allow after TTL expiry"
+        );
     }
 
     #[tokio::test]
@@ -570,7 +604,10 @@ mod fallback_tests {
 
 // Tests that run without external dependencies
 mod unit_tests {
-    #[cfg(any(feature = "distributed-rate-limit", feature = "distributed-rate-limit-memcached"))]
+    #[cfg(any(
+        feature = "distributed-rate-limit",
+        feature = "distributed-rate-limit-memcached"
+    ))]
     use std::sync::atomic::Ordering;
 
     #[cfg(feature = "distributed-rate-limit")]
@@ -579,7 +616,10 @@ mod unit_tests {
     #[cfg(feature = "distributed-rate-limit-memcached")]
     use sentinel_proxy::memcached_rate_limit::MemcachedRateLimitStats;
 
-    #[cfg(any(feature = "distributed-rate-limit", feature = "distributed-rate-limit-memcached"))]
+    #[cfg(any(
+        feature = "distributed-rate-limit",
+        feature = "distributed-rate-limit-memcached"
+    ))]
     use sentinel_proxy::rate_limit::RateLimitOutcome;
 
     #[cfg(feature = "distributed-rate-limit")]

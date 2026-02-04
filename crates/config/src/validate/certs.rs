@@ -31,20 +31,14 @@ pub async fn validate_certificates(config: &Config) -> ValidationResult {
                 if storage_path.exists() && !is_dir_writable(storage_path) {
                     result.add_error(ValidationError::new(
                         ErrorCategory::Certificate,
-                        format!(
-                            "ACME storage directory not writable: {:?}",
-                            storage_path
-                        ),
+                        format!("ACME storage directory not writable: {:?}", storage_path),
                     ));
                 }
 
                 // Check if existing ACME certificates need renewal
                 let primary_domain = acme_config.domains.first();
                 if let Some(domain) = primary_domain {
-                    let cert_path = storage_path
-                        .join("domains")
-                        .join(domain)
-                        .join("cert.pem");
+                    let cert_path = storage_path.join("domains").join(domain).join("cert.pem");
                     if cert_path.exists() {
                         match load_and_validate_cert(&cert_path) {
                             Ok(Some(expiry_warning)) => {
@@ -175,11 +169,7 @@ fn load_and_validate_cert(cert_path: &Path) -> Result<Option<ValidationWarning>,
 
     // Check expiry
     let now = SystemTime::now();
-    let not_after = cert
-        .validity()
-        .not_after
-        .to_datetime()
-        .unix_timestamp() as u64;
+    let not_after = cert.validity().not_after.to_datetime().unix_timestamp() as u64;
     let expiry_time = SystemTime::UNIX_EPOCH + Duration::from_secs(not_after);
 
     if expiry_time < now {

@@ -139,7 +139,12 @@ impl InferenceRateLimitManager {
     pub fn has_cost_attribution(&self, route_id: &str) -> bool {
         self.routes
             .get(route_id)
-            .map(|s| s.cost_calculator.as_ref().map(|c| c.is_enabled()).unwrap_or(false))
+            .map(|s| {
+                s.cost_calculator
+                    .as_ref()
+                    .map(|c| c.is_enabled())
+                    .unwrap_or(false)
+            })
             .unwrap_or(false)
     }
 
@@ -292,7 +297,11 @@ impl InferenceRateLimitManager {
         let (active_keys, tokens_per_minute, requests_per_minute) =
             if let Some(ref rate_limiter) = state.rate_limiter {
                 let stats = rate_limiter.stats();
-                (stats.active_keys, stats.tokens_per_minute, stats.requests_per_minute)
+                (
+                    stats.active_keys,
+                    stats.tokens_per_minute,
+                    stats.requests_per_minute,
+                )
             } else {
                 (0, 0, None)
             };
@@ -303,7 +312,11 @@ impl InferenceRateLimitManager {
             tokens_per_minute,
             requests_per_minute,
             has_budget: state.budget_tracker.is_some(),
-            has_cost_attribution: state.cost_calculator.as_ref().map(|c| c.is_enabled()).unwrap_or(false),
+            has_cost_attribution: state
+                .cost_calculator
+                .as_ref()
+                .map(|c| c.is_enabled())
+                .unwrap_or(false),
         })
     }
 

@@ -162,7 +162,10 @@ impl BinaryFrame {
     }
 
     /// Write frame to writer.
-    pub async fn write<W: AsyncWrite + Unpin>(&self, writer: &mut W) -> Result<(), AgentProtocolError> {
+    pub async fn write<W: AsyncWrite + Unpin>(
+        &self,
+        writer: &mut W,
+    ) -> Result<(), AgentProtocolError> {
         let encoded = self.encode();
         writer.write_all(&encoded).await?;
         writer.flush().await?;
@@ -353,7 +356,11 @@ impl BinaryAgentResponse {
             Decision::Allow => {
                 buf.put_u8(0);
             }
-            Decision::Block { status, body, headers } => {
+            Decision::Block {
+                status,
+                body,
+                headers,
+            } => {
                 buf.put_u8(1);
                 buf.put_u16(*status);
                 put_optional_string(&mut buf, body.as_deref());
@@ -372,7 +379,10 @@ impl BinaryAgentResponse {
                 put_string(&mut buf, url);
                 buf.put_u16(*status);
             }
-            Decision::Challenge { challenge_type, params } => {
+            Decision::Challenge {
+                challenge_type,
+                params,
+            } => {
                 buf.put_u8(3);
                 put_string(&mut buf, challenge_type);
                 buf.put_u16(params.len() as u16);
@@ -439,7 +449,11 @@ impl BinaryAgentResponse {
                 } else {
                     None
                 };
-                Decision::Block { status, body, headers }
+                Decision::Block {
+                    status,
+                    body,
+                    headers,
+                }
             }
             2 => {
                 let url = get_string(&mut data)?;
@@ -465,7 +479,10 @@ impl BinaryAgentResponse {
                     let v = get_string(&mut data)?;
                     params.insert(k, v);
                 }
-                Decision::Challenge { challenge_type, params }
+                Decision::Challenge {
+                    challenge_type,
+                    params,
+                }
             }
             _ => {
                 return Err(AgentProtocolError::InvalidMessage(format!(
@@ -661,8 +678,14 @@ mod tests {
             uri: "/api/test".to_string(),
             headers: {
                 let mut h = HashMap::new();
-                h.insert("content-type".to_string(), vec!["application/json".to_string()]);
-                h.insert("x-custom".to_string(), vec!["value1".to_string(), "value2".to_string()]);
+                h.insert(
+                    "content-type".to_string(),
+                    vec!["application/json".to_string()],
+                );
+                h.insert(
+                    "x-custom".to_string(),
+                    vec!["value1".to_string(), "value2".to_string()],
+                );
                 h
             },
             client_ip: "192.168.1.1".to_string(),
@@ -677,7 +700,10 @@ mod tests {
         assert_eq!(decoded.uri, "/api/test");
         assert_eq!(decoded.client_ip, "192.168.1.1");
         assert_eq!(decoded.client_port, 12345);
-        assert_eq!(decoded.headers.get("content-type").unwrap(), &vec!["application/json".to_string()]);
+        assert_eq!(
+            decoded.headers.get("content-type").unwrap(),
+            &vec!["application/json".to_string()]
+        );
     }
 
     #[test]
@@ -739,7 +765,11 @@ mod tests {
 
         assert_eq!(decoded.correlation_id, "req-block");
         match decoded.decision {
-            Decision::Block { status, body, headers } => {
+            Decision::Block {
+                status,
+                body,
+                headers,
+            } => {
                 assert_eq!(status, 403);
                 assert_eq!(body, Some("Forbidden".to_string()));
                 assert!(headers.is_none());

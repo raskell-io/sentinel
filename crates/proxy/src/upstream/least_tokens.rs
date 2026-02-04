@@ -32,7 +32,7 @@ impl Default for LeastTokensQueuedConfig {
     fn default() -> Self {
         Self {
             ewma_alpha: 0.3,
-            default_tps: 100.0,  // Conservative default
+            default_tps: 100.0, // Conservative default
             min_tps: 1.0,
         }
     }
@@ -176,13 +176,15 @@ impl LeastTokensQueuedBalancer {
 
     /// Get current metrics for a target (for debugging/observability)
     pub fn target_metrics(&self, address: &str) -> Option<LeastTokensQueuedTargetStats> {
-        self.metrics.get(address).map(|m| LeastTokensQueuedTargetStats {
-            queued_tokens: m.queued_tokens.load(Ordering::Relaxed),
-            queued_requests: m.queued_requests.load(Ordering::Relaxed),
-            tokens_per_second: *m.tps_ewma.lock(),
-            total_tokens: m.total_tokens.load(Ordering::Relaxed),
-            total_requests: m.total_requests.load(Ordering::Relaxed),
-        })
+        self.metrics
+            .get(address)
+            .map(|m| LeastTokensQueuedTargetStats {
+                queued_tokens: m.queued_tokens.load(Ordering::Relaxed),
+                queued_requests: m.queued_requests.load(Ordering::Relaxed),
+                tokens_per_second: *m.tps_ewma.lock(),
+                total_tokens: m.total_tokens.load(Ordering::Relaxed),
+                total_requests: m.total_requests.load(Ordering::Relaxed),
+            })
     }
 
     /// Get all targets' current queue times for debugging
@@ -344,7 +346,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_selection() {
-        let balancer = LeastTokensQueuedBalancer::new(test_targets(), LeastTokensQueuedConfig::default());
+        let balancer =
+            LeastTokensQueuedBalancer::new(test_targets(), LeastTokensQueuedConfig::default());
 
         // All targets start with 0 queued tokens, so selection should work
         let selection = balancer.select(None).await.unwrap();
@@ -353,7 +356,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_selects_least_queued() {
-        let balancer = LeastTokensQueuedBalancer::new(test_targets(), LeastTokensQueuedConfig::default());
+        let balancer =
+            LeastTokensQueuedBalancer::new(test_targets(), LeastTokensQueuedConfig::default());
 
         // Add tokens to server1 and server2
         balancer.enqueue_tokens("server1:8080", 1000);
@@ -366,7 +370,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_dequeue_updates_tps() {
-        let balancer = LeastTokensQueuedBalancer::new(test_targets(), LeastTokensQueuedConfig::default());
+        let balancer =
+            LeastTokensQueuedBalancer::new(test_targets(), LeastTokensQueuedConfig::default());
 
         // Enqueue and then dequeue with timing
         balancer.enqueue_tokens("server1:8080", 1000);
@@ -380,7 +385,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_unhealthy_target_skipped() {
-        let balancer = LeastTokensQueuedBalancer::new(test_targets(), LeastTokensQueuedConfig::default());
+        let balancer =
+            LeastTokensQueuedBalancer::new(test_targets(), LeastTokensQueuedConfig::default());
 
         // Mark server3 as unhealthy
         balancer.report_health("server3:8080", false).await;

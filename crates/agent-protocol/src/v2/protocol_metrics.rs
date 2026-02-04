@@ -82,25 +82,29 @@ impl ProtocolMetrics {
     /// Increment serialization errors.
     #[inline]
     pub fn inc_serialization_errors(&self) {
-        self.serialization_errors_total.fetch_add(1, Ordering::Relaxed);
+        self.serialization_errors_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record flow control pause.
     #[inline]
     pub fn record_flow_pause(&self) {
-        self.flow_control_pauses_total.fetch_add(1, Ordering::Relaxed);
+        self.flow_control_pauses_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record flow control resume.
     #[inline]
     pub fn record_flow_resume(&self) {
-        self.flow_control_resumes_total.fetch_add(1, Ordering::Relaxed);
+        self.flow_control_resumes_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record flow control rejection.
     #[inline]
     pub fn record_flow_rejection(&self) {
-        self.flow_control_rejections_total.fetch_add(1, Ordering::Relaxed);
+        self.flow_control_rejections_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Set in-flight requests gauge.
@@ -124,7 +128,8 @@ impl ProtocolMetrics {
     /// Set buffer utilization percentage.
     #[inline]
     pub fn set_buffer_utilization(&self, percent: u64) {
-        self.buffer_utilization_percent.store(percent.min(100), Ordering::Relaxed);
+        self.buffer_utilization_percent
+            .store(percent.min(100), Ordering::Relaxed);
     }
 
     /// Set healthy connections gauge.
@@ -161,7 +166,9 @@ impl ProtocolMetrics {
             serialization_errors_total: self.serialization_errors_total.load(Ordering::Relaxed),
             flow_control_pauses_total: self.flow_control_pauses_total.load(Ordering::Relaxed),
             flow_control_resumes_total: self.flow_control_resumes_total.load(Ordering::Relaxed),
-            flow_control_rejections_total: self.flow_control_rejections_total.load(Ordering::Relaxed),
+            flow_control_rejections_total: self
+                .flow_control_rejections_total
+                .load(Ordering::Relaxed),
             in_flight_requests: self.in_flight_requests.load(Ordering::Relaxed),
             buffer_utilization_percent: self.buffer_utilization_percent.load(Ordering::Relaxed),
             healthy_connections: self.healthy_connections.load(Ordering::Relaxed),
@@ -279,7 +286,9 @@ pub struct HistogramMetric {
 impl Default for HistogramMetric {
     fn default() -> Self {
         // Default buckets: 10μs, 50μs, 100μs, 500μs, 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s
-        let buckets = vec![10, 50, 100, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000];
+        let buckets = vec![
+            10, 50, 100, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000,
+        ];
         let counts = (0..=buckets.len()).map(|_| AtomicU64::new(0)).collect();
         Self {
             buckets,
@@ -312,7 +321,11 @@ impl HistogramMetric {
         self.count.fetch_add(1, Ordering::Relaxed);
 
         // Find bucket and increment
-        let bucket_idx = self.buckets.iter().position(|&b| micros <= b).unwrap_or(self.buckets.len());
+        let bucket_idx = self
+            .buckets
+            .iter()
+            .position(|&b| micros <= b)
+            .unwrap_or(self.buckets.len());
         self.counts[bucket_idx].fetch_add(1, Ordering::Relaxed);
     }
 
@@ -320,7 +333,11 @@ impl HistogramMetric {
     pub fn snapshot(&self) -> HistogramSnapshot {
         HistogramSnapshot {
             buckets: self.buckets.clone(),
-            counts: self.counts.iter().map(|c| c.load(Ordering::Relaxed)).collect(),
+            counts: self
+                .counts
+                .iter()
+                .map(|c| c.load(Ordering::Relaxed))
+                .collect(),
             sum: self.sum.load(Ordering::Relaxed),
             count: self.count.load(Ordering::Relaxed),
         }

@@ -101,8 +101,15 @@ impl MetricsManager {
     /// Register a pool metrics collector for a v2 agent.
     ///
     /// Pool metrics will be included in the /metrics output.
-    pub async fn register_pool_metrics(&self, agent_id: impl Into<String>, collector: Arc<MetricsCollector>) {
-        self.pool_metrics.write().await.insert(agent_id.into(), collector);
+    pub async fn register_pool_metrics(
+        &self,
+        agent_id: impl Into<String>,
+        collector: Arc<MetricsCollector>,
+    ) {
+        self.pool_metrics
+            .write()
+            .await
+            .insert(agent_id.into(), collector);
     }
 
     /// Unregister a pool metrics collector.
@@ -303,7 +310,10 @@ impl MetricsManager {
     /// Increment cache hits/misses.
     pub fn inc_cache_access(&self, hit: bool) {
         let mut labels = HashMap::new();
-        labels.insert("result".to_string(), if hit { "hit" } else { "miss" }.to_string());
+        labels.insert(
+            "result".to_string(),
+            if hit { "hit" } else { "miss" }.to_string(),
+        );
 
         self.aggregator.increment_counter(
             "sentinel_cache_accesses_total",
@@ -471,9 +481,15 @@ mod tests {
         manager.observe_request_duration("GET", "/api", 0.5);
 
         let response = manager.handle_metrics_request();
-        assert!(response.body.contains("sentinel_request_duration_seconds_bucket"));
-        assert!(response.body.contains("sentinel_request_duration_seconds_sum"));
-        assert!(response.body.contains("sentinel_request_duration_seconds_count"));
+        assert!(response
+            .body
+            .contains("sentinel_request_duration_seconds_bucket"));
+        assert!(response
+            .body
+            .contains("sentinel_request_duration_seconds_sum"));
+        assert!(response
+            .body
+            .contains("sentinel_request_duration_seconds_count"));
         // Verify count is 3 (with labels, the format is {labels} 3)
         assert!(response.body.contains("} 3\n") || response.body.contains(" 3\n"));
     }

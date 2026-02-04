@@ -34,7 +34,11 @@ impl std::fmt::Display for FallbackReason {
             FallbackReason::LatencyThreshold {
                 observed_ms,
                 threshold_ms,
-            } => write!(f, "latency_threshold_{}ms_exceeded_{}ms", observed_ms, threshold_ms),
+            } => write!(
+                f,
+                "latency_threshold_{}ms_exceeded_{}ms",
+                observed_ms, threshold_ms
+            ),
             FallbackReason::ErrorCode(code) => write!(f, "error_code_{}", code),
             FallbackReason::ConnectionError(msg) => write!(f, "connection_error_{}", msg),
         }
@@ -505,7 +509,11 @@ impl RequestContext {
     #[inline]
     pub fn traceparent(&self) -> Option<String> {
         self.otel_span.as_ref().map(|span| {
-            let sampled = self.trace_context.as_ref().map(|c| c.sampled).unwrap_or(true);
+            let sampled = self
+                .trace_context
+                .as_ref()
+                .map(|c| c.sampled)
+                .unwrap_or(true);
             crate::otel::create_traceparent(&span.trace_id, &span.span_id, sampled)
         })
     }
@@ -757,15 +765,15 @@ mod tests {
         assert_eq!(ctx.upstream(), Some("anthropic-fallback"));
 
         // Record second fallback
-        ctx.record_fallback(
-            FallbackReason::ErrorCode(503),
-            "local-gpu",
-        );
+        ctx.record_fallback(FallbackReason::ErrorCode(503), "local-gpu");
 
         assert_eq!(ctx.fallback_attempt(), 2);
         assert_eq!(
             ctx.tried_upstreams(),
-            &["openai-primary".to_string(), "anthropic-fallback".to_string()]
+            &[
+                "openai-primary".to_string(),
+                "anthropic-fallback".to_string()
+            ]
         );
         assert!(matches!(
             ctx.fallback_reason(),

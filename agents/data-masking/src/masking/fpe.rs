@@ -168,7 +168,13 @@ impl FpeCipher {
     }
 
     /// Generate a round key using AES and SHA-256.
-    fn generate_round_key(&self, tweak: &str, round: usize, data: &[usize], radix: usize) -> Vec<u8> {
+    fn generate_round_key(
+        &self,
+        tweak: &str,
+        round: usize,
+        data: &[usize],
+        radix: usize,
+    ) -> Vec<u8> {
         // Build input for key derivation
         let mut hasher = Sha256::new();
         hasher.update(self.key);

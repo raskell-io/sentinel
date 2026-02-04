@@ -168,7 +168,8 @@ pub fn parse_service(node: &kdl::KdlNode) -> Result<ServiceConfig> {
                 return Err(anyhow::anyhow!(
                     "Unknown block '{}' in service '{}'\n\
                      Valid blocks are: listener, upstreams, routes, agents, filters, limits",
-                    other, id
+                    other,
+                    id
                 ));
             }
         }
@@ -217,7 +218,8 @@ fn parse_single_listener(node: &kdl::KdlNode) -> Result<ListenerConfig> {
         other => {
             return Err(anyhow::anyhow!(
                 "Invalid protocol '{}' for listener '{}'. Valid protocols: http, https, h2, h3",
-                other, id
+                other,
+                id
             ))
         }
     };

@@ -47,6 +47,4 @@ pub use host::WasmAgentInstance;
 pub use runtime::WasmAgentRuntime;
 
 /// Re-export types from agent-protocol for convenience
-pub use sentinel_agent_protocol::{
-    AgentResponse, Decision, EventType, HeaderOp, RequestMetadata,
-};
+pub use sentinel_agent_protocol::{AgentResponse, Decision, EventType, HeaderOp, RequestMetadata};

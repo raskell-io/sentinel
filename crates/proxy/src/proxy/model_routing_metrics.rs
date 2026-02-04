@@ -103,9 +103,7 @@ impl ModelRoutingMetrics {
     ///
     /// Called when no model pattern matched and the default upstream is used.
     pub fn record_default_upstream(&self, route: &str) {
-        self.default_upstream_used
-            .with_label_values(&[route])
-            .inc();
+        self.default_upstream_used.with_label_values(&[route]).inc();
     }
 
     /// Record request with no model header.

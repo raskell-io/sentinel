@@ -135,10 +135,7 @@ impl BundleStatus {
 
         // Agent rows
         for agent in &self.agents {
-            let installed = agent
-                .installed_version
-                .as_deref()
-                .unwrap_or("-");
+            let installed = agent.installed_version.as_deref().unwrap_or("-");
             let status_icon = match agent.status {
                 Status::UpToDate => "✓",
                 Status::Outdated => "↑",
@@ -315,14 +312,12 @@ mod tests {
     fn test_is_complete_false_not_installed() {
         let status = BundleStatus {
             bundle_version: "26.01_1".to_string(),
-            agents: vec![
-                AgentStatus {
-                    name: "waf".to_string(),
-                    expected_version: "0.2.0".to_string(),
-                    installed_version: None,
-                    status: Status::NotInstalled,
-                },
-            ],
+            agents: vec![AgentStatus {
+                name: "waf".to_string(),
+                expected_version: "0.2.0".to_string(),
+                installed_version: None,
+                status: Status::NotInstalled,
+            }],
             paths: InstallPaths::user(),
         };
 
@@ -333,14 +328,12 @@ mod tests {
     fn test_is_complete_false_outdated() {
         let status = BundleStatus {
             bundle_version: "26.01_1".to_string(),
-            agents: vec![
-                AgentStatus {
-                    name: "waf".to_string(),
-                    expected_version: "0.2.0".to_string(),
-                    installed_version: Some("0.1.0".to_string()),
-                    status: Status::Outdated,
-                },
-            ],
+            agents: vec![AgentStatus {
+                name: "waf".to_string(),
+                expected_version: "0.2.0".to_string(),
+                installed_version: Some("0.1.0".to_string()),
+                status: Status::Outdated,
+            }],
             paths: InstallPaths::user(),
         };
 
@@ -385,14 +378,12 @@ mod tests {
     fn test_pending_agents_empty() {
         let status = BundleStatus {
             bundle_version: "26.01_1".to_string(),
-            agents: vec![
-                AgentStatus {
-                    name: "waf".to_string(),
-                    expected_version: "0.2.0".to_string(),
-                    installed_version: Some("0.2.0".to_string()),
-                    status: Status::UpToDate,
-                },
-            ],
+            agents: vec![AgentStatus {
+                name: "waf".to_string(),
+                expected_version: "0.2.0".to_string(),
+                installed_version: Some("0.2.0".to_string()),
+                status: Status::UpToDate,
+            }],
             paths: InstallPaths::user(),
         };
 

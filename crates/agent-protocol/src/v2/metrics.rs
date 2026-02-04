@@ -47,7 +47,12 @@ pub struct CounterMetric {
 
 impl CounterMetric {
     pub fn new(name: impl Into<String>, value: u64) -> Self {
-        Self { name: name.into(), help: None, labels: HashMap::new(), value }
+        Self {
+            name: name.into(),
+            help: None,
+            labels: HashMap::new(),
+            value,
+        }
     }
 }
 
@@ -64,7 +69,12 @@ pub struct GaugeMetric {
 
 impl GaugeMetric {
     pub fn new(name: impl Into<String>, value: f64) -> Self {
-        Self { name: name.into(), help: None, labels: HashMap::new(), value }
+        Self {
+            name: name.into(),
+            help: None,
+            labels: HashMap::new(),
+            value,
+        }
     }
 }
 
@@ -90,27 +100,54 @@ pub struct HistogramBucket {
 }
 
 impl HistogramBucket {
-    pub fn new(le: f64) -> Self { Self { le, count: 0 } }
-    pub fn infinity() -> Self { Self { le: f64::INFINITY, count: 0 } }
+    pub fn new(le: f64) -> Self {
+        Self { le, count: 0 }
+    }
+    pub fn infinity() -> Self {
+        Self {
+            le: f64::INFINITY,
+            count: 0,
+        }
+    }
 }
 
 fn serialize_le<S>(le: &f64, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if le.is_infinite() { serializer.serialize_str("+Inf") } else { serializer.serialize_f64(*le) }
+where
+    S: serde::Serializer,
+{
+    if le.is_infinite() {
+        serializer.serialize_str("+Inf")
+    } else {
+        serializer.serialize_f64(*le)
+    }
 }
 
 fn deserialize_le<'de, D>(deserializer: D) -> Result<f64, D::Error>
-where D: serde::Deserializer<'de> {
+where
+    D: serde::Deserializer<'de>,
+{
     use serde::de::{self, Visitor};
     struct LeVisitor;
     impl<'de> Visitor<'de> for LeVisitor {
         type Value = f64;
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str("float or +Inf") }
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> { Ok(v) }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> { Ok(v as f64) }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> { Ok(v as f64) }
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("float or +Inf")
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(v as f64)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(v as f64)
+        }
         fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            if v == "+Inf" || v == "Inf" { Ok(f64::INFINITY) } else { v.parse().map_err(de::Error::custom) }
+            if v == "+Inf" || v == "Inf" {
+                Ok(f64::INFINITY)
+            } else {
+                v.parse().map_err(de::Error::custom)
+            }
         }
     }
     deserializer.deserialize_any(LeVisitor)

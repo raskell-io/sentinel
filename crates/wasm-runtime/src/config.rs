@@ -35,11 +35,21 @@ pub struct WasmAgentConfig {
     pub max_instances: u32,
 }
 
-fn default_fuel_enabled() -> bool { true }
-fn default_epoch_enabled() -> bool { true }
-fn default_epoch_tick_interval() -> Duration { Duration::from_millis(1) }
-fn default_cache_enabled() -> bool { true }
-fn default_max_instances() -> u32 { 4 }
+fn default_fuel_enabled() -> bool {
+    true
+}
+fn default_epoch_enabled() -> bool {
+    true
+}
+fn default_epoch_tick_interval() -> Duration {
+    Duration::from_millis(1)
+}
+fn default_cache_enabled() -> bool {
+    true
+}
+fn default_max_instances() -> u32 {
+    4
+}
 
 impl Default for WasmAgentConfig {
     fn default() -> Self {
@@ -123,13 +133,27 @@ pub struct WasmResourceLimits {
     pub max_function_size: usize,
 }
 
-fn default_max_memory() -> usize { 64 * 1024 * 1024 } // 64 MB
-fn default_max_execution_time() -> Duration { Duration::from_millis(100) }
-fn default_max_fuel() -> u64 { 10_000_000 }
-fn default_max_table_elements() -> u32 { 10_000 }
-fn default_max_tables() -> u32 { 1 }
-fn default_max_memories() -> u32 { 1 }
-fn default_max_function_size() -> usize { 1024 * 1024 } // 1 MB
+fn default_max_memory() -> usize {
+    64 * 1024 * 1024
+} // 64 MB
+fn default_max_execution_time() -> Duration {
+    Duration::from_millis(100)
+}
+fn default_max_fuel() -> u64 {
+    10_000_000
+}
+fn default_max_table_elements() -> u32 {
+    10_000
+}
+fn default_max_tables() -> u32 {
+    1
+}
+fn default_max_memories() -> u32 {
+    1
+}
+fn default_max_function_size() -> usize {
+    1024 * 1024
+} // 1 MB
 
 impl Default for WasmResourceLimits {
     fn default() -> Self {

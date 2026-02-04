@@ -107,14 +107,16 @@ impl WeightedLeastConnBalancer {
         }
 
         match self.config.tie_breaker {
-            TieBreakerStrategy::HigherWeight => {
-                candidates.iter().max_by_key(|(t, _)| t.weight).map(|(t, _)| *t)
-            }
+            TieBreakerStrategy::HigherWeight => candidates
+                .iter()
+                .max_by_key(|(t, _)| t.weight)
+                .map(|(t, _)| *t),
             TieBreakerStrategy::FewerConnections => {
                 candidates.iter().min_by_key(|(_, c)| *c).map(|(t, _)| *t)
             }
             TieBreakerStrategy::RoundRobin => {
-                let idx = self.tie_breaker_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
+                let idx =
+                    self.tie_breaker_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
                 Some(candidates[idx].0)
             }
         }
@@ -170,7 +172,9 @@ impl LoadBalancer for WeightedLeastConnBalancer {
             .map(|(t, c, _)| (*t, *c))
             .collect();
 
-        let target = self.break_tie(&candidates).ok_or(SentinelError::NoHealthyUpstream)?;
+        let target = self
+            .break_tie(&candidates)
+            .ok_or(SentinelError::NoHealthyUpstream)?;
 
         // Increment connection count
         drop(conns);
@@ -179,7 +183,12 @@ impl LoadBalancer for WeightedLeastConnBalancer {
             *conns.entry(target.full_address()).or_insert(0) += 1;
         }
 
-        let conn_count = *self.connections.read().await.get(&target.full_address()).unwrap_or(&0);
+        let conn_count = *self
+            .connections
+            .read()
+            .await
+            .get(&target.full_address())
+            .unwrap_or(&0);
         let score = self.calculate_score(conn_count, target.weight);
 
         trace!(
@@ -241,9 +250,9 @@ mod tests {
 
     fn make_weighted_targets() -> Vec<UpstreamTarget> {
         vec![
-            UpstreamTarget::new("backend-small", 8080, 50),  // Low capacity
+            UpstreamTarget::new("backend-small", 8080, 50), // Low capacity
             UpstreamTarget::new("backend-medium", 8080, 100), // Medium capacity
-            UpstreamTarget::new("backend-large", 8080, 200),  // High capacity
+            UpstreamTarget::new("backend-large", 8080, 200), // High capacity
         ]
     }
 
@@ -265,9 +274,9 @@ mod tests {
         // Add connections proportional to weight
         {
             let mut conns = balancer.connections.write().await;
-            conns.insert("backend-small:8080".to_string(), 5);   // 5/50 = 0.10
+            conns.insert("backend-small:8080".to_string(), 5); // 5/50 = 0.10
             conns.insert("backend-medium:8080".to_string(), 10); // 10/100 = 0.10
-            conns.insert("backend-large:8080".to_string(), 20);  // 20/200 = 0.10
+            conns.insert("backend-large:8080".to_string(), 20); // 20/200 = 0.10
         }
 
         // All have same ratio, tie-breaker picks highest weight
@@ -283,9 +292,9 @@ mod tests {
         // backend-large has better ratio
         {
             let mut conns = balancer.connections.write().await;
-            conns.insert("backend-small:8080".to_string(), 10);  // 10/50 = 0.20
+            conns.insert("backend-small:8080".to_string(), 10); // 10/50 = 0.20
             conns.insert("backend-medium:8080".to_string(), 15); // 15/100 = 0.15
-            conns.insert("backend-large:8080".to_string(), 20);  // 20/200 = 0.10 (best)
+            conns.insert("backend-large:8080".to_string(), 20); // 20/200 = 0.10 (best)
         }
 
         let selection = balancer.select(None).await.unwrap();
@@ -300,9 +309,9 @@ mod tests {
         // backend-small has best ratio despite low weight
         {
             let mut conns = balancer.connections.write().await;
-            conns.insert("backend-small:8080".to_string(), 2);   // 2/50 = 0.04 (best)
+            conns.insert("backend-small:8080".to_string(), 2); // 2/50 = 0.04 (best)
             conns.insert("backend-medium:8080".to_string(), 20); // 20/100 = 0.20
-            conns.insert("backend-large:8080".to_string(), 50);  // 50/200 = 0.25
+            conns.insert("backend-large:8080".to_string(), 50); // 50/200 = 0.25
         }
 
         let selection = balancer.select(None).await.unwrap();

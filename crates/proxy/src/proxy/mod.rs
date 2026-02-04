@@ -212,9 +212,8 @@ impl SentinelProxy {
 
         // Create metrics collectors
         let metrics = Arc::new(sentinel_common::observability::RequestMetrics::new()?);
-        let scoped_metrics = Arc::new(
-            ScopedMetrics::new().context("Failed to create scoped metrics collector")?,
-        );
+        let scoped_metrics =
+            Arc::new(ScopedMetrics::new().context("Failed to create scoped metrics collector")?);
 
         // Create application state
         let app_state = Arc::new(AppState::new(Uuid::new_v4().to_string()));
@@ -298,8 +297,9 @@ impl SentinelProxy {
         let warmth_tracker = Arc::new(crate::health::WarmthTracker::with_defaults());
 
         // Initialize guardrail processor for semantic inspection
-        let guardrail_processor =
-            Arc::new(crate::inference::GuardrailProcessor::new(agent_manager.clone()));
+        let guardrail_processor = Arc::new(crate::inference::GuardrailProcessor::new(
+            agent_manager.clone(),
+        ));
 
         // Initialize geo filter manager
         let geo_filter_manager = Arc::new(Self::initialize_geo_filters(&config));
@@ -418,9 +418,9 @@ impl SentinelProxy {
                     let old_pools = upstream_pools.replace(new_pools).await;
 
                     // Update scoped upstream pools
-                    let new_scoped_pools =
-                        Self::build_scoped_pools_list(&flattened).await;
-                    let old_scoped_pools = scoped_upstream_pools.replace_all(new_scoped_pools).await;
+                    let new_scoped_pools = Self::build_scoped_pools_list(&flattened).await;
+                    let old_scoped_pools =
+                        scoped_upstream_pools.replace_all(new_scoped_pools).await;
 
                     info!(
                         "Scoped upstream pools reloaded ({} pools)",
@@ -462,11 +462,15 @@ impl SentinelProxy {
             let pool = Arc::new(
                 UpstreamPool::new(config_with_id.clone())
                     .await
-                    .with_context(|| format!("Failed to create upstream pool '{}'", qid.canonical()))?,
+                    .with_context(|| {
+                        format!("Failed to create upstream pool '{}'", qid.canonical())
+                    })?,
             );
 
             // Track exports
-            let is_exported = flattened.exported_upstreams.contains_key(&upstream_config.id);
+            let is_exported = flattened
+                .exported_upstreams
+                .contains_key(&upstream_config.id);
 
             if is_exported {
                 registry.insert_exported(qid.clone(), pool).await;
@@ -487,10 +491,7 @@ impl SentinelProxy {
             );
         }
 
-        info!(
-            "Created {} scoped upstream pools",
-            registry.len().await
-        );
+        info!("Created {} scoped upstream pools", registry.len().await);
 
         Ok(registry)
     }
@@ -507,7 +508,9 @@ impl SentinelProxy {
 
             match UpstreamPool::new(config_with_id).await {
                 Ok(pool) => {
-                    let is_exported = flattened.exported_upstreams.contains_key(&upstream_config.id);
+                    let is_exported = flattened
+                        .exported_upstreams
+                        .contains_key(&upstream_config.id);
                     result.push((qid.clone(), Arc::new(pool), is_exported));
                 }
                 Err(e) => {

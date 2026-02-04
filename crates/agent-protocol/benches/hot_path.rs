@@ -6,9 +6,9 @@
 //! - P2: SmallVec header optimization
 //! - P3: Protocol metrics, connection affinity, zero-copy body streaming
 
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use std::hint::black_box;
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::collections::HashMap;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -175,24 +175,70 @@ impl BenchRequestHeaders {
         let mut headers = HashMap::new();
         // Typical production request with 20+ headers
         headers.insert("host".to_string(), vec!["api.example.com".to_string()]);
-        headers.insert("user-agent".to_string(), vec!["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string()]);
-        headers.insert("accept".to_string(), vec!["application/json".to_string(), "text/plain".to_string(), "*/*".to_string()]);
-        headers.insert("accept-language".to_string(), vec!["en-US,en;q=0.9".to_string()]);
-        headers.insert("accept-encoding".to_string(), vec!["gzip, deflate, br".to_string()]);
-        headers.insert("content-type".to_string(), vec!["application/json".to_string()]);
+        headers.insert(
+            "user-agent".to_string(),
+            vec!["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string()],
+        );
+        headers.insert(
+            "accept".to_string(),
+            vec![
+                "application/json".to_string(),
+                "text/plain".to_string(),
+                "*/*".to_string(),
+            ],
+        );
+        headers.insert(
+            "accept-language".to_string(),
+            vec!["en-US,en;q=0.9".to_string()],
+        );
+        headers.insert(
+            "accept-encoding".to_string(),
+            vec!["gzip, deflate, br".to_string()],
+        );
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
         headers.insert("content-length".to_string(), vec!["1024".to_string()]);
-        headers.insert("authorization".to_string(), vec!["Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0".to_string()]);
-        headers.insert("cookie".to_string(), vec!["session=abc123; tracking=xyz789".to_string()]);
-        headers.insert("x-request-id".to_string(), vec!["req-12345-67890".to_string()]);
-        headers.insert("x-correlation-id".to_string(), vec!["corr-abcdef-123456".to_string()]);
-        headers.insert("x-forwarded-for".to_string(), vec!["203.0.113.195, 70.41.3.18, 150.172.238.178".to_string()]);
+        headers.insert(
+            "authorization".to_string(),
+            vec![
+                "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+                    .to_string(),
+            ],
+        );
+        headers.insert(
+            "cookie".to_string(),
+            vec!["session=abc123; tracking=xyz789".to_string()],
+        );
+        headers.insert(
+            "x-request-id".to_string(),
+            vec!["req-12345-67890".to_string()],
+        );
+        headers.insert(
+            "x-correlation-id".to_string(),
+            vec!["corr-abcdef-123456".to_string()],
+        );
+        headers.insert(
+            "x-forwarded-for".to_string(),
+            vec!["203.0.113.195, 70.41.3.18, 150.172.238.178".to_string()],
+        );
         headers.insert("x-forwarded-proto".to_string(), vec!["https".to_string()]);
-        headers.insert("x-forwarded-host".to_string(), vec!["api.example.com".to_string()]);
+        headers.insert(
+            "x-forwarded-host".to_string(),
+            vec!["api.example.com".to_string()],
+        );
         headers.insert("x-real-ip".to_string(), vec!["203.0.113.195".to_string()]);
         headers.insert("cache-control".to_string(), vec!["no-cache".to_string()]);
         headers.insert("pragma".to_string(), vec!["no-cache".to_string()]);
-        headers.insert("origin".to_string(), vec!["https://app.example.com".to_string()]);
-        headers.insert("referer".to_string(), vec!["https://app.example.com/dashboard".to_string()]);
+        headers.insert(
+            "origin".to_string(),
+            vec!["https://app.example.com".to_string()],
+        );
+        headers.insert(
+            "referer".to_string(),
+            vec!["https://app.example.com/dashboard".to_string()],
+        );
         headers.insert("sec-fetch-dest".to_string(), vec!["empty".to_string()]);
         headers.insert("sec-fetch-mode".to_string(), vec!["cors".to_string()]);
         headers.insert("sec-fetch-site".to_string(), vec!["same-site".to_string()]);
@@ -247,12 +293,16 @@ fn bench_serialization(c: &mut Criterion) {
     {
         let msgpack_small = rmp_serde::to_vec(&small_event).unwrap();
         let msgpack_large = rmp_serde::to_vec(&large_event).unwrap();
-        println!("  MessagePack small: {} bytes ({:.1}% of JSON)",
+        println!(
+            "  MessagePack small: {} bytes ({:.1}% of JSON)",
             msgpack_small.len(),
-            msgpack_small.len() as f64 / json_small.len() as f64 * 100.0);
-        println!("  MessagePack large: {} bytes ({:.1}% of JSON)",
+            msgpack_small.len() as f64 / json_small.len() as f64 * 100.0
+        );
+        println!(
+            "  MessagePack large: {} bytes ({:.1}% of JSON)",
             msgpack_large.len(),
-            msgpack_large.len() as f64 / json_large.len() as f64 * 100.0);
+            msgpack_large.len() as f64 / json_large.len() as f64 * 100.0
+        );
     }
 
     group.finish();
@@ -269,15 +319,11 @@ fn bench_deserialization(c: &mut Criterion) {
     let json_large = serde_json::to_vec(&large_event).unwrap();
 
     group.bench_function("json_small", |b| {
-        b.iter(|| {
-            black_box(serde_json::from_slice::<BenchRequestHeaders>(&json_small).unwrap())
-        })
+        b.iter(|| black_box(serde_json::from_slice::<BenchRequestHeaders>(&json_small).unwrap()))
     });
 
     group.bench_function("json_large", |b| {
-        b.iter(|| {
-            black_box(serde_json::from_slice::<BenchRequestHeaders>(&json_large).unwrap())
-        })
+        b.iter(|| black_box(serde_json::from_slice::<BenchRequestHeaders>(&json_large).unwrap()))
     });
 
     #[cfg(feature = "binary-uds")]
@@ -366,9 +412,15 @@ fn bench_header_map_creation(c: &mut Criterion) {
             map.insert("accept".to_string(), vec!["application/json".to_string()]);
             map.insert("accept-language".to_string(), vec!["en-US".to_string()]);
             map.insert("accept-encoding".to_string(), vec!["gzip".to_string()]);
-            map.insert("content-type".to_string(), vec!["application/json".to_string()]);
+            map.insert(
+                "content-type".to_string(),
+                vec!["application/json".to_string()],
+            );
             map.insert("content-length".to_string(), vec!["1024".to_string()]);
-            map.insert("authorization".to_string(), vec!["Bearer token".to_string()]);
+            map.insert(
+                "authorization".to_string(),
+                vec!["Bearer token".to_string()],
+            );
             map.insert("cookie".to_string(), vec!["session=abc".to_string()]);
             map.insert("x-request-id".to_string(), vec!["req-123".to_string()]);
             map.insert("x-correlation-id".to_string(), vec!["corr-456".to_string()]);
@@ -377,8 +429,14 @@ fn bench_header_map_creation(c: &mut Criterion) {
             map.insert("x-real-ip".to_string(), vec!["1.2.3.4".to_string()]);
             map.insert("cache-control".to_string(), vec!["no-cache".to_string()]);
             map.insert("pragma".to_string(), vec!["no-cache".to_string()]);
-            map.insert("origin".to_string(), vec!["https://app.example.com".to_string()]);
-            map.insert("referer".to_string(), vec!["https://app.example.com/".to_string()]);
+            map.insert(
+                "origin".to_string(),
+                vec!["https://app.example.com".to_string()],
+            );
+            map.insert(
+                "referer".to_string(),
+                vec!["https://app.example.com/".to_string()],
+            );
             map.insert("sec-fetch-dest".to_string(), vec!["empty".to_string()]);
             map.insert("sec-fetch-mode".to_string(), vec!["cors".to_string()]);
             black_box(map)
@@ -389,26 +447,86 @@ fn bench_header_map_creation(c: &mut Criterion) {
     group.bench_function("smallvec_map_20_headers", |b| {
         b.iter(|| {
             let mut map: OptimizedHeaderMap = HashMap::new();
-            map.insert("host".to_string(), SmallVec::from_iter(["example.com".to_string()]));
-            map.insert("user-agent".to_string(), SmallVec::from_iter(["benchmark/1.0".to_string()]));
-            map.insert("accept".to_string(), SmallVec::from_iter(["application/json".to_string()]));
-            map.insert("accept-language".to_string(), SmallVec::from_iter(["en-US".to_string()]));
-            map.insert("accept-encoding".to_string(), SmallVec::from_iter(["gzip".to_string()]));
-            map.insert("content-type".to_string(), SmallVec::from_iter(["application/json".to_string()]));
-            map.insert("content-length".to_string(), SmallVec::from_iter(["1024".to_string()]));
-            map.insert("authorization".to_string(), SmallVec::from_iter(["Bearer token".to_string()]));
-            map.insert("cookie".to_string(), SmallVec::from_iter(["session=abc".to_string()]));
-            map.insert("x-request-id".to_string(), SmallVec::from_iter(["req-123".to_string()]));
-            map.insert("x-correlation-id".to_string(), SmallVec::from_iter(["corr-456".to_string()]));
-            map.insert("x-forwarded-for".to_string(), SmallVec::from_iter(["1.2.3.4".to_string()]));
-            map.insert("x-forwarded-proto".to_string(), SmallVec::from_iter(["https".to_string()]));
-            map.insert("x-real-ip".to_string(), SmallVec::from_iter(["1.2.3.4".to_string()]));
-            map.insert("cache-control".to_string(), SmallVec::from_iter(["no-cache".to_string()]));
-            map.insert("pragma".to_string(), SmallVec::from_iter(["no-cache".to_string()]));
-            map.insert("origin".to_string(), SmallVec::from_iter(["https://app.example.com".to_string()]));
-            map.insert("referer".to_string(), SmallVec::from_iter(["https://app.example.com/".to_string()]));
-            map.insert("sec-fetch-dest".to_string(), SmallVec::from_iter(["empty".to_string()]));
-            map.insert("sec-fetch-mode".to_string(), SmallVec::from_iter(["cors".to_string()]));
+            map.insert(
+                "host".to_string(),
+                SmallVec::from_iter(["example.com".to_string()]),
+            );
+            map.insert(
+                "user-agent".to_string(),
+                SmallVec::from_iter(["benchmark/1.0".to_string()]),
+            );
+            map.insert(
+                "accept".to_string(),
+                SmallVec::from_iter(["application/json".to_string()]),
+            );
+            map.insert(
+                "accept-language".to_string(),
+                SmallVec::from_iter(["en-US".to_string()]),
+            );
+            map.insert(
+                "accept-encoding".to_string(),
+                SmallVec::from_iter(["gzip".to_string()]),
+            );
+            map.insert(
+                "content-type".to_string(),
+                SmallVec::from_iter(["application/json".to_string()]),
+            );
+            map.insert(
+                "content-length".to_string(),
+                SmallVec::from_iter(["1024".to_string()]),
+            );
+            map.insert(
+                "authorization".to_string(),
+                SmallVec::from_iter(["Bearer token".to_string()]),
+            );
+            map.insert(
+                "cookie".to_string(),
+                SmallVec::from_iter(["session=abc".to_string()]),
+            );
+            map.insert(
+                "x-request-id".to_string(),
+                SmallVec::from_iter(["req-123".to_string()]),
+            );
+            map.insert(
+                "x-correlation-id".to_string(),
+                SmallVec::from_iter(["corr-456".to_string()]),
+            );
+            map.insert(
+                "x-forwarded-for".to_string(),
+                SmallVec::from_iter(["1.2.3.4".to_string()]),
+            );
+            map.insert(
+                "x-forwarded-proto".to_string(),
+                SmallVec::from_iter(["https".to_string()]),
+            );
+            map.insert(
+                "x-real-ip".to_string(),
+                SmallVec::from_iter(["1.2.3.4".to_string()]),
+            );
+            map.insert(
+                "cache-control".to_string(),
+                SmallVec::from_iter(["no-cache".to_string()]),
+            );
+            map.insert(
+                "pragma".to_string(),
+                SmallVec::from_iter(["no-cache".to_string()]),
+            );
+            map.insert(
+                "origin".to_string(),
+                SmallVec::from_iter(["https://app.example.com".to_string()]),
+            );
+            map.insert(
+                "referer".to_string(),
+                SmallVec::from_iter(["https://app.example.com/".to_string()]),
+            );
+            map.insert(
+                "sec-fetch-dest".to_string(),
+                SmallVec::from_iter(["empty".to_string()]),
+            );
+            map.insert(
+                "sec-fetch-mode".to_string(),
+                SmallVec::from_iter(["cors".to_string()]),
+            );
             black_box(map)
         })
     });
@@ -422,7 +540,10 @@ fn bench_header_iteration(c: &mut Criterion) {
 
     // Create sample headers
     let mut vec_headers: HashMap<String, Vec<String>> = HashMap::new();
-    vec_headers.insert("accept".to_string(), vec!["text/html".to_string(), "application/json".to_string()]);
+    vec_headers.insert(
+        "accept".to_string(),
+        vec!["text/html".to_string(), "application/json".to_string()],
+    );
     vec_headers.insert("host".to_string(), vec!["example.com".to_string()]);
     vec_headers.insert("user-agent".to_string(), vec!["benchmark/1.0".to_string()]);
     for i in 0..17 {
@@ -430,11 +551,23 @@ fn bench_header_iteration(c: &mut Criterion) {
     }
 
     let mut smallvec_headers: OptimizedHeaderMap = HashMap::new();
-    smallvec_headers.insert("accept".to_string(), SmallVec::from_iter(["text/html".to_string(), "application/json".to_string()]));
-    smallvec_headers.insert("host".to_string(), SmallVec::from_iter(["example.com".to_string()]));
-    smallvec_headers.insert("user-agent".to_string(), SmallVec::from_iter(["benchmark/1.0".to_string()]));
+    smallvec_headers.insert(
+        "accept".to_string(),
+        SmallVec::from_iter(["text/html".to_string(), "application/json".to_string()]),
+    );
+    smallvec_headers.insert(
+        "host".to_string(),
+        SmallVec::from_iter(["example.com".to_string()]),
+    );
+    smallvec_headers.insert(
+        "user-agent".to_string(),
+        SmallVec::from_iter(["benchmark/1.0".to_string()]),
+    );
     for i in 0..17 {
-        smallvec_headers.insert(format!("x-custom-{}", i), SmallVec::from_iter([format!("value-{}", i)]));
+        smallvec_headers.insert(
+            format!("x-custom-{}", i),
+            SmallVec::from_iter([format!("value-{}", i)]),
+        );
     }
 
     // iter_flat for Vec-based
@@ -491,7 +624,7 @@ fn bench_header_iteration(c: &mut Criterion) {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct BenchBodyChunk {
     correlation_id: String,
-    data: String,  // Base64 for JSON
+    data: String, // Base64 for JSON
     is_last: bool,
     chunk_index: u32,
 }
@@ -533,23 +666,15 @@ fn bench_body_chunk_serialization(c: &mut Criterion) {
             chunk_index: 0,
         };
 
-        group.bench_with_input(
-            BenchmarkId::new("json_base64", size),
-            &size,
-            |b, _| {
-                b.iter(|| black_box(serde_json::to_vec(&json_chunk).unwrap()))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("json_base64", size), &size, |b, _| {
+            b.iter(|| black_box(serde_json::to_vec(&json_chunk).unwrap()))
+        });
 
         #[cfg(feature = "binary-uds")]
         {
-            group.bench_with_input(
-                BenchmarkId::new("msgpack_binary", size),
-                &size,
-                |b, _| {
-                    b.iter(|| black_box(rmp_serde::to_vec(&binary_chunk).unwrap()))
-                },
-            );
+            group.bench_with_input(BenchmarkId::new("msgpack_binary", size), &size, |b, _| {
+                b.iter(|| black_box(rmp_serde::to_vec(&binary_chunk).unwrap()))
+            });
         }
 
         // Suppress unused variable warning when binary-uds feature is disabled
@@ -588,25 +713,21 @@ fn bench_body_chunk_deserialization(c: &mut Criterion) {
 
         let json_bytes = serde_json::to_vec(&json_chunk).unwrap();
 
-        group.bench_with_input(
-            BenchmarkId::new("json_base64", size),
-            &size,
-            |b, _| {
-                b.iter(|| black_box(serde_json::from_slice::<BenchBodyChunk>(&json_bytes).unwrap()))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("json_base64", size), &size, |b, _| {
+            b.iter(|| black_box(serde_json::from_slice::<BenchBodyChunk>(&json_bytes).unwrap()))
+        });
 
         #[cfg(feature = "binary-uds")]
         {
             let msgpack_bytes = rmp_serde::to_vec(&binary_chunk).unwrap();
 
-            group.bench_with_input(
-                BenchmarkId::new("msgpack_binary", size),
-                &size,
-                |b, _| {
-                    b.iter(|| black_box(rmp_serde::from_slice::<BenchBinaryBodyChunk>(&msgpack_bytes).unwrap()))
-                },
-            );
+            group.bench_with_input(BenchmarkId::new("msgpack_binary", size), &size, |b, _| {
+                b.iter(|| {
+                    black_box(
+                        rmp_serde::from_slice::<BenchBinaryBodyChunk>(&msgpack_bytes).unwrap(),
+                    )
+                })
+            });
         }
 
         // Suppress unused variable warning when binary-uds feature is disabled
@@ -645,7 +766,10 @@ fn bench_protocol_metrics(c: &mut Criterion) {
         let mut value = 0u64;
         b.iter(|| {
             value = (value + 37) % 15000; // Simulate varying latencies
-            let bucket_idx = buckets.iter().position(|&b| value <= b).unwrap_or(buckets.len() - 1);
+            let bucket_idx = buckets
+                .iter()
+                .position(|&b| value <= b)
+                .unwrap_or(buckets.len() - 1);
             bucket_counts[bucket_idx].fetch_add(1, Ordering::Relaxed);
         })
     });
@@ -674,17 +798,13 @@ fn bench_connection_affinity(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("lookup_hit", num_entries),
             &num_entries,
-            |b, _| {
-                b.iter(|| black_box(affinity.get(&lookup_key)))
-            },
+            |b, _| b.iter(|| black_box(affinity.get(&lookup_key))),
         );
 
         group.bench_with_input(
             BenchmarkId::new("lookup_miss", num_entries),
             &num_entries,
-            |b, _| {
-                b.iter(|| black_box(affinity.get(&missing_key)))
-            },
+            |b, _| b.iter(|| black_box(affinity.get(&missing_key))),
         );
 
         group.bench_with_input(
@@ -807,11 +927,7 @@ criterion_group!(
     bench_timestamp_tracking,
 );
 
-criterion_group!(
-    p1_benchmarks,
-    bench_serialization,
-    bench_deserialization,
-);
+criterion_group!(p1_benchmarks, bench_serialization, bench_deserialization,);
 
 criterion_group!(
     p2_benchmarks,
@@ -828,10 +944,7 @@ criterion_group!(
     bench_connection_affinity,
 );
 
-criterion_group!(
-    integration_benchmarks,
-    bench_full_request_path,
-);
+criterion_group!(integration_benchmarks, bench_full_request_path,);
 
 criterion_main!(
     p0_benchmarks,
