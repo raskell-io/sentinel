@@ -1774,7 +1774,7 @@ impl ProxyHttp for SentinelProxy {
                     .route_config
                     .as_ref()
                     .and_then(|r| r.inference.as_ref())
-                    .map(|i| i.provider.clone())
+                    .map(|i| i.provider)
                     .unwrap_or_default();
 
                 ctx.inference_streaming_response = true;

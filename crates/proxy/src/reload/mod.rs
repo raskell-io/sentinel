@@ -1056,11 +1056,8 @@ routes {{
 
         // Collect events (non-blocking with timeout)
         let mut events = Vec::new();
-        loop {
-            match tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await {
-                Ok(Ok(event)) => events.push(event),
-                _ => break,
-            }
+        while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await {
+            events.push(event);
         }
 
         // Verify we received the expected events

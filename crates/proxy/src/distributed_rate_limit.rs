@@ -156,7 +156,7 @@ impl RedisRateLimiter {
         })
         .await
         .map_err(|_| {
-            redis::RedisError::from((redis::ErrorKind::IoError, "Redis operation timed out"))
+            redis::RedisError::from((redis::ErrorKind::Io, "Redis operation timed out"))
         })?;
 
         let (count,) = result?;

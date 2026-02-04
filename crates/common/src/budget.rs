@@ -197,16 +197,15 @@ impl ModelPricing {
         if self.model_pattern.contains('*') {
             // Glob-style matching
             let pattern = &self.model_pattern;
-            if pattern.starts_with('*') && pattern.ends_with('*') {
+            if let Some(inner) = pattern.strip_prefix('*').and_then(|p| p.strip_suffix('*')) {
                 // *pattern* - contains
-                let inner = &pattern[1..pattern.len() - 1];
                 model.contains(inner)
-            } else if pattern.starts_with('*') {
+            } else if let Some(suffix) = pattern.strip_prefix('*') {
                 // *pattern - ends with
-                model.ends_with(&pattern[1..])
-            } else if pattern.ends_with('*') {
+                model.ends_with(suffix)
+            } else if let Some(prefix) = pattern.strip_suffix('*') {
                 // pattern* - starts with
-                model.starts_with(&pattern[..pattern.len() - 1])
+                model.starts_with(prefix)
             } else {
                 // Complex pattern - split and match parts
                 let parts: Vec<&str> = pattern.split('*').collect();

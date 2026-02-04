@@ -214,7 +214,7 @@ pub enum HealthCheckType {
         expected_models: Vec<String>,
         /// Enhanced readiness checks (optional)
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        readiness: Option<crate::inference::InferenceReadinessConfig>,
+        readiness: Option<Box<crate::inference::InferenceReadinessConfig>>,
     },
 }
 

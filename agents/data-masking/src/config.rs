@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Root configuration for the Data Masking Agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct DataMaskingConfig {
     /// Token store configuration.
     #[serde(default)]
@@ -30,18 +31,6 @@ pub struct DataMaskingConfig {
     pub buffering: BufferingConfig,
 }
 
-impl Default for DataMaskingConfig {
-    fn default() -> Self {
-        Self {
-            store: TokenStoreConfig::default(),
-            fields: Vec::new(),
-            headers: Vec::new(),
-            patterns: PatternConfig::default(),
-            fpe: FpeConfig::default(),
-            buffering: BufferingConfig::default(),
-        }
-    }
-}
 
 /// Token store configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,7 +351,7 @@ pub fn validate_config(config: &DataMaskingConfig) -> Result<(), String> {
 /// Hex decoding helper.
 mod hex {
     pub fn decode(s: &str) -> Result<Vec<u8>, ()> {
-        if s.len() % 2 != 0 {
+        if !s.len().is_multiple_of(2) {
             return Err(());
         }
         (0..s.len())

@@ -52,20 +52,17 @@ mod redis_tests {
         if should_skip_redis() {
             return false;
         }
-        match redis::Client::open(redis_url().as_str()) {
-            Ok(client) => {
-                match tokio::time::timeout(
-                    Duration::from_secs(2),
-                    redis::aio::ConnectionManager::new(client),
-                )
-                .await
-                {
-                    Ok(Ok(_)) => true,
-                    _ => false,
-                }
-            }
-            Err(_) => false,
-        }
+        let Ok(client) = redis::Client::open(redis_url().as_str()) else {
+            return false;
+        };
+        matches!(
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                redis::aio::ConnectionManager::new(client),
+            )
+            .await,
+            Ok(Ok(_))
+        )
     }
 
     #[tokio::test]
@@ -342,15 +339,14 @@ mod memcached_tests {
             return false;
         }
         // Try to connect to memcached
-        match tokio::time::timeout(
-            Duration::from_secs(2),
-            async_memcached::Client::new(memcached_url()),
+        matches!(
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                async_memcached::Client::new(memcached_url()),
+            )
+            .await,
+            Ok(Ok(_))
         )
-        .await
-        {
-            Ok(Ok(_)) => true,
-            _ => false,
-        }
     }
 
     #[tokio::test]
@@ -574,6 +570,7 @@ mod fallback_tests {
 
 // Tests that run without external dependencies
 mod unit_tests {
+    #[cfg(any(feature = "distributed-rate-limit", feature = "distributed-rate-limit-memcached"))]
     use std::sync::atomic::Ordering;
 
     #[cfg(feature = "distributed-rate-limit")]

@@ -179,7 +179,7 @@ pub struct AgentConfig {
     ///
     /// - `v1`: Simple request/response protocol (backwards compatible)
     /// - `v2`: Bidirectional streaming with capabilities, health reporting,
-    ///         metrics export, and flow control
+    ///   metrics export, and flow control
     #[serde(default)]
     pub protocol_version: AgentProtocolVersion,
 

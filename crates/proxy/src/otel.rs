@@ -125,16 +125,16 @@ pub fn create_traceparent(trace_id: &str, span_id: &str, sampled: bool) -> Strin
 #[cfg(feature = "opentelemetry")]
 mod otel_impl {
     use super::*;
-    use opentelemetry::trace::{SpanKind, Tracer};
+    use opentelemetry::trace::{SpanKind, Tracer, TracerProvider as _};
     use opentelemetry::{global, KeyValue};
     use opentelemetry_otlp::WithExportConfig;
-    use opentelemetry_sdk::trace::Sampler;
+    use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
     use opentelemetry_sdk::Resource;
-    use std::sync::Arc;
     use tracing::{error, info};
 
     /// OpenTelemetry tracer wrapper
     pub struct OtelTracer {
+        provider: SdkTracerProvider,
         sampling_rate: f64,
         service_name: String,
     }
@@ -172,22 +172,24 @@ mod otel_impl {
             };
 
             // Create resource with service info
-            let resource =
-                Resource::new([KeyValue::new("service.name", config.service_name.clone())]);
+            let resource = Resource::builder()
+                .with_service_name(config.service_name.clone())
+                .build();
 
             // Build tracer provider
-            let provider = opentelemetry_sdk::trace::TracerProvider::builder()
-                .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+            let provider = SdkTracerProvider::builder()
+                .with_batch_exporter(exporter)
                 .with_sampler(sampler)
                 .with_resource(resource)
                 .build();
 
             // Set global provider
-            global::set_tracer_provider(provider);
+            global::set_tracer_provider(provider.clone());
 
             info!("OpenTelemetry tracer initialized successfully");
 
             Ok(Self {
+                provider,
                 sampling_rate: config.sampling_rate,
                 service_name: config.service_name.clone(),
             })
@@ -224,7 +226,9 @@ mod otel_impl {
         /// Shutdown the tracer
         pub fn shutdown(&self) {
             info!("Shutting down OpenTelemetry tracer");
-            global::shutdown_tracer_provider();
+            if let Err(e) = self.provider.shutdown() {
+                error!(error = %e, "Failed to shutdown OpenTelemetry tracer provider");
+            }
         }
     }
 

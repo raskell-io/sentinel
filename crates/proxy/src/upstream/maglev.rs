@@ -209,9 +209,7 @@ impl MaglevBalancer {
                 .and_then(|c| {
                     c.headers.get("cookie").and_then(|cookies| {
                         cookies.split(';').find_map(|cookie| {
-                            let mut parts = cookie.trim().splitn(2, '=');
-                            let key = parts.next()?;
-                            let value = parts.next()?;
+                            let (key, value) = cookie.trim().split_once('=')?;
                             if key == name {
                                 Some(value.to_string())
                             } else {
@@ -380,10 +378,8 @@ mod tests {
 
         // Distribution should be roughly even
         let mut counts = vec![0usize; 3];
-        for entry in &table {
-            if let Some(idx) = entry {
-                counts[*idx] += 1;
-            }
+        for idx in table.iter().flatten() {
+            counts[*idx] += 1;
         }
 
         // Each backend should get roughly 1/3 of the slots

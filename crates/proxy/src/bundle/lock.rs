@@ -81,6 +81,7 @@ impl BundleLock {
     }
 
     /// Parse lock file from string content
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(content: &str) -> Result<Self, LockError> {
         let lock: BundleLock = toml::from_str(content)?;
         Ok(lock)

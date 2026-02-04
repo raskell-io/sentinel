@@ -449,7 +449,7 @@ fn parse_dns_provider_config(node: &kdl::KdlNode, listener_id: &str) -> Result<D
             .nodes()
             .iter()
             .find(|n| n.name().value() == "propagation")
-            .map(|prop_node| parse_propagation_config(prop_node))
+            .map(parse_propagation_config)
             .unwrap_or_default()
     } else {
         PropagationCheckConfig::default()

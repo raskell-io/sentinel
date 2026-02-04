@@ -238,11 +238,9 @@ fn find_binary(dir: &Path, binary_name: &str) -> Result<PathBuf, FetchError> {
     }
 
     // Search recursively
-    for entry in walkdir(dir) {
-        if let Ok(entry) = entry {
-            if entry.file_name().to_string_lossy() == binary_name {
-                return Ok(entry.path().to_path_buf());
-            }
+    for entry in walkdir(dir).flatten() {
+        if entry.file_name().to_string_lossy() == binary_name {
+            return Ok(entry.path().to_path_buf());
         }
     }
 
@@ -256,12 +254,14 @@ fn walkdir(dir: &Path) -> impl Iterator<Item = io::Result<std::fs::DirEntry>> + 
 
 struct WalkDir {
     stack: Vec<PathBuf>,
+    current: Option<std::fs::ReadDir>,
 }
 
 impl WalkDir {
     fn new(dir: &Path) -> Self {
         Self {
             stack: vec![dir.to_path_buf()],
+            current: None,
         }
     }
 }
@@ -270,25 +270,31 @@ impl Iterator for WalkDir {
     type Item = io::Result<std::fs::DirEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(dir) = self.stack.pop() {
-            match std::fs::read_dir(&dir) {
-                Ok(entries) => {
-                    for entry in entries {
-                        match entry {
-                            Ok(e) => {
-                                if e.path().is_dir() {
-                                    self.stack.push(e.path());
-                                }
-                                return Some(Ok(e));
+        loop {
+            // Try to get next entry from current ReadDir
+            if let Some(ref mut read_dir) = self.current {
+                if let Some(entry) = read_dir.next() {
+                    match entry {
+                        Ok(e) => {
+                            if e.path().is_dir() {
+                                self.stack.push(e.path());
                             }
-                            Err(e) => return Some(Err(e)),
+                            return Some(Ok(e));
                         }
+                        Err(e) => return Some(Err(e)),
                     }
                 }
+                // Current ReadDir exhausted
+                self.current = None;
+            }
+
+            // Pop next directory from stack
+            let dir = self.stack.pop()?;
+            match std::fs::read_dir(&dir) {
+                Ok(read_dir) => self.current = Some(read_dir),
                 Err(e) => return Some(Err(e)),
             }
         }
-        None
     }
 }
 

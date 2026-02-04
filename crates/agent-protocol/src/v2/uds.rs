@@ -245,7 +245,7 @@ pub struct UdsLimits {
 impl From<UdsCapabilities> for AgentCapabilities {
     fn from(caps: UdsCapabilities) -> Self {
         AgentCapabilities {
-            protocol_version: PROTOCOL_VERSION_2 as u32,
+            protocol_version: PROTOCOL_VERSION_2,
             agent_id: caps.agent_id,
             name: caps.name,
             version: caps.version,
@@ -312,6 +312,7 @@ pub struct AgentClientV2Uds {
     /// Pending requests by correlation ID
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<AgentResponse>>>>,
     /// Sender for outbound messages
+    #[allow(clippy::type_complexity)]
     outbound_tx: Mutex<Option<mpsc::Sender<(MessageType, Vec<u8>)>>>,
     /// Sequence counter for pings
     ping_sequence: AtomicU64,
@@ -419,7 +420,7 @@ impl AgentClientV2Uds {
 
         // Send handshake request with supported encodings
         let handshake_req = UdsHandshakeRequest {
-            supported_versions: vec![PROTOCOL_VERSION_2 as u32],
+            supported_versions: vec![PROTOCOL_VERSION_2],
             proxy_id: "sentinel-proxy".to_string(),
             proxy_version: env!("CARGO_PKG_VERSION").to_string(),
             config: None,

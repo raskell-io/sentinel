@@ -237,14 +237,14 @@ impl<'a> FallbackEvaluator<'a> {
     ) -> Option<FallbackDecision> {
         let next = self.next_fallback()?;
 
-        let model_mapping = current_model.map(|model| {
+        let model_mapping = current_model.and_then(|model| {
             let mapped = self.map_model(next, model);
             if mapped != model {
                 Some((model.to_string(), mapped))
             } else {
                 None
             }
-        }).flatten();
+        });
 
         Some(FallbackDecision {
             next_upstream: next.upstream.clone(),

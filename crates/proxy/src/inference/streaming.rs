@@ -431,7 +431,7 @@ pub struct StreamingTokenResult {
 
 /// Check if a response appears to be SSE based on content type.
 pub fn is_sse_response(content_type: Option<&str>) -> bool {
-    content_type.map_or(false, |ct| {
+    content_type.is_some_and(|ct| {
         ct.contains("text/event-stream") || ct.contains("application/x-ndjson")
     })
 }

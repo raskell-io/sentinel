@@ -564,8 +564,8 @@ mod tests {
             selection.metadata.get("sticky_session_new"),
             Some(&"true".to_string())
         );
-        assert!(selection.metadata.get("sticky_cookie_value").is_some());
-        assert!(selection.metadata.get("sticky_set_cookie_header").is_some());
+        assert!(selection.metadata.contains_key("sticky_cookie_value"));
+        assert!(selection.metadata.contains_key("sticky_set_cookie_header"));
     }
 
     #[tokio::test]

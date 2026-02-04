@@ -127,8 +127,8 @@ impl BundleStatus {
         // Header
         writeln!(
             output,
-            "{:<15} {:<12} {:<12} {}",
-            "Agent", "Installed", "Expected", "Status"
+            "{:<15} {:<12} {:<12} Status",
+            "Agent", "Installed", "Expected"
         )
         .unwrap();
         writeln!(output, "{}", "─".repeat(55)).unwrap();

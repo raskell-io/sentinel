@@ -138,7 +138,7 @@ impl CircuitBreaker {
                 let last_change_ns = self.last_state_change_ns.load(Ordering::Acquire);
                 let current_ns = self.base_instant.elapsed().as_nanos() as u64;
                 let elapsed_ns = current_ns.saturating_sub(last_change_ns);
-                let timeout_ns = self.config.timeout_seconds as u64 * 1_000_000_000;
+                let timeout_ns = self.config.timeout_seconds * 1_000_000_000;
 
                 if elapsed_ns >= timeout_ns {
                     trace!(

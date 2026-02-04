@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(cow_optimized.len(), headers.len());
 
         // Known headers should be borrowed
-        for (name, _) in &cow_optimized {
+        for name in cow_optimized.keys() {
             if name == "content-type" || name == "accept" {
                 assert!(
                     matches!(name, Cow::Borrowed(_)),

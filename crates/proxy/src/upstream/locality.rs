@@ -310,7 +310,7 @@ impl LoadBalancer for LocalityAwareBalancer {
             // Local first, then fallback
             local_healthy
                 .into_iter()
-                .chain(fallback_targets.into_iter())
+                .chain(fallback_targets)
                 .collect()
         } else {
             fallback_targets

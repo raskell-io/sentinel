@@ -171,8 +171,10 @@ impl AgentHandler for DataMaskingAgent {
         }
 
         // Add audit metadata
-        let mut audit = AuditMetadata::default();
-        audit.tags = vec!["data_masking".to_string(), "request_headers".to_string()];
+        let audit = AuditMetadata {
+            tags: vec!["data_masking".to_string(), "request_headers".to_string()],
+            ..AuditMetadata::default()
+        };
         response.with_audit(audit)
     }
 
@@ -251,11 +253,14 @@ impl AgentHandler for DataMaskingAgent {
                     .with_request_body_mutation(BodyMutation::replace(event.chunk_index, encoded));
 
                 // Add audit metadata
-                let mut audit = AuditMetadata::default();
-                audit.tags = vec!["data_masking".to_string(), "request_body".to_string()];
+                let mut tags = vec!["data_masking".to_string(), "request_body".to_string()];
                 if modified {
-                    audit.tags.push("modified".to_string());
+                    tags.push("modified".to_string());
                 }
+                let audit = AuditMetadata {
+                    tags,
+                    ..AuditMetadata::default()
+                };
 
                 response.with_audit(audit)
             }
@@ -390,11 +395,14 @@ impl AgentHandler for DataMaskingAgent {
                 let response = AgentResponse::default_allow()
                     .with_response_body_mutation(BodyMutation::replace(event.chunk_index, encoded));
 
-                let mut audit = AuditMetadata::default();
-                audit.tags = vec!["data_masking".to_string(), "response_body".to_string()];
+                let mut tags = vec!["data_masking".to_string(), "response_body".to_string()];
                 if modified {
-                    audit.tags.push("detokenized".to_string());
+                    tags.push("detokenized".to_string());
                 }
+                let audit = AuditMetadata {
+                    tags,
+                    ..AuditMetadata::default()
+                };
 
                 response.with_audit(audit)
             }

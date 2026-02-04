@@ -100,17 +100,17 @@ impl CompiledPatterns {
 
     /// Check if a value looks like an SSN.
     pub fn is_ssn(&self, value: &str) -> bool {
-        self.ssn.as_ref().map_or(false, |re| re.is_match(value))
+        self.ssn.as_ref().is_some_and(|re| re.is_match(value))
     }
 
     /// Check if a value looks like an email.
     pub fn is_email(&self, value: &str) -> bool {
-        self.email.as_ref().map_or(false, |re| re.is_match(value))
+        self.email.as_ref().is_some_and(|re| re.is_match(value))
     }
 
     /// Check if a value looks like a phone number.
     pub fn is_phone(&self, value: &str) -> bool {
-        self.phone.as_ref().map_or(false, |re| re.is_match(value))
+        self.phone.as_ref().is_some_and(|re| re.is_match(value))
     }
 
     /// Detect if a value matches any pattern and return the action.
@@ -170,7 +170,7 @@ fn luhn_check(number: &str) -> bool {
         })
         .sum();
 
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 // Default actions for built-in patterns

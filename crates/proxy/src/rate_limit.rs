@@ -221,9 +221,7 @@ impl RateLimiterPool {
     /// Returns detailed rate limit information including remaining quota.
     #[cfg(feature = "distributed-rate-limit")]
     pub async fn check_async(&self, key: &str) -> RateLimitCheckInfo {
-        let config = self.config.read();
-        let max_rps = config.max_rps;
-        drop(config);
+        let max_rps = self.config.read().max_rps;
 
         match &self.backend {
             RateLimitBackendType::Local { .. } => self.check(key),

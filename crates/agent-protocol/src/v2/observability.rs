@@ -536,9 +536,7 @@ impl UnifiedMetricsAggregator {
         let mut output = String::new();
 
         // Add service info metric
-        output.push_str(&format!(
-            "# HELP sentinel_info Sentinel proxy information\n# TYPE sentinel_info gauge\n"
-        ));
+        output.push_str("# HELP sentinel_info Sentinel proxy information\n# TYPE sentinel_info gauge\n");
         output.push_str(&format!(
             "sentinel_info{{service=\"{}\",instance=\"{}\"}} 1\n",
             escape_label_value(&self.service_name),
@@ -701,8 +699,10 @@ pub struct ConfigUpdateHandler {
     /// Pending updates awaiting acknowledgment
     pending: RwLock<HashMap<String, PendingUpdate>>,
     /// Callback for rule updates
+    #[allow(clippy::type_complexity)]
     on_rule_update: Option<Box<dyn Fn(&str, &[crate::v2::control::RuleDefinition], &[String]) -> bool + Send + Sync>>,
     /// Callback for list updates
+    #[allow(clippy::type_complexity)]
     on_list_update: Option<Box<dyn Fn(&str, &[String], &[String]) -> bool + Send + Sync>>,
 }
 

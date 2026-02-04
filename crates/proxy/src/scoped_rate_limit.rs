@@ -263,10 +263,10 @@ mod tests {
     use super::*;
 
     fn test_limits_with_rate_limit(rps: u32, _burst: u32) -> Limits {
-        let mut limits = Limits::default();
-        // Set the global rate limit - burst is derived as rps * 10 internally
-        limits.max_requests_per_second_global = Some(rps);
-        limits
+        Limits {
+            max_requests_per_second_global: Some(rps),
+            ..Limits::default()
+        }
     }
 
     struct NoHeaders;

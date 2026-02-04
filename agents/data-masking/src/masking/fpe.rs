@@ -171,15 +171,15 @@ impl FpeCipher {
     fn generate_round_key(&self, tweak: &str, round: usize, data: &[usize], radix: usize) -> Vec<u8> {
         // Build input for key derivation
         let mut hasher = Sha256::new();
-        hasher.update(&self.key);
+        hasher.update(self.key);
         hasher.update(tweak.as_bytes());
-        hasher.update(&(round as u64).to_le_bytes());
+        hasher.update((round as u64).to_le_bytes());
 
         // Include current state
         for &d in data {
-            hasher.update(&(d as u64).to_le_bytes());
+            hasher.update((d as u64).to_le_bytes());
         }
-        hasher.update(&(radix as u64).to_le_bytes());
+        hasher.update((radix as u64).to_le_bytes());
 
         let hash = hasher.finalize();
 
@@ -195,7 +195,7 @@ impl FpeCipher {
 
 /// Decode hex string to bytes.
 fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     (0..s.len())

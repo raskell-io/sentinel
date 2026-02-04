@@ -107,12 +107,14 @@ impl PooledBuffer {
 
     /// Get a mutable reference to the underlying buffer.
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn as_mut(&mut self) -> &mut BytesMut {
         self.buffer.as_mut().expect("buffer already taken")
     }
 
     /// Get an immutable reference to the underlying buffer.
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn as_ref(&self) -> &BytesMut {
         self.buffer.as_ref().expect("buffer already taken")
     }

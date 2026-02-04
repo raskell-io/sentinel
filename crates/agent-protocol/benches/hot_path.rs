@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 use dashmap::DashMap;
 use smallvec::SmallVec;
 
@@ -552,6 +551,10 @@ fn bench_body_chunk_serialization(c: &mut Criterion) {
                 },
             );
         }
+
+        // Suppress unused variable warning when binary-uds feature is disabled
+        #[cfg(not(feature = "binary-uds"))]
+        let _ = &binary_chunk;
     }
 
     group.finish();
@@ -605,6 +608,10 @@ fn bench_body_chunk_deserialization(c: &mut Criterion) {
                 },
             );
         }
+
+        // Suppress unused variable warning when binary-uds feature is disabled
+        #[cfg(not(feature = "binary-uds"))]
+        let _ = &binary_chunk;
     }
 
     group.finish();
@@ -717,10 +724,10 @@ fn bench_full_request_path(c: &mut Criterion) {
     let request_counter = AtomicU64::new(0);
 
     let headers = BenchRequestHeaders::sample_small();
-    let json_payload = serde_json::to_vec(&headers).unwrap();
+    let _json_payload = serde_json::to_vec(&headers).unwrap();
 
     #[cfg(feature = "binary-uds")]
-    let msgpack_payload = rmp_serde::to_vec(&headers).unwrap();
+    let _msgpack_payload = rmp_serde::to_vec(&headers).unwrap();
 
     // Full path with JSON
     group.bench_function("json_path", |b| {

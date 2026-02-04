@@ -367,6 +367,7 @@ pub struct ReverseConnectionClient {
     connection_id: String,
     capabilities: RwLock<Option<AgentCapabilities>>,
     pending: Arc<Mutex<std::collections::HashMap<String, oneshot::Sender<AgentResponse>>>>,
+    #[allow(clippy::type_complexity)]
     outbound_tx: Mutex<Option<mpsc::Sender<(MessageType, Vec<u8>)>>>,
     connected: RwLock<bool>,
     timeout: Duration,

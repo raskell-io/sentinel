@@ -1509,7 +1509,7 @@ mod tests {
             writeln!(file, "# Backend servers").unwrap();
             writeln!(file, "127.0.0.1:8080").unwrap();
             writeln!(file, "127.0.0.1:8081 weight=2").unwrap();
-            writeln!(file, "").unwrap(); // Empty line
+            writeln!(file).unwrap(); // Empty line
             writeln!(file, "127.0.0.1:8082 weight=3").unwrap();
         }
 

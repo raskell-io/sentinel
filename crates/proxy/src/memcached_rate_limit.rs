@@ -141,9 +141,11 @@ impl MemcachedRateLimiter {
         let window_key = format!("{}{}:{}", config.key_prefix, key, now);
 
         // Increment counter atomically
-        let mut client = self.client.write();
-
+        // The write guard must be held across awaits because async_memcached::Client
+        // requires &mut self for operations and is not internally synchronized.
+        #[allow(clippy::await_holding_lock)]
         let result = tokio::time::timeout(config.timeout, async {
+            let mut client = self.client.write();
             // Try to increment; if key doesn't exist, it will return an error
             match client.increment(&window_key, 1).await {
                 Ok(count) => Ok(count),

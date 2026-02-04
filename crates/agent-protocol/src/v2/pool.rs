@@ -1564,14 +1564,13 @@ impl AgentPool {
                 }
 
                 // Try to reconnect failed connections
-                if healthy_count < self.config.connections_per_agent {
-                    if entry.should_reconnect(self.config.reconnect_interval) {
+                if healthy_count < self.config.connections_per_agent
+                    && entry.should_reconnect(self.config.reconnect_interval) {
                         drop(connections); // Release read lock before reconnect
                         if let Err(e) = self.reconnect_agent(&agent_id, &entry).await {
                             trace!(agent_id = %agent_id, error = %e, "Reconnect failed");
                         }
                     }
-                }
             }
         }
     }

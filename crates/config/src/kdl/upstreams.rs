@@ -243,18 +243,18 @@ fn parse_load_balancing(s: &str) -> LoadBalancingAlgorithm {
 fn parse_sticky_session_config(children: &kdl::KdlDocument) -> StickySessionConfig {
     let nodes = children.nodes();
 
-    let cookie_name = find_string_entry(&nodes, "cookie-name")
+    let cookie_name = find_string_entry(nodes, "cookie-name")
         .unwrap_or_else(|| "SERVERID".to_string());
 
     // Parse cookie TTL - support both integer seconds and duration strings
-    let cookie_ttl_secs = find_int_entry(&nodes, "cookie-ttl")
+    let cookie_ttl_secs = find_int_entry(nodes, "cookie-ttl")
         .map(|v| v as u64)
         .or_else(|| {
-            find_string_entry(&nodes, "cookie-ttl").and_then(|s| parse_duration_string(&s))
+            find_string_entry(nodes, "cookie-ttl").and_then(|s| parse_duration_string(&s))
         })
         .unwrap_or(3600); // Default 1 hour
 
-    let cookie_path = find_string_entry(&nodes, "cookie-path").unwrap_or_else(|| "/".to_string());
+    let cookie_path = find_string_entry(nodes, "cookie-path").unwrap_or_else(|| "/".to_string());
 
     let cookie_secure = nodes
         .iter()
@@ -263,7 +263,7 @@ fn parse_sticky_session_config(children: &kdl::KdlDocument) -> StickySessionConf
         .and_then(|e| e.value().as_bool())
         .unwrap_or(true); // Default to secure
 
-    let cookie_same_site = find_string_entry(&nodes, "cookie-same-site")
+    let cookie_same_site = find_string_entry(nodes, "cookie-same-site")
         .map(|s| match s.to_lowercase().as_str() {
             "strict" => SameSitePolicy::Strict,
             "none" => SameSitePolicy::None,
@@ -271,7 +271,7 @@ fn parse_sticky_session_config(children: &kdl::KdlDocument) -> StickySessionConf
         })
         .unwrap_or_default();
 
-    let fallback = find_string_entry(&nodes, "fallback")
+    let fallback = find_string_entry(nodes, "fallback")
         .map(|s| parse_load_balancing(&s))
         .unwrap_or(LoadBalancingAlgorithm::RoundRobin);
 
@@ -539,7 +539,7 @@ fn parse_health_check(node: &kdl::KdlNode) -> Result<HealthCheck> {
                     let readiness = type_node
                         .children()
                         .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "readiness"))
-                        .map(|n| parse_inference_readiness(n));
+                        .map(|n| Box::new(parse_inference_readiness(n)));
 
                     HealthCheckType::Inference {
                         endpoint,
@@ -588,13 +588,13 @@ fn parse_inference_readiness(node: &kdl::KdlNode) -> sentinel_common::InferenceR
         .map(|c| {
             let nodes = c.nodes();
             InferenceProbeConfig {
-                endpoint: find_string_entry(&nodes, "endpoint")
+                endpoint: find_string_entry(nodes, "endpoint")
                     .unwrap_or_else(|| "/v1/completions".to_string()),
-                model: find_string_entry(&nodes, "model").unwrap_or_default(),
-                prompt: find_string_entry(&nodes, "prompt").unwrap_or_else(|| ".".to_string()),
-                max_tokens: find_int_entry(&nodes, "max-tokens").unwrap_or(1) as u32,
-                timeout_secs: find_int_entry(&nodes, "timeout-secs").unwrap_or(30) as u64,
-                max_latency_ms: find_int_entry(&nodes, "max-latency-ms").map(|v| v as u64),
+                model: find_string_entry(nodes, "model").unwrap_or_default(),
+                prompt: find_string_entry(nodes, "prompt").unwrap_or_else(|| ".".to_string()),
+                max_tokens: find_int_entry(nodes, "max-tokens").unwrap_or(1) as u32,
+                timeout_secs: find_int_entry(nodes, "timeout-secs").unwrap_or(30) as u64,
+                max_latency_ms: find_int_entry(nodes, "max-latency-ms").map(|v| v as u64),
             }
         });
 
@@ -618,14 +618,14 @@ fn parse_inference_readiness(node: &kdl::KdlNode) -> sentinel_common::InferenceR
                 .unwrap_or_default();
 
             ModelStatusConfig {
-                endpoint_pattern: find_string_entry(&nodes, "endpoint-pattern")
+                endpoint_pattern: find_string_entry(nodes, "endpoint-pattern")
                     .unwrap_or_else(|| "/v1/models/{model}/status".to_string()),
                 models,
-                expected_status: find_string_entry(&nodes, "expected-status")
+                expected_status: find_string_entry(nodes, "expected-status")
                     .unwrap_or_else(|| "ready".to_string()),
-                status_field: find_string_entry(&nodes, "status-field")
+                status_field: find_string_entry(nodes, "status-field")
                     .unwrap_or_else(|| "status".to_string()),
-                timeout_secs: find_int_entry(&nodes, "timeout-secs").unwrap_or(5) as u64,
+                timeout_secs: find_int_entry(nodes, "timeout-secs").unwrap_or(5) as u64,
             }
         });
 
@@ -638,14 +638,14 @@ fn parse_inference_readiness(node: &kdl::KdlNode) -> sentinel_common::InferenceR
         .map(|c| {
             let nodes = c.nodes();
             QueueDepthConfig {
-                header: find_string_entry(&nodes, "header"),
-                body_field: find_string_entry(&nodes, "body-field"),
-                endpoint: find_string_entry(&nodes, "endpoint"),
-                degraded_threshold: find_int_entry(&nodes, "degraded-threshold").unwrap_or(50)
+                header: find_string_entry(nodes, "header"),
+                body_field: find_string_entry(nodes, "body-field"),
+                endpoint: find_string_entry(nodes, "endpoint"),
+                degraded_threshold: find_int_entry(nodes, "degraded-threshold").unwrap_or(50)
                     as u64,
-                unhealthy_threshold: find_int_entry(&nodes, "unhealthy-threshold").unwrap_or(200)
+                unhealthy_threshold: find_int_entry(nodes, "unhealthy-threshold").unwrap_or(200)
                     as u64,
-                timeout_secs: find_int_entry(&nodes, "timeout-secs").unwrap_or(5) as u64,
+                timeout_secs: find_int_entry(nodes, "timeout-secs").unwrap_or(5) as u64,
             }
         });
 
@@ -657,7 +657,7 @@ fn parse_inference_readiness(node: &kdl::KdlNode) -> sentinel_common::InferenceR
         .and_then(|n| n.children())
         .map(|c| {
             let nodes = c.nodes();
-            let cold_action = find_string_entry(&nodes, "cold-action")
+            let cold_action = find_string_entry(nodes, "cold-action")
                 .map(|s| match s.as_str() {
                     "log-only" | "log_only" => ColdModelAction::LogOnly,
                     "mark-degraded" | "mark_degraded" => ColdModelAction::MarkDegraded,
@@ -667,10 +667,10 @@ fn parse_inference_readiness(node: &kdl::KdlNode) -> sentinel_common::InferenceR
                 .unwrap_or_default();
 
             WarmthDetectionConfig {
-                sample_size: find_int_entry(&nodes, "sample-size").unwrap_or(10) as u32,
-                cold_threshold_multiplier: find_float_entry(&nodes, "cold-threshold-multiplier")
+                sample_size: find_int_entry(nodes, "sample-size").unwrap_or(10) as u32,
+                cold_threshold_multiplier: find_float_entry(nodes, "cold-threshold-multiplier")
                     .unwrap_or(3.0),
-                idle_cold_timeout_secs: find_int_entry(&nodes, "idle-cold-timeout-secs")
+                idle_cold_timeout_secs: find_int_entry(nodes, "idle-cold-timeout-secs")
                     .unwrap_or(300) as u64,
                 cold_action,
             }

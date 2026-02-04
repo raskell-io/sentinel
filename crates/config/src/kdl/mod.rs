@@ -2069,9 +2069,9 @@ mod tests {
             api_schema.schema_file.as_ref().unwrap().to_str().unwrap(),
             "/etc/sentinel/schemas/api-v1.yaml"
         );
-        assert_eq!(api_schema.validate_requests, true);
-        assert_eq!(api_schema.validate_responses, false);
-        assert_eq!(api_schema.strict_mode, true);
+        assert!(api_schema.validate_requests);
+        assert!(!api_schema.validate_responses);
+        assert!(api_schema.strict_mode);
     }
 
     #[test]
@@ -2131,7 +2131,7 @@ mod tests {
         assert_eq!(route.service_type, crate::routes::ServiceType::Api);
 
         let api_schema = route.api_schema.as_ref().unwrap();
-        assert_eq!(api_schema.validate_requests, true);
+        assert!(api_schema.validate_requests);
         assert!(api_schema.request_schema.is_some());
 
         let schema = api_schema.request_schema.as_ref().unwrap();
@@ -2194,7 +2194,7 @@ mod tests {
         let api_schema = route.api_schema.as_ref().unwrap();
         assert!(api_schema.schema_file.is_none());
         assert!(api_schema.schema_content.is_some());
-        assert_eq!(api_schema.validate_requests, true);
+        assert!(api_schema.validate_requests);
 
         let content = api_schema.schema_content.as_ref().unwrap();
         assert!(content.starts_with("openapi: 3.0.0"));
