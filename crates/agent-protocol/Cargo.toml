@@ -44,7 +44,7 @@ anyhow = { workspace = true }
 
 # HTTP
 http = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 
 # Utilities
 uuid = { workspace = true }

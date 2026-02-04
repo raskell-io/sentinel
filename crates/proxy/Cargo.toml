@@ -87,7 +87,7 @@ maxminddb = "0.27"
 ip2location = "0.6"
 
 # Schema validation
-jsonschema = "0.40"
+jsonschema = "0.41"
 serde_yaml = "0.9"
 
 # Static file serving
@@ -156,7 +156,7 @@ tonic = { workspace = true }
 tonic-health = "0.14"
 
 # HTTP client for shadow traffic and service discovery
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
 
 # ACME automatic certificate management (Let's Encrypt)
 instant-acme = "0.8"
@@ -192,7 +192,7 @@ criterion = { workspace = true }
 proptest = { workspace = true }
 insta = { workspace = true }
 tempfile = "3.12"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tokio-tungstenite = "0.28"
 futures-util = "0.3"
 tokio-rustls = "0.26"

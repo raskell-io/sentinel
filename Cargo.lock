@@ -2269,7 +2269,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
 ]
 
 [[package]]
@@ -2725,9 +2724,9 @@ dependencies = [
 
 [[package]]
 name = "jsonschema"
-version = "0.40.2"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba783d17473c27cfd4d1d72785dc1c26d5faba8072f50fec4ebea179bec8f33d"
+checksum = "9320368abda84a3aad44953d61e70515681fe43ae94529dff5567e0215b88438"
 dependencies = [
  "ahash",
  "bytecount",
@@ -4282,6 +4281,7 @@ version = "0.11.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
 dependencies = [
+ "aws-lc-rs",
  "bytes",
  "getrandom 0.3.4",
  "lru-slab",
@@ -4527,9 +4527,9 @@ dependencies = [
 
 [[package]]
 name = "referencing"
-version = "0.40.2"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef39a30a317e883d1ef4c43aa849f90f480d90bb24904fd38266e61d6be58f2"
+checksum = "d5773259506800a8c6ef38df3674b061c62c5941162507891ff8b580e93d954e"
 dependencies = [
  "ahash",
  "fluent-uri",
@@ -4638,21 +4638,16 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.8.1",
- "hyper-rustls",
  "hyper-util",
  "js-sys",
  "log",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
- "rustls",
- "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 1.0.2",
  "tokio",
- "tokio-rustls",
  "tower",
  "tower-http",
  "tower-service",
@@ -4660,7 +4655,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
 ]
 
 [[package]]
@@ -4685,11 +4679,13 @@ dependencies = [
  "log",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-rustls",
@@ -5063,7 +5059,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "prost",
- "reqwest 0.12.28",
+ "reqwest 0.13.1",
  "rmp-serde",
  "sentinel-common",
  "serde",
@@ -5240,7 +5236,7 @@ dependencies = [
  "rcgen",
  "redis",
  "regex",
- "reqwest 0.12.28",
+ "reqwest 0.13.1",
  "rustls",
  "rustls-pemfile 2.2.0",
  "sentinel-agent-protocol",

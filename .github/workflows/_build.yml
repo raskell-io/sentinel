@@ -1,5 +1,5 @@
 # Reusable build workflow for Sentinel
-# Called by: ci.yml, release.yml, nightly.yml (future)
+# Called by: release.yml, nightly.yml (future)
 
 name: Build
 
