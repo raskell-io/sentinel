@@ -224,10 +224,25 @@ jobs:
           git add Cargo.toml crates/*/Cargo.toml
           git commit -m "chore: bump version to ${{ needs.validate.outputs.new-semver }} for release ${{ needs.validate.outputs.calver }}"
 
-          # Push to main branch
-          git push origin HEAD:main
-
           echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Push version bump to main
+        id: push
+        continue-on-error: true
+        run: git push origin HEAD:main
+
+      - name: Create PR for version bump if push was blocked
+        if: steps.push.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="chore/bump-${{ needs.validate.outputs.new-semver }}"
+          git checkout -b "$BRANCH"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore: bump version to ${{ needs.validate.outputs.new-semver }} for release ${{ needs.validate.outputs.calver }}" \
+            --body "Automated version bump after release ${{ needs.validate.outputs.calver }}. Direct push to main was blocked by branch protection." \
+            --base main
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
