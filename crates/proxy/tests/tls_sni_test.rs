@@ -506,10 +506,7 @@ mod acme_resolver {
 
         let config = acme_tls_config(temp_dir.path().to_path_buf());
         let result = SniResolver::from_config(&config);
-        assert!(
-            result.is_err(),
-            "Missing ACME cert files should fail"
-        );
+        assert!(result.is_err(), "Missing ACME cert files should fail");
         match result.unwrap_err() {
             TlsError::CertificateLoad(_) => {}
             e => panic!("Expected CertificateLoad error, got {:?}", e),

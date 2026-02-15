@@ -131,9 +131,10 @@ async fn handle_connection(
         _ => http_404(),
     };
 
-    stream.write_all(response.as_bytes()).await.map_err(|e| {
-        AcmeError::Protocol(format!("Failed to write challenge response: {}", e))
-    })?;
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|e| AcmeError::Protocol(format!("Failed to write challenge response: {}", e)))?;
 
     Ok(())
 }
@@ -162,16 +163,18 @@ mod tests {
 
         let addr_str = addr.to_string();
         let cm_clone = Arc::clone(&cm);
-        let server_handle = tokio::spawn(async move {
-            run_challenge_server(&addr_str, cm_clone, shutdown_rx).await
-        });
+        let server_handle =
+            tokio::spawn(
+                async move { run_challenge_server(&addr_str, cm_clone, shutdown_rx).await },
+            );
 
         // Give server time to start
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Send a challenge request
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let request = "GET /.well-known/acme-challenge/test-token-123 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let request =
+            "GET /.well-known/acme-challenge/test-token-123 HTTP/1.1\r\nHost: localhost\r\n\r\n";
         stream.write_all(request.as_bytes()).await.unwrap();
 
         let mut response = vec![0u8; 4096];
@@ -198,14 +201,16 @@ mod tests {
 
         let addr_str = addr.to_string();
         let cm_clone = Arc::clone(&cm);
-        let server_handle = tokio::spawn(async move {
-            run_challenge_server(&addr_str, cm_clone, shutdown_rx).await
-        });
+        let server_handle =
+            tokio::spawn(
+                async move { run_challenge_server(&addr_str, cm_clone, shutdown_rx).await },
+            );
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let request = "GET /.well-known/acme-challenge/unknown-token HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let request =
+            "GET /.well-known/acme-challenge/unknown-token HTTP/1.1\r\nHost: localhost\r\n\r\n";
         stream.write_all(request.as_bytes()).await.unwrap();
 
         let mut response = vec![0u8; 4096];
@@ -230,9 +235,10 @@ mod tests {
 
         let addr_str = addr.to_string();
         let cm_clone = Arc::clone(&cm);
-        let server_handle = tokio::spawn(async move {
-            run_challenge_server(&addr_str, cm_clone, shutdown_rx).await
-        });
+        let server_handle =
+            tokio::spawn(
+                async move { run_challenge_server(&addr_str, cm_clone, shutdown_rx).await },
+            );
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
