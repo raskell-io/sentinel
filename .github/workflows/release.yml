@@ -189,6 +189,7 @@ jobs:
     environment: release  # Optional: use GitHub environment for additional protection
     permissions:
       contents: write
+      pull-requests: write
     outputs:
       commit-sha: ${{ steps.commit.outputs.sha }}
     steps:
