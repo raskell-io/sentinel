@@ -93,6 +93,7 @@
 //! 6. DNS records are cleaned up, certificate is persisted
 
 mod challenge;
+pub mod challenge_server;
 mod client;
 pub mod dns;
 mod error;

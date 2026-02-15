@@ -115,12 +115,24 @@ pub struct SniResolver {
 impl SniResolver {
     /// Create a new SNI resolver from TLS configuration
     pub fn from_config(config: &TlsConfig) -> Result<Self, TlsError> {
-        // Get cert_file and key_file - required for non-ACME configs
+        // Get cert_file and key_file - manual certs or ACME-managed paths
+        let (cert_path_buf, key_path_buf);
         let (cert_file, key_file) = match (&config.cert_file, &config.key_file) {
-            (Some(cert), Some(key)) => (cert, key),
+            (Some(cert), Some(key)) => (cert.as_path(), key.as_path()),
+            _ if config.acme.is_some() => {
+                let acme = config.acme.as_ref().unwrap();
+                let primary = acme.domains.first().ok_or_else(|| {
+                    TlsError::ConfigBuild(
+                        "ACME configuration has no domains for cert path resolution".to_string(),
+                    )
+                })?;
+                cert_path_buf = acme.storage.join("domains").join(primary).join("cert.pem");
+                key_path_buf = acme.storage.join("domains").join(primary).join("key.pem");
+                (cert_path_buf.as_path(), key_path_buf.as_path())
+            }
             _ => {
                 return Err(TlsError::ConfigBuild(
-                    "TLS configuration requires cert_file and key_file".to_string(),
+                    "TLS configuration requires cert_file and key_file (or ACME block)".to_string(),
                 ));
             }
         };
