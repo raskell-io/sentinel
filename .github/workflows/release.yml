@@ -239,7 +239,7 @@ jobs:
         run: |
           BRANCH="chore/bump-${{ needs.validate.outputs.new-semver }}"
           git checkout -b "$BRANCH"
-          git push origin "$BRANCH"
+          git push --force origin "$BRANCH"
           gh pr create \
             --title "chore: bump version to ${{ needs.validate.outputs.new-semver }} for release ${{ needs.validate.outputs.calver }}" \
             --body "Automated version bump after release ${{ needs.validate.outputs.calver }}. Direct push to main was blocked by branch protection." \
@@ -260,8 +260,16 @@ jobs:
             "sentinel-proxy"
           )
 
+          NEW_SEMVER="${{ needs.validate.outputs.new-semver }}"
+
           for crate in "${CRATES[@]}"; do
             echo "Publishing $crate..."
+
+            # Check if this version is already published (from a partial prior run)
+            if cargo search "$crate" --limit 1 2>/dev/null | grep -q "\"$NEW_SEMVER\""; then
+              echo "$crate@$NEW_SEMVER already published, skipping"
+              continue
+            fi
 
             # Retry up to 3 times (crates.io index propagation)
             for i in 1 2 3; do
