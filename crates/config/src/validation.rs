@@ -1516,4 +1516,342 @@ mod tests {
             "request_timeout_secs is now wired and should not produce warnings"
         );
     }
+
+    // ========================================================================
+    // Config field coverage tests
+    // ========================================================================
+
+    /// Exhaustive construction test for config structs.
+    ///
+    /// This test constructs every config struct with fully explicit field
+    /// initialization (no `..Default::default()`). When a developer adds a
+    /// new field to any config struct, **this test fails to compile** until
+    /// they add the field — forcing them to consider wiring.
+    ///
+    /// If this fails to compile, you MUST either:
+    ///   1. Wire the field to runtime behavior AND add a test, OR
+    ///   2. Add a warning in `validate_implementation_status()`
+    #[test]
+    fn config_field_coverage_exhaustive_construction() {
+        use crate::filters::{
+            CompressFilter, CompressionAlgorithm, CorsFilter, FilterPhase,
+            GlobalRateLimitConfig, HeadersFilter, LogFilter, RateLimitKey, TimeoutFilter,
+        };
+        use crate::observability::{
+            LoggingConfig, MetricsConfig, ObservabilityConfig,
+        };
+        use crate::routes::{
+            CacheBackend, CacheStorageConfig, FailureMode, HeaderModifications,
+            RouteCacheConfig,
+        };
+        use crate::server::{ListenerConfig, ListenerProtocol, ServerConfig, TlsConfig};
+        use crate::waf::{BodyInspectionPolicy, WafConfig, WafEngine, WafRuleset};
+        use sentinel_common::types::LoadBalancingAlgorithm;
+
+        // --- ServerConfig ---
+        let _server = ServerConfig {
+            worker_threads: 4,
+            max_connections: 1000,
+            graceful_shutdown_timeout_secs: 30,
+            daemon: false,
+            pid_file: None,
+            user: None,
+            group: None,
+            working_directory: None,
+            trace_id_format: Default::default(),
+            auto_reload: false,
+        };
+
+        // --- ListenerConfig ---
+        let _listener = ListenerConfig {
+            id: "http".to_string(),
+            address: "0.0.0.0:8080".to_string(),
+            protocol: ListenerProtocol::Http,
+            tls: None,
+            default_route: Some("default".to_string()),
+            request_timeout_secs: 60,
+            keepalive_timeout_secs: 75,
+            max_concurrent_streams: 100,
+        };
+
+        // --- TlsConfig ---
+        let _tls = TlsConfig {
+            cert_file: Some("/tmp/cert.pem".into()),
+            key_file: Some("/tmp/key.pem".into()),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: TlsVersion::Tls12,
+            max_version: None,
+            cipher_suites: vec![],
+            client_auth: false,
+            ocsp_stapling: true,
+            session_resumption: true,
+            acme: None,
+        };
+
+        // --- RouteConfig ---
+        let _route = RouteConfig {
+            id: "test".to_string(),
+            priority: Priority::Normal,
+            matches: vec![MatchCondition::PathPrefix("/".to_string())],
+            upstream: Some("default".to_string()),
+            service_type: ServiceType::Web,
+            policies: RoutePolicies {
+                request_headers: HeaderModifications {
+                    set: HashMap::new(),
+                    add: HashMap::new(),
+                    remove: vec![],
+                },
+                response_headers: HeaderModifications {
+                    set: HashMap::new(),
+                    add: HashMap::new(),
+                    remove: vec![],
+                },
+                timeout_secs: None,
+                max_body_size: None,
+                rate_limit: None,
+                failure_mode: FailureMode::Closed,
+                buffer_requests: false,
+                buffer_responses: false,
+                cache: None,
+            },
+            filters: vec![],
+            builtin_handler: None,
+            waf_enabled: false,
+            circuit_breaker: None,
+            retry_policy: None,
+            static_files: None,
+            api_schema: None,
+            inference: None,
+            error_pages: None,
+            websocket: false,
+            websocket_inspection: false,
+            shadow: None,
+            fallback: None,
+        };
+
+        // --- UpstreamConfig ---
+        let _upstream = UpstreamConfig {
+            id: "default".to_string(),
+            targets: vec![UpstreamTarget {
+                address: "127.0.0.1:8081".to_string(),
+                weight: 1,
+                max_requests: None,
+                metadata: HashMap::new(),
+            }],
+            load_balancing: LoadBalancingAlgorithm::RoundRobin,
+            sticky_session: None,
+            health_check: None,
+            connection_pool: ConnectionPoolConfig::default(),
+            timeouts: UpstreamTimeouts::default(),
+            tls: None,
+            http_version: HttpVersionConfig::default(),
+        };
+
+        // --- Filter types ---
+        let _headers = HeadersFilter {
+            phase: FilterPhase::Request,
+            set: HashMap::new(),
+            add: HashMap::new(),
+            remove: vec![],
+        };
+
+        let _compress = CompressFilter {
+            algorithms: vec![CompressionAlgorithm::Gzip],
+            min_size: 1024,
+            content_types: vec!["text/html".to_string()],
+            level: 6,
+        };
+
+        let _cors = CorsFilter {
+            allowed_origins: vec!["*".to_string()],
+            allowed_methods: vec!["GET".to_string()],
+            allowed_headers: vec![],
+            exposed_headers: vec![],
+            allow_credentials: false,
+            max_age_secs: 3600,
+        };
+
+        let _timeout = TimeoutFilter {
+            request_timeout_secs: None,
+            upstream_timeout_secs: None,
+            connect_timeout_secs: None,
+        };
+
+        let _log = LogFilter {
+            log_request: true,
+            log_response: true,
+            log_body: false,
+            max_body_log_size: 1024,
+            fields: vec![],
+            level: "info".to_string(),
+        };
+
+        // --- WafConfig ---
+        let _waf = WafConfig {
+            engine: WafEngine::Coraza,
+            ruleset: WafRuleset {
+                crs_version: "4.0".to_string(),
+                custom_rules_dir: None,
+                paranoia_level: 1,
+                anomaly_threshold: 5,
+                exclusions: vec![],
+            },
+            mode: WafMode::Off,
+            audit_log: true,
+            body_inspection: BodyInspectionPolicy {
+                inspect_request_body: true,
+                inspect_response_body: false,
+                max_inspection_bytes: 1024 * 1024,
+                content_types: vec![],
+                decompress: false,
+                max_decompression_ratio: 100.0,
+            },
+        };
+
+        // --- ObservabilityConfig ---
+        let _obs = ObservabilityConfig {
+            metrics: MetricsConfig {
+                enabled: true,
+                address: "0.0.0.0:9090".to_string(),
+                path: "/metrics".to_string(),
+                high_cardinality: false,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                format: "json".to_string(),
+                timestamps: true,
+                file: None,
+                access_log: None,
+                error_log: None,
+                audit_log: None,
+            },
+            tracing: None,
+        };
+
+        // --- RouteCacheConfig ---
+        let _cache = RouteCacheConfig {
+            enabled: true,
+            default_ttl_secs: 3600,
+            max_size_bytes: 10 * 1024 * 1024,
+            cache_private: false,
+            stale_while_revalidate_secs: 60,
+            stale_if_error_secs: 300,
+            cacheable_methods: vec!["GET".to_string()],
+            cacheable_status_codes: vec![200],
+            vary_headers: vec![],
+            ignore_query_params: vec![],
+        };
+
+        // --- CacheStorageConfig ---
+        let _cache_storage = CacheStorageConfig {
+            enabled: true,
+            backend: CacheBackend::Memory,
+            max_size_bytes: 100 * 1024 * 1024,
+            eviction_limit_bytes: None,
+            lock_timeout_secs: 10,
+            disk_path: None,
+            disk_shards: 16,
+        };
+
+        // --- GlobalRateLimitConfig ---
+        let _rl = GlobalRateLimitConfig {
+            default_rps: None,
+            default_burst: None,
+            key: RateLimitKey::ClientIp,
+            global: None,
+        };
+
+        // If this test compiles, all config struct fields are accounted for.
+    }
+
+    // ========================================================================
+    // Validation warnings snapshot test
+    // ========================================================================
+
+    /// Snapshot test for validation warnings from `validate_implementation_status`.
+    ///
+    /// This test constructs a config with every partially-wired feature enabled
+    /// and asserts the exact set of warnings. When someone wires a feature or
+    /// adds a new warning, this test fails and they must update the expected list.
+    #[test]
+    fn validation_warnings_snapshot() {
+        let mut config = Config::default_for_testing();
+
+        // Enable all features that currently produce warnings:
+
+        // TLS cipher_suites (unwired — Pingora doesn't expose custom cipher config)
+        config.listeners[0].tls = Some(crate::TlsConfig {
+            cert_file: Some("/tmp/cert.pem".into()),
+            key_file: Some("/tmp/key.pem".into()),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: TlsVersion::Tls13, // non-default → produces warning
+            max_version: Some(TlsVersion::Tls13), // set → produces warning
+            cipher_suites: vec!["TLS_AES_256_GCM_SHA384".to_string()], // set → produces warning
+            client_auth: false,
+            ocsp_stapling: true,
+            session_resumption: true,
+            acme: None,
+        });
+
+        // max_concurrent_streams (unwired — Pingora H2 per-listener config)
+        config.listeners[0].max_concurrent_streams = 200; // non-default → produces warning
+
+        // Metrics address (unwired — no dedicated HTTP server yet)
+        config.observability.metrics.address = "0.0.0.0:9191".to_string(); // non-default → warning
+
+        // Logging file (unwired — goes to stdout/stderr)
+        config.observability.logging.file = Some("/var/log/sentinel/app.log".into());
+
+        // Logging level/format (unwired — controlled by RUST_LOG env var)
+        config.observability.logging.level = "debug".to_string();
+        config.observability.logging.format = "pretty".to_string();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        // No errors expected (WAF is not enabled)
+        assert!(
+            errors.is_empty(),
+            "Expected no errors, got: {:?}",
+            errors
+        );
+
+        // Exact expected warnings — update when features are wired or new warnings added.
+        //
+        // Each entry is a substring that must appear in exactly one warning.
+        let expected_warning_fragments = vec![
+            "cipher_suites",
+            "min_version",
+            "max_version",
+            "max_concurrent_streams",
+            "Metrics endpoint address",
+            "logging.file",
+            "Logging level",
+        ];
+
+        assert_eq!(
+            warnings.len(),
+            expected_warning_fragments.len(),
+            "Warning count changed!\n\
+             Expected {} warnings but got {}.\n\
+             If you wired a feature, remove its expected warning.\n\
+             If you added a new unwired feature, add its warning here.\n\
+             Actual warnings:\n{:#?}",
+            expected_warning_fragments.len(),
+            warnings.len(),
+            warnings
+        );
+
+        for expected in &expected_warning_fragments {
+            assert!(
+                warnings.iter().any(|w| w.contains(expected)),
+                "Expected warning containing '{}' not found.\nActual warnings:\n{:#?}",
+                expected,
+                warnings
+            );
+        }
+    }
 }

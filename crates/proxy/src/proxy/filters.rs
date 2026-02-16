@@ -436,3 +436,491 @@ fn emit_response_log(ctx: &RequestContext, log: &LogFilter, status: u16) {
         ),
     }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    use pingora::http::RequestHeader as PingoraRequestHeader;
+    use sentinel_config::{
+        filters::FilterConfig, CompressFilter, CorsFilter, FilterPhase, HeadersFilter, LogFilter,
+        TimeoutFilter,
+    };
+
+    // =========================================================================
+    // Test helpers
+    // =========================================================================
+
+    /// Build a minimal Config + RouteConfig with a single filter for testing.
+    fn test_config_with_filter(
+        filter_id: &str,
+        filter: Filter,
+    ) -> (Arc<Config>, Arc<sentinel_config::RouteConfig>) {
+        let mut config = Config::default_for_testing();
+        config.filters.insert(
+            filter_id.to_string(),
+            FilterConfig::new(filter_id, filter),
+        );
+        config.routes[0].filters = vec![filter_id.to_string()];
+        let route = Arc::new(config.routes[0].clone());
+        (Arc::new(config), route)
+    }
+
+    fn new_ctx_with_route(route: &Arc<sentinel_config::RouteConfig>) -> RequestContext {
+        let mut ctx = RequestContext::new();
+        ctx.trace_id = "test-trace-id".to_string();
+        ctx.method = "GET".to_string();
+        ctx.path = "/test".to_string();
+        ctx.client_ip = "127.0.0.1".to_string();
+        ctx.route_config = Some(Arc::clone(route));
+        ctx
+    }
+
+    // =========================================================================
+    // Headers filter tests
+    // =========================================================================
+
+    #[test]
+    fn headers_filter_sets_request_headers() {
+        let mut set = HashMap::new();
+        set.insert("X-Custom".to_string(), "value".to_string());
+        let mut add = HashMap::new();
+        add.insert("X-Added".to_string(), "added-value".to_string());
+
+        let headers_filter = HeadersFilter {
+            phase: FilterPhase::Request,
+            set,
+            add,
+            remove: vec!["X-Remove-Me".to_string()],
+        };
+
+        let (config, route) = test_config_with_filter("hdr", Filter::Headers(headers_filter));
+        let ctx = new_ctx_with_route(&route);
+
+        let mut req = PingoraRequestHeader::build("GET", b"/test", None).unwrap();
+        req.insert_header("X-Remove-Me", "should-be-gone").unwrap();
+
+        apply_request_headers_filters(&mut req, &ctx, &config);
+
+        assert_eq!(
+            req.headers.get("X-Custom").map(|v| v.to_str().unwrap()),
+            Some("value")
+        );
+        assert_eq!(
+            req.headers.get("X-Added").map(|v| v.to_str().unwrap()),
+            Some("added-value")
+        );
+        assert!(req.headers.get("X-Remove-Me").is_none());
+    }
+
+    #[test]
+    fn headers_filter_sets_response_headers() {
+        let mut set = HashMap::new();
+        set.insert("X-Resp".to_string(), "resp-val".to_string());
+
+        let headers_filter = HeadersFilter {
+            phase: FilterPhase::Response,
+            set,
+            add: HashMap::new(),
+            remove: vec!["Server".to_string()],
+        };
+
+        let (config, route) = test_config_with_filter("hdr", Filter::Headers(headers_filter));
+        let mut ctx = new_ctx_with_route(&route);
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        resp.insert_header("Server", "hidden").unwrap();
+
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert_eq!(
+            resp.headers.get("X-Resp").map(|v| v.to_str().unwrap()),
+            Some("resp-val")
+        );
+        assert!(resp.headers.get("Server").is_none());
+    }
+
+    #[test]
+    fn headers_filter_both_phase_applies_to_both() {
+        let mut set = HashMap::new();
+        set.insert("X-Both".to_string(), "present".to_string());
+
+        let headers_filter = HeadersFilter {
+            phase: FilterPhase::Both,
+            set,
+            add: HashMap::new(),
+            remove: vec![],
+        };
+
+        let (config, route) = test_config_with_filter("hdr", Filter::Headers(headers_filter));
+        let mut ctx = new_ctx_with_route(&route);
+
+        // Request phase
+        let mut req = PingoraRequestHeader::build("GET", b"/test", None).unwrap();
+        apply_request_headers_filters(&mut req, &ctx, &config);
+        assert_eq!(
+            req.headers.get("X-Both").map(|v| v.to_str().unwrap()),
+            Some("present")
+        );
+
+        // Response phase
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        apply_response_filters(&mut resp, &mut ctx, &config);
+        assert_eq!(
+            resp.headers.get("X-Both").map(|v| v.to_str().unwrap()),
+            Some("present")
+        );
+    }
+
+    // =========================================================================
+    // CORS filter tests
+    // =========================================================================
+
+    #[test]
+    fn cors_response_headers_added_for_allowed_origin() {
+        let cors = CorsFilter {
+            allowed_origins: vec!["https://example.com".to_string()],
+            allowed_methods: vec!["GET".to_string(), "POST".to_string()],
+            allowed_headers: vec![],
+            exposed_headers: vec![],
+            allow_credentials: false,
+            max_age_secs: 3600,
+        };
+
+        let (config, route) = test_config_with_filter("cors", Filter::Cors(cors));
+        let mut ctx = new_ctx_with_route(&route);
+        ctx.cors_origin = Some("https://example.com".to_string());
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert_eq!(
+            resp.headers
+                .get("Access-Control-Allow-Origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            resp.headers.get("Vary").map(|v| v.to_str().unwrap()),
+            Some("Origin")
+        );
+    }
+
+    #[test]
+    fn cors_credentials_header_when_enabled() {
+        let cors = CorsFilter {
+            allowed_origins: vec!["*".to_string()],
+            allowed_methods: vec!["GET".to_string()],
+            allowed_headers: vec![],
+            exposed_headers: vec![],
+            allow_credentials: true,
+            max_age_secs: 3600,
+        };
+
+        let (config, route) = test_config_with_filter("cors", Filter::Cors(cors));
+        let mut ctx = new_ctx_with_route(&route);
+        ctx.cors_origin = Some("https://app.test".to_string());
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert_eq!(
+            resp.headers
+                .get("Access-Control-Allow-Credentials")
+                .map(|v| v.to_str().unwrap()),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn cors_exposed_headers_set() {
+        let cors = CorsFilter {
+            allowed_origins: vec!["*".to_string()],
+            allowed_methods: vec!["GET".to_string()],
+            allowed_headers: vec![],
+            exposed_headers: vec!["X-Request-Id".to_string(), "X-Trace-Id".to_string()],
+            allow_credentials: false,
+            max_age_secs: 3600,
+        };
+
+        let (config, route) = test_config_with_filter("cors", Filter::Cors(cors));
+        let mut ctx = new_ctx_with_route(&route);
+        ctx.cors_origin = Some("https://app.test".to_string());
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert_eq!(
+            resp.headers
+                .get("Access-Control-Expose-Headers")
+                .map(|v| v.to_str().unwrap()),
+            Some("X-Request-Id, X-Trace-Id")
+        );
+    }
+
+    #[test]
+    fn cors_no_headers_when_no_origin_matched() {
+        let cors = CorsFilter {
+            allowed_origins: vec!["https://example.com".to_string()],
+            allowed_methods: vec!["GET".to_string()],
+            allowed_headers: vec![],
+            exposed_headers: vec![],
+            allow_credentials: false,
+            max_age_secs: 3600,
+        };
+
+        let (config, route) = test_config_with_filter("cors", Filter::Cors(cors));
+        let mut ctx = new_ctx_with_route(&route);
+        // cors_origin is None — origin did not match
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert!(resp.headers.get("Access-Control-Allow-Origin").is_none());
+    }
+
+    #[test]
+    fn cors_origin_validation_wildcard() {
+        assert!(is_origin_allowed(
+            "https://anything.test",
+            &["*".to_string()]
+        ));
+    }
+
+    #[test]
+    fn cors_origin_validation_exact_match() {
+        let allowed = vec!["https://example.com".to_string()];
+        assert!(is_origin_allowed("https://example.com", &allowed));
+        assert!(!is_origin_allowed("https://other.com", &allowed));
+    }
+
+    #[test]
+    fn cors_origin_validation_empty_list() {
+        assert!(!is_origin_allowed("https://example.com", &[]));
+    }
+
+    // =========================================================================
+    // Compress filter tests
+    // =========================================================================
+
+    #[test]
+    fn compress_enables_for_compressible_content() {
+        let compress = CompressFilter {
+            algorithms: vec![],
+            min_size: 1024,
+            content_types: vec!["text/".to_string()],
+            level: 6,
+        };
+
+        let (config, route) = test_config_with_filter("gz", Filter::Compress(compress));
+        let mut ctx = new_ctx_with_route(&route);
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        resp.insert_header("Content-Type", "text/html; charset=utf-8")
+            .unwrap();
+        resp.insert_header("Content-Length", "5000").unwrap();
+
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert!(ctx.compress_enabled, "Should enable compression for text/html > 1024 bytes");
+    }
+
+    #[test]
+    fn compress_skips_small_responses() {
+        let compress = CompressFilter {
+            algorithms: vec![],
+            min_size: 1024,
+            content_types: vec!["text/".to_string()],
+            level: 6,
+        };
+
+        let (config, route) = test_config_with_filter("gz", Filter::Compress(compress));
+        let mut ctx = new_ctx_with_route(&route);
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        resp.insert_header("Content-Type", "text/html").unwrap();
+        resp.insert_header("Content-Length", "100").unwrap();
+
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert!(
+            !ctx.compress_enabled,
+            "Should skip compression for responses smaller than min_size"
+        );
+    }
+
+    #[test]
+    fn compress_skips_non_compressible_types() {
+        let compress = CompressFilter {
+            algorithms: vec![],
+            min_size: 1024,
+            content_types: vec!["text/".to_string(), "application/json".to_string()],
+            level: 6,
+        };
+
+        let (config, route) = test_config_with_filter("gz", Filter::Compress(compress));
+        let mut ctx = new_ctx_with_route(&route);
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        resp.insert_header("Content-Type", "image/png").unwrap();
+        resp.insert_header("Content-Length", "50000").unwrap();
+
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert!(
+            !ctx.compress_enabled,
+            "Should skip compression for non-compressible content types"
+        );
+    }
+
+    #[test]
+    fn compress_skips_already_encoded() {
+        let compress = CompressFilter {
+            algorithms: vec![],
+            min_size: 1024,
+            content_types: vec!["text/".to_string()],
+            level: 6,
+        };
+
+        let (config, route) = test_config_with_filter("gz", Filter::Compress(compress));
+        let mut ctx = new_ctx_with_route(&route);
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        resp.insert_header("Content-Type", "text/html").unwrap();
+        resp.insert_header("Content-Length", "5000").unwrap();
+        resp.insert_header("Content-Encoding", "gzip").unwrap();
+
+        apply_response_filters(&mut resp, &mut ctx, &config);
+
+        assert!(
+            !ctx.compress_enabled,
+            "Should skip compression for already-encoded responses"
+        );
+    }
+
+    // =========================================================================
+    // Timeout filter tests
+    // =========================================================================
+
+    #[test]
+    fn timeout_filter_sets_connect_override() {
+        let timeout = TimeoutFilter {
+            request_timeout_secs: None,
+            upstream_timeout_secs: None,
+            connect_timeout_secs: Some(5),
+        };
+
+        let mut ctx = RequestContext::new();
+        ctx.trace_id = "test".to_string();
+        apply_timeout_override(&mut ctx, &timeout);
+
+        assert_eq!(ctx.filter_connect_timeout_secs, Some(5));
+        assert_eq!(ctx.filter_upstream_timeout_secs, None);
+    }
+
+    #[test]
+    fn timeout_filter_sets_upstream_override() {
+        let timeout = TimeoutFilter {
+            request_timeout_secs: None,
+            upstream_timeout_secs: Some(30),
+            connect_timeout_secs: None,
+        };
+
+        let mut ctx = RequestContext::new();
+        ctx.trace_id = "test".to_string();
+        apply_timeout_override(&mut ctx, &timeout);
+
+        assert_eq!(ctx.filter_upstream_timeout_secs, Some(30));
+        assert_eq!(ctx.filter_connect_timeout_secs, None);
+    }
+
+    #[test]
+    fn timeout_filter_sets_both_overrides() {
+        let timeout = TimeoutFilter {
+            request_timeout_secs: Some(60),
+            upstream_timeout_secs: Some(30),
+            connect_timeout_secs: Some(5),
+        };
+
+        let mut ctx = RequestContext::new();
+        ctx.trace_id = "test".to_string();
+        apply_timeout_override(&mut ctx, &timeout);
+
+        assert_eq!(ctx.filter_connect_timeout_secs, Some(5));
+        assert_eq!(ctx.filter_upstream_timeout_secs, Some(30));
+    }
+
+    // =========================================================================
+    // Log filter tests (smoke tests — verify no panics)
+    // =========================================================================
+
+    #[test]
+    fn log_filter_emits_at_request_phase() {
+        let log = LogFilter {
+            log_request: true,
+            log_response: false,
+            log_body: false,
+            max_body_log_size: 1024,
+            fields: vec![],
+            level: "info".to_string(),
+        };
+
+        let mut ctx = RequestContext::new();
+        ctx.trace_id = "log-test".to_string();
+        ctx.method = "POST".to_string();
+        ctx.path = "/api/data".to_string();
+        ctx.client_ip = "10.0.0.1".to_string();
+        ctx.host = Some("example.com".to_string());
+        ctx.user_agent = Some("test-agent/1.0".to_string());
+
+        // Should not panic
+        emit_request_log(&ctx, &log);
+    }
+
+    #[test]
+    fn log_filter_emits_at_response_phase() {
+        let log = LogFilter {
+            log_request: false,
+            log_response: true,
+            log_body: false,
+            max_body_log_size: 1024,
+            fields: vec![],
+            level: "debug".to_string(),
+        };
+
+        let mut ctx = RequestContext::new();
+        ctx.trace_id = "log-test".to_string();
+        ctx.response_bytes = 4096;
+        ctx.upstream = Some("backend".to_string());
+
+        // Should not panic
+        emit_response_log(&ctx, &log, 200);
+    }
+
+    #[test]
+    fn log_filter_trace_level() {
+        let log = LogFilter {
+            log_request: true,
+            log_response: true,
+            log_body: false,
+            max_body_log_size: 1024,
+            fields: vec![],
+            level: "trace".to_string(),
+        };
+
+        let mut ctx = RequestContext::new();
+        ctx.trace_id = "trace-test".to_string();
+        ctx.method = "GET".to_string();
+        ctx.path = "/".to_string();
+        ctx.client_ip = "::1".to_string();
+
+        // Both should not panic
+        emit_request_log(&ctx, &log);
+        emit_response_log(&ctx, &log, 404);
+    }
+}
