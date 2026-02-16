@@ -431,23 +431,29 @@ async fn initialize_acme(
                 .collect();
 
             let propagation_config = sentinel_proxy::acme::dns::PropagationConfig {
-                initial_delay: std::time::Duration::from_secs(dns_config.propagation.initial_delay_secs),
-                check_interval: std::time::Duration::from_secs(dns_config.propagation.check_interval_secs),
+                initial_delay: std::time::Duration::from_secs(
+                    dns_config.propagation.initial_delay_secs,
+                ),
+                check_interval: std::time::Duration::from_secs(
+                    dns_config.propagation.check_interval_secs,
+                ),
                 timeout: std::time::Duration::from_secs(dns_config.propagation.timeout_secs),
                 nameservers,
             };
 
-            let dns_manager = Arc::new(
-                sentinel_proxy::acme::dns::Dns01ChallengeManager::new(provider, propagation_config)?,
-            );
+            let dns_manager = Arc::new(sentinel_proxy::acme::dns::Dns01ChallengeManager::new(
+                provider,
+                propagation_config,
+            )?);
             scheduler = scheduler.with_dns_manager(dns_manager);
         }
     }
 
     // Check if initial certificate issuance is needed
-    let primary_domain = acme_config.domains.first().ok_or_else(|| {
-        AcmeError::OrderCreation("No domains configured for ACME".to_string())
-    })?;
+    let primary_domain = acme_config
+        .domains
+        .first()
+        .ok_or_else(|| AcmeError::OrderCreation("No domains configured for ACME".to_string()))?;
 
     if acme_client.needs_renewal(primary_domain)? {
         info!(
@@ -475,7 +481,9 @@ async fn initialize_acme(
                 let cm_clone = Arc::clone(&challenge_manager);
                 let server_handle = tokio::spawn(async move {
                     sentinel_proxy::acme::challenge_server::run_challenge_server(
-                        &http_addr, cm_clone, shutdown_rx,
+                        &http_addr,
+                        cm_clone,
+                        shutdown_rx,
                     )
                     .await
                 });
@@ -488,11 +496,8 @@ async fn initialize_acme(
 
                 // Shut down temporary server
                 let _ = shutdown_tx.send(true);
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    server_handle,
-                )
-                .await;
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), server_handle).await;
 
                 result?;
             }
@@ -588,9 +593,9 @@ fn run_server(
     let config = proxy.config_manager.current();
 
     // Initialize ACME if any listener has it configured
-    let acme_state = runtime.block_on(async {
-        initialize_acme(&config, None).await
-    }).context("ACME initialization failed")?;
+    let acme_state = runtime
+        .block_on(async { initialize_acme(&config, None).await })
+        .context("ACME initialization failed")?;
 
     // Wire ACME components into the proxy
     if let Some(ref state) = acme_state {

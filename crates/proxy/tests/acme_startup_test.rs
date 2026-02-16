@@ -176,10 +176,7 @@ mod challenge_server {
 
         // Register multiple tokens
         for i in 0..10 {
-            cm.add_challenge(
-                &format!("token-{}", i),
-                &format!("auth-value-{}", i),
-            );
+            cm.add_challenge(&format!("token-{}", i), &format!("auth-value-{}", i));
         }
 
         let (addr, shutdown_tx, server_handle) = start_server(Arc::clone(&cm)).await;
@@ -236,10 +233,7 @@ mod challenge_server {
 
         // Server should exit cleanly within a reasonable time
         let result = tokio::time::timeout(Duration::from_secs(2), server_handle).await;
-        assert!(
-            result.is_ok(),
-            "Server should shut down within 2 seconds"
-        );
+        assert!(result.is_ok(), "Server should shut down within 2 seconds");
 
         // The JoinHandle result should be Ok (no panic)
         let inner = result.unwrap();
@@ -282,7 +276,8 @@ mod challenge_server {
         // Unknown token
         {
             let mut stream = tokio::net::TcpStream::connect(&addr).await.unwrap();
-            let request = "GET /.well-known/acme-challenge/unknown HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            let request =
+                "GET /.well-known/acme-challenge/unknown HTTP/1.1\r\nHost: localhost\r\n\r\n";
             stream.write_all(request.as_bytes()).await.unwrap();
 
             let mut response = vec![0u8; 4096];
