@@ -10,6 +10,7 @@
 mod context;
 mod fallback;
 mod fallback_metrics;
+pub(crate) mod filters;
 mod handlers;
 mod http_trait;
 mod model_routing;
@@ -712,44 +713,52 @@ impl SentinelProxy {
         let mut enabled_count = 0;
 
         for route in &config.routes {
-            // API routes: caching disabled by default (responses often dynamic)
-            if route.service_type == sentinel_config::ServiceType::Api {
-                let cache_config = CacheConfig {
-                    enabled: false, // Disabled until explicitly configured via KDL
-                    default_ttl_secs: 60,
-                    ..Default::default()
-                };
-                manager.register_route(&route.id, cache_config);
-            }
+            // Use per-route cache config if present, otherwise fall back to service-type defaults
+            let cache_config = if let Some(ref rc) = route.policies.cache {
+                CacheConfig {
+                    enabled: rc.enabled,
+                    default_ttl_secs: rc.default_ttl_secs,
+                    max_size_bytes: rc.max_size_bytes,
+                    cache_private: rc.cache_private,
+                    stale_while_revalidate_secs: rc.stale_while_revalidate_secs,
+                    stale_if_error_secs: rc.stale_if_error_secs,
+                    cacheable_methods: rc.cacheable_methods.clone(),
+                    cacheable_status_codes: rc.cacheable_status_codes.clone(),
+                }
+            } else {
+                match route.service_type {
+                    sentinel_config::ServiceType::Static => CacheConfig {
+                        enabled: true,
+                        default_ttl_secs: 3600,
+                        max_size_bytes: 50 * 1024 * 1024, // 50MB for static
+                        stale_while_revalidate_secs: 60,
+                        stale_if_error_secs: 300,
+                        ..Default::default()
+                    },
+                    sentinel_config::ServiceType::Api => CacheConfig {
+                        enabled: false,
+                        default_ttl_secs: 60,
+                        ..Default::default()
+                    },
+                    sentinel_config::ServiceType::Web => CacheConfig {
+                        enabled: false,
+                        default_ttl_secs: 300,
+                        ..Default::default()
+                    },
+                    _ => CacheConfig::default(),
+                }
+            };
 
-            // Static routes: enable caching by default (assets are typically cacheable)
-            if route.service_type == sentinel_config::ServiceType::Static {
-                let cache_config = CacheConfig {
-                    enabled: true, // Enable by default for static routes
-                    default_ttl_secs: 3600,
-                    max_size_bytes: 50 * 1024 * 1024, // 50MB for static
-                    stale_while_revalidate_secs: 60,
-                    stale_if_error_secs: 300,
-                    ..Default::default()
-                };
-                manager.register_route(&route.id, cache_config);
+            if cache_config.enabled {
                 enabled_count += 1;
                 info!(
                     route_id = %route.id,
-                    default_ttl_secs = 3600,
-                    "HTTP caching enabled for static route"
+                    default_ttl_secs = cache_config.default_ttl_secs,
+                    from_config = route.policies.cache.is_some(),
+                    "HTTP caching enabled for route"
                 );
             }
-
-            // Web routes: disable by default (HTML often personalized)
-            if route.service_type == sentinel_config::ServiceType::Web {
-                let cache_config = CacheConfig {
-                    enabled: false, // Disabled until explicitly configured
-                    default_ttl_secs: 300,
-                    ..Default::default()
-                };
-                manager.register_route(&route.id, cache_config);
-            }
+            manager.register_route(&route.id, cache_config);
         }
 
         if enabled_count > 0 {

@@ -324,6 +324,8 @@ pub enum AgentEvent {
     Log,
     /// WebSocket frame inspection (after upgrade)
     WebSocketFrame,
+    /// Guardrail inspection (prompt injection, PII detection)
+    Guardrail,
 }
 
 // ============================================================================

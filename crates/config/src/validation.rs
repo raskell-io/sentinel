@@ -13,9 +13,9 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tracing::{debug, trace, warn};
 
-use crate::{Config, Filter, NamespaceConfig, ServiceConfig, ServiceType};
+use crate::{Config, Filter, NamespaceConfig, ServiceConfig, ServiceType, WafMode};
 use sentinel_common::ids::Scope;
-use sentinel_common::types::Priority;
+use sentinel_common::types::{Priority, TlsVersion};
 
 // ============================================================================
 // Field Validators
@@ -359,6 +359,7 @@ pub fn validate_config_semantics(config: &Config) -> Result<(), validator::Valid
     );
 
     let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     // Collect IDs for cross-reference validation
     let route_ids: HashSet<_> = config.routes.iter().map(|r| r.id.as_str()).collect();
@@ -401,6 +402,15 @@ pub fn validate_config_semantics(config: &Config) -> Result<(), validator::Valid
 
     // Warn about orphaned upstreams
     warn_orphaned_upstreams(config, &upstream_ids);
+
+    // Validate implementation status (detect configured-but-unwired features)
+    trace!("Validating implementation status");
+    validate_implementation_status(config, &mut errors, &mut warnings);
+
+    // Emit warnings for partially-implemented features
+    for warning in &warnings {
+        warn!("Unwired feature: {}", warning);
+    }
 
     // Build final error
     if errors.is_empty() {
@@ -888,6 +898,120 @@ fn format_available_owned(ids: &HashSet<String>) -> String {
 }
 
 // ============================================================================
+// Implementation Status Validation
+// ============================================================================
+
+/// Validate that configured features are actually wired into the runtime.
+///
+/// Features that are parsed successfully but silently ignored at runtime are
+/// dangerous — especially security features. This function produces:
+///
+/// - **Hard errors** for security-critical features (WAF mode, TLS hardening)
+///   that would give a false sense of protection if ignored.
+/// - **Warnings** for convenience features (filters, policies, listener settings)
+///   that won't cause security issues but may surprise operators.
+fn validate_implementation_status(
+    config: &Config,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    // ========================================================================
+    // Hard errors: Security-critical features that MUST NOT be silently ignored
+    // ========================================================================
+
+    // WAF mode: Detection/Prevention configured but WAF engine not consumed
+    if let Some(ref waf) = config.waf {
+        if waf.mode != WafMode::Off {
+            let mode_str = match waf.mode {
+                WafMode::Detection => "detection",
+                WafMode::Prevention => "prevention",
+                WafMode::Off => unreachable!(),
+            };
+            errors.push(format!(
+                "WAF mode is set to '{}' but the WAF engine is not yet wired into the proxy runtime. \
+                 Requests are NOT being inspected. \
+                 Set waf mode to 'off' or remove the waf block until WAF support is implemented.",
+                mode_str
+            ));
+        }
+    }
+
+    // TLS hardening: settings are validated and ready in build_server_config(),
+    // but Pingora's TlsSettings doesn't yet accept a custom ServerConfig.
+    // Warn (not error) so operators know these settings are staged but not active.
+    for listener in &config.listeners {
+        if let Some(ref tls) = listener.tls {
+            if !tls.cipher_suites.is_empty() {
+                warnings.push(format!(
+                    "Listener '{}' has TLS cipher_suites configured ({:?}) but Pingora's TLS integration \
+                     does not yet support custom cipher suites. The default rustls cipher suite selection is used.",
+                    listener.id, tls.cipher_suites
+                ));
+            }
+
+            if tls.min_version != TlsVersion::Tls12 {
+                warnings.push(format!(
+                    "Listener '{}' has TLS min_version set to '{}' but Pingora's TLS integration \
+                     does not yet apply this setting. Default TLS 1.2+ is used.",
+                    listener.id, tls.min_version
+                ));
+            }
+
+            if let Some(ref max_ver) = tls.max_version {
+                warnings.push(format!(
+                    "Listener '{}' has TLS max_version set to '{}' but Pingora's TLS integration \
+                     does not yet apply this setting.",
+                    listener.id, max_ver
+                ));
+            }
+        }
+    }
+
+    // ========================================================================
+    // Warnings: Convenience features that are configured but not yet wired
+    // ========================================================================
+
+    // Listener settings: max_concurrent_streams not yet wired to H2
+    for listener in &config.listeners {
+        if listener.max_concurrent_streams != crate::server::default_max_concurrent_streams() {
+            warnings.push(format!(
+                "Listener '{}' has max_concurrent_streams={} but Pingora's H2 settings \
+                 do not yet support per-listener configuration.",
+                listener.id, listener.max_concurrent_streams
+            ));
+        }
+    }
+
+    // Metrics: address requires a dedicated HTTP server (not yet wired)
+    let metrics = &config.observability.metrics;
+    if metrics.address != "0.0.0.0:9090" {
+        warnings.push(format!(
+            "Metrics endpoint address='{}' is configured but a dedicated metrics HTTP server \
+             is not yet implemented. Use RUST_LOG and external scraping as a workaround.",
+            metrics.address
+        ));
+    }
+
+    // Logging: level/format are controlled by RUST_LOG env var and --verbose flag,
+    // not yet by the config file. File output also not yet wired.
+    let logging = &config.observability.logging;
+    if logging.file.is_some() {
+        warnings.push(
+            "logging.file is configured but application log file routing is not yet implemented. \
+             Logs go to stdout/stderr. Use shell redirection as a workaround."
+                .to_string(),
+        );
+    }
+    if logging.level != "info" || logging.format != "json" {
+        warnings.push(format!(
+            "Logging level='{}' and format='{}' are configured but the tracing subscriber uses \
+             RUST_LOG env var and --verbose flag instead. Set RUST_LOG={} as a workaround.",
+            logging.level, logging.format, logging.level
+        ));
+    }
+}
+
+// ============================================================================
 // Result Building
 // ============================================================================
 
@@ -1107,5 +1231,289 @@ mod tests {
         let ns_available = ctx.available_upstreams(&ns_scope);
         assert!(ns_available.contains("default"));
         assert!(ns_available.contains("ns-backend"));
+    }
+
+    // ========================================================================
+    // Implementation status validation tests
+    // ========================================================================
+
+    #[test]
+    fn waf_prevention_mode_produces_hard_error() {
+        let mut config = Config::default_for_testing();
+        config.waf = Some(crate::WafConfig {
+            engine: crate::WafEngine::Coraza,
+            ruleset: crate::WafRuleset {
+                crs_version: "4.0".to_string(),
+                custom_rules_dir: None,
+                paranoia_level: 1,
+                anomaly_threshold: 5,
+                exclusions: vec![],
+            },
+            mode: WafMode::Prevention,
+            audit_log: true,
+            body_inspection: crate::BodyInspectionPolicy::default(),
+        });
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(!errors.is_empty(), "WAF prevention mode should produce a hard error");
+        assert!(
+            errors[0].contains("WAF mode is set to 'prevention'"),
+            "Error should mention prevention mode, got: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn waf_detection_mode_produces_hard_error() {
+        let mut config = Config::default_for_testing();
+        config.waf = Some(crate::WafConfig {
+            engine: crate::WafEngine::Coraza,
+            ruleset: crate::WafRuleset {
+                crs_version: "4.0".to_string(),
+                custom_rules_dir: None,
+                paranoia_level: 1,
+                anomaly_threshold: 5,
+                exclusions: vec![],
+            },
+            mode: WafMode::Detection,
+            audit_log: true,
+            body_inspection: crate::BodyInspectionPolicy::default(),
+        });
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(!errors.is_empty(), "WAF detection mode should produce a hard error");
+        assert!(errors[0].contains("detection"));
+    }
+
+    #[test]
+    fn waf_off_mode_produces_no_error() {
+        let mut config = Config::default_for_testing();
+        config.waf = Some(crate::WafConfig {
+            engine: crate::WafEngine::Coraza,
+            ruleset: crate::WafRuleset {
+                crs_version: "4.0".to_string(),
+                custom_rules_dir: None,
+                paranoia_level: 1,
+                anomaly_threshold: 5,
+                exclusions: vec![],
+            },
+            mode: WafMode::Off,
+            audit_log: true,
+            body_inspection: crate::BodyInspectionPolicy::default(),
+        });
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty(), "WAF off mode should not produce errors");
+    }
+
+    #[test]
+    fn tls_cipher_suites_produce_warning() {
+        let mut config = Config::default_for_testing();
+        config.listeners[0].tls = Some(crate::TlsConfig {
+            cert_file: Some("/tmp/cert.pem".into()),
+            key_file: Some("/tmp/key.pem".into()),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: TlsVersion::Tls12,
+            max_version: None,
+            cipher_suites: vec!["TLS_AES_256_GCM_SHA384".to_string()],
+            client_auth: false,
+            ocsp_stapling: true,
+            session_resumption: true,
+            acme: None,
+        });
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty(), "TLS cipher_suites should not produce errors");
+        assert!(!warnings.is_empty(), "TLS cipher_suites should produce a warning");
+        assert!(warnings.iter().any(|w| w.contains("cipher_suites")));
+    }
+
+    #[test]
+    fn tls_max_version_produces_warning() {
+        let mut config = Config::default_for_testing();
+        config.listeners[0].tls = Some(crate::TlsConfig {
+            cert_file: Some("/tmp/cert.pem".into()),
+            key_file: Some("/tmp/key.pem".into()),
+            additional_certs: vec![],
+            ca_file: None,
+            min_version: TlsVersion::Tls12,
+            max_version: Some(TlsVersion::Tls12),
+            cipher_suites: vec![],
+            client_auth: false,
+            ocsp_stapling: true,
+            session_resumption: true,
+            acme: None,
+        });
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty(), "TLS max_version should not produce errors");
+        assert!(!warnings.is_empty(), "TLS max_version should produce a warning");
+        assert!(warnings.iter().any(|w| w.contains("max_version")));
+    }
+
+    #[test]
+    fn compress_filter_produces_no_warnings() {
+        use crate::filters::{CompressFilter, FilterConfig};
+
+        let mut config = Config::default_for_testing();
+        config.filters.insert(
+            "gzip".to_string(),
+            FilterConfig::new("gzip", Filter::Compress(CompressFilter::default())),
+        );
+        config.routes[0].filters.push("gzip".to_string());
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty(), "Compress filter should not produce errors");
+        assert!(
+            !warnings.iter().any(|w| w.contains("compress")),
+            "Compress filter is wired and should not produce warnings"
+        );
+    }
+
+    #[test]
+    fn cors_filter_produces_no_warnings() {
+        use crate::filters::{CorsFilter, FilterConfig};
+
+        let mut config = Config::default_for_testing();
+        config.filters.insert(
+            "cors".to_string(),
+            FilterConfig::new("cors", Filter::Cors(CorsFilter::default())),
+        );
+        config.routes[0].filters.push("cors".to_string());
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty(), "CORS filter should not produce errors");
+        assert!(
+            !warnings.iter().any(|w| w.contains("cors")),
+            "CORS filter is wired and should not produce warnings"
+        );
+    }
+
+    #[test]
+    fn response_headers_policy_produces_no_warnings() {
+        let mut config = Config::default_for_testing();
+        config.routes[0]
+            .policies
+            .response_headers
+            .set
+            .insert("X-Custom".to_string(), "value".to_string());
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty());
+        assert!(
+            !warnings.iter().any(|w| w.contains("response_headers")),
+            "response_headers is wired and should not produce warnings"
+        );
+    }
+
+    #[test]
+    fn route_cache_enabled_produces_no_warnings() {
+        let mut config = Config::default_for_testing();
+        config.routes[0].policies.cache = Some(crate::RouteCacheConfig {
+            enabled: true,
+            ..Default::default()
+        });
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty());
+        assert!(
+            !warnings.iter().any(|w| w.contains("caching")),
+            "Per-route cache is wired and should not produce warnings"
+        );
+    }
+
+    #[test]
+    fn server_pid_file_produces_no_warnings() {
+        let mut config = Config::default_for_testing();
+        config.server.pid_file = Some("/run/sentinel.pid".into());
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty());
+        assert!(
+            !warnings.iter().any(|w| w.contains("pid_file")),
+            "pid_file is now wired and should not produce warnings"
+        );
+    }
+
+    #[test]
+    fn default_config_produces_no_errors_or_warnings() {
+        let config = Config::default_for_testing();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(
+            errors.is_empty(),
+            "Default config should produce no errors: {:?}",
+            errors
+        );
+        assert!(
+            warnings.is_empty(),
+            "Default config should produce no warnings: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn logging_file_produces_warning() {
+        let mut config = Config::default_for_testing();
+        config.observability.logging.file = Some("/var/log/sentinel/app.log".into());
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("logging.file")));
+    }
+
+    #[test]
+    fn non_default_listener_timeout_produces_no_warnings() {
+        let mut config = Config::default_for_testing();
+        config.listeners[0].request_timeout_secs = 30;
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_implementation_status(&config, &mut errors, &mut warnings);
+
+        assert!(errors.is_empty());
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("request_timeout_secs")),
+            "request_timeout_secs is now wired and should not produce warnings"
+        );
     }
 }

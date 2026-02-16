@@ -8,8 +8,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures::future::join_all;
 use pingora_timeout::timeout;
 use sentinel_agent_protocol::{
-    v2::MetricsCollector, AgentResponse, EventType, RequestBodyChunkEvent, RequestHeadersEvent,
-    ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketFrameEvent,
+    v2::MetricsCollector, AgentResponse, EventType, GuardrailInspectEvent, RequestBodyChunkEvent,
+    RequestHeadersEvent, ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketFrameEvent,
 };
 use sentinel_common::{
     errors::{SentinelError, SentinelResult},
@@ -156,6 +156,19 @@ impl UnifiedAgent {
                             })?;
                         agent.call_response_body_chunk(&typed_event).await
                     }
+                    EventType::GuardrailInspect => {
+                        let typed_event: GuardrailInspectEvent = serde_json::from_value(json)
+                            .map_err(|e| SentinelError::Agent {
+                                agent: agent.id().to_string(),
+                                message: format!(
+                                    "Failed to deserialize GuardrailInspectEvent: {}",
+                                    e
+                                ),
+                                event: format!("{:?}", event_type),
+                                source: None,
+                            })?;
+                        agent.call_guardrail_inspect(&typed_event).await
+                    }
                     _ => {
                         // For unsupported event types, return error
                         Err(SentinelError::Agent {
@@ -211,6 +224,21 @@ impl UnifiedAgent {
         match self {
             UnifiedAgent::V1(agent) => agent.call_event(EventType::ResponseBodyChunk, event).await,
             UnifiedAgent::V2(agent) => agent.call_response_body_chunk(event).await,
+        }
+    }
+
+    /// Call agent with guardrail inspect event (v2-optimized).
+    pub async fn call_guardrail_inspect(
+        &self,
+        event: &GuardrailInspectEvent,
+    ) -> SentinelResult<AgentResponse> {
+        match self {
+            UnifiedAgent::V1(agent) => {
+                agent
+                    .call_event(EventType::GuardrailInspect, event)
+                    .await
+            }
+            UnifiedAgent::V2(agent) => agent.call_guardrail_inspect(event).await,
         }
     }
 
@@ -1338,6 +1366,79 @@ impl AgentManager {
         );
 
         Ok(combined_decision)
+    }
+
+    /// Call a named agent with a guardrail inspect event.
+    ///
+    /// Looks up the agent by name, checks circuit breaker and timeout,
+    /// then sends the event and returns the response.
+    pub async fn call_guardrail_agent(
+        &self,
+        agent_name: &str,
+        event: GuardrailInspectEvent,
+    ) -> SentinelResult<AgentResponse> {
+        let agents = self.agents.read().await;
+        let agent = agents.get(agent_name).ok_or_else(|| SentinelError::Agent {
+            agent: agent_name.to_string(),
+            message: format!("Agent '{}' not found", agent_name),
+            event: "guardrail_inspect".to_string(),
+            source: None,
+        })?;
+
+        let agent = Arc::clone(agent);
+        drop(agents); // Release lock before calling
+
+        // Acquire per-agent semaphore permit
+        let semaphores = self.agent_semaphores.read().await;
+        let semaphore = semaphores.get(agent_name).cloned();
+        drop(semaphores);
+
+        let _permit = if let Some(sem) = semaphore {
+            Some(sem.acquire_owned().await.map_err(|_| SentinelError::Agent {
+                agent: agent_name.to_string(),
+                message: "Failed to acquire agent call permit".to_string(),
+                event: "guardrail_inspect".to_string(),
+                source: None,
+            })?)
+        } else {
+            None
+        };
+
+        // Check circuit breaker
+        if !agent.circuit_breaker().is_closed() {
+            return Err(SentinelError::Agent {
+                agent: agent_name.to_string(),
+                message: "Circuit breaker open".to_string(),
+                event: "guardrail_inspect".to_string(),
+                source: None,
+            });
+        }
+
+        let start = Instant::now();
+        let timeout_duration = Duration::from_millis(agent.timeout_ms());
+
+        match timeout(timeout_duration, agent.call_guardrail_inspect(&event)).await {
+            Ok(Ok(response)) => {
+                agent.record_success(start.elapsed()).await;
+                Ok(response)
+            }
+            Ok(Err(e)) => {
+                agent.record_failure().await;
+                Err(e)
+            }
+            Err(_) => {
+                agent.record_timeout().await;
+                Err(SentinelError::Agent {
+                    agent: agent_name.to_string(),
+                    message: format!(
+                        "Guardrail agent call timed out after {}ms",
+                        timeout_duration.as_millis()
+                    ),
+                    event: "guardrail_inspect".to_string(),
+                    source: None,
+                })
+            }
+        }
     }
 
     /// Initialize agent connections.

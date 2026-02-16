@@ -1170,11 +1170,149 @@ pub fn load_client_ca(ca_path: &Path) -> Result<RootCertStore, TlsError> {
     Ok(root_store)
 }
 
-/// Build a TLS ServerConfig from our configuration
+/// Resolve TLS protocol versions from config into rustls version references.
+fn resolve_protocol_versions(
+    config: &TlsConfig,
+) -> Vec<&'static rustls::SupportedProtocolVersion> {
+    use sentinel_common::types::TlsVersion;
+
+    let min = &config.min_version;
+    let max = config.max_version.as_ref().unwrap_or(&TlsVersion::Tls13);
+
+    let mut versions = Vec::new();
+
+    // Include TLS 1.2 if within the min..=max range
+    if matches!(min, TlsVersion::Tls12) {
+        versions.push(&rustls::version::TLS12);
+    }
+
+    // Include TLS 1.3 if within the min..=max range
+    if matches!(max, TlsVersion::Tls13) {
+        versions.push(&rustls::version::TLS13);
+    }
+
+    if versions.is_empty() {
+        // Shouldn't happen with valid config, but be safe
+        warn!("No valid TLS versions resolved from config, falling back to TLS 1.2 + 1.3");
+        versions.push(&rustls::version::TLS12);
+        versions.push(&rustls::version::TLS13);
+    }
+
+    versions
+}
+
+/// Resolve cipher suite names from config to rustls `SupportedCipherSuite` values.
+///
+/// Uses the aws-lc-rs crypto provider's available cipher suites.
+fn resolve_cipher_suites(
+    names: &[String],
+) -> Result<Vec<rustls::SupportedCipherSuite>, TlsError> {
+    use rustls::crypto::aws_lc_rs::cipher_suite;
+
+    // Map of canonical IANA names to rustls cipher suite values
+    let known: &[(&str, rustls::SupportedCipherSuite)] = &[
+        // TLS 1.3
+        (
+            "TLS_AES_256_GCM_SHA384",
+            cipher_suite::TLS13_AES_256_GCM_SHA384,
+        ),
+        (
+            "TLS_AES_128_GCM_SHA256",
+            cipher_suite::TLS13_AES_128_GCM_SHA256,
+        ),
+        (
+            "TLS_CHACHA20_POLY1305_SHA256",
+            cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
+        ),
+        // TLS 1.2
+        (
+            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+            cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+        ),
+        (
+            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+            cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        ),
+        (
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+            cipher_suite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+        ),
+        (
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+        ),
+        (
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        ),
+        (
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+            cipher_suite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+        ),
+    ];
+
+    let mut suites = Vec::with_capacity(names.len());
+    for name in names {
+        let normalized = name.to_uppercase().replace('-', "_");
+        match known.iter().find(|(n, _)| *n == normalized) {
+            Some((_, suite)) => suites.push(*suite),
+            None => {
+                let available: Vec<&str> = known.iter().map(|(n, _)| *n).collect();
+                return Err(TlsError::ConfigBuild(format!(
+                    "Unknown cipher suite '{}'. Available: {}",
+                    name,
+                    available.join(", ")
+                )));
+            }
+        }
+    }
+
+    Ok(suites)
+}
+
+/// Build a TLS ServerConfig from our configuration.
+///
+/// Applies protocol versions, cipher suites, session resumption, mTLS,
+/// and SNI certificate resolution from the Sentinel TLS config.
+///
+/// # Note
+///
+/// This ServerConfig is fully configured but currently not used by
+/// Pingora's listener infrastructure. Pingora's rustls `TlsSettings`
+/// builds its own `ServerConfig` internally with hardcoded defaults.
+/// A future update to the Pingora fork should accept a pre-built
+/// `ServerConfig` via `TlsSettings`, at which point this function's
+/// output will be wired into the listener setup.
 pub fn build_server_config(config: &TlsConfig) -> Result<ServerConfig, TlsError> {
     let resolver = SniResolver::from_config(config)?;
 
-    let builder = ServerConfig::builder();
+    // Resolve protocol versions from config
+    let versions = resolve_protocol_versions(config);
+    info!(
+        versions = ?versions.iter().map(|v| format!("{:?}", v.version)).collect::<Vec<_>>(),
+        "TLS protocol versions configured"
+    );
+
+    // Build the ServerConfig builder, with custom cipher suites if specified
+    let builder = if !config.cipher_suites.is_empty() {
+        let suites = resolve_cipher_suites(&config.cipher_suites)?;
+        info!(
+            cipher_suites = ?config.cipher_suites,
+            count = suites.len(),
+            "Custom TLS cipher suites configured"
+        );
+        let provider = rustls::crypto::CryptoProvider {
+            cipher_suites: suites,
+            ..rustls::crypto::aws_lc_rs::default_provider()
+        };
+        ServerConfig::builder_with_provider(Arc::new(provider))
+            .with_protocol_versions(&versions)
+            .map_err(|e| {
+                TlsError::ConfigBuild(format!("Invalid TLS protocol/cipher configuration: {}", e))
+            })?
+    } else {
+        ServerConfig::builder_with_protocol_versions(&versions)
+    };
 
     // Configure client authentication (mTLS)
     let server_config = if config.client_auth {
@@ -1204,12 +1342,19 @@ pub fn build_server_config(config: &TlsConfig) -> Result<ServerConfig, TlsError>
     };
 
     // Configure ALPN for HTTP/2 support
-    let mut config = server_config;
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    let mut server_config = server_config;
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+    // Disable session resumption if configured
+    if !config.session_resumption {
+        server_config.session_storage =
+            Arc::new(rustls::server::NoServerSessionStorage {});
+        info!("TLS session resumption disabled");
+    }
 
     debug!("TLS configuration built successfully");
 
-    Ok(config)
+    Ok(server_config)
 }
 
 /// Validate TLS configuration files exist and are readable

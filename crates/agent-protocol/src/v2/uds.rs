@@ -656,6 +656,16 @@ impl AgentClientV2Uds {
             .await
     }
 
+    /// Send a guardrail inspect event.
+    pub async fn send_guardrail_inspect(
+        &self,
+        correlation_id: &str,
+        event: &crate::GuardrailInspectEvent,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        self.send_event(MessageType::GuardrailInspect, correlation_id, event)
+            .await
+    }
+
     /// Send a binary request body chunk event (zero-copy path).
     ///
     /// This method avoids base64 encoding when using MessagePack encoding,

@@ -576,9 +576,6 @@ fn run_server(
     // Create signal manager for cross-thread communication
     let signal_manager = Arc::new(SignalManager::new());
 
-    // Setup signal handlers (runs in separate thread)
-    setup_signal_handlers(signal_manager.sender());
-
     // Create runtime for async initialization and signal handling
     let runtime = tokio::runtime::Runtime::new()?;
 
@@ -591,6 +588,12 @@ fn run_server(
 
     // Get initial config for server setup
     let config = proxy.config_manager.current();
+
+    // Setup signal handlers (runs in separate thread, needs config for shutdown timeout)
+    setup_signal_handlers(
+        signal_manager.sender(),
+        config.server.graceful_shutdown_timeout_secs,
+    );
 
     // Initialize ACME if any listener has it configured
     let acme_state = runtime
@@ -634,11 +637,39 @@ fn run_server(
     pingora_conf.work_stealing = true;
     pingora_conf.upstream_keepalive_pool_size = 256; // Increase from default 128
 
+    // Wire server config → Pingora ServerConf
+    pingora_conf.graceful_shutdown_timeout_seconds =
+        Some(config.server.graceful_shutdown_timeout_secs);
+    if let Some(ref pid_path) = config.server.pid_file {
+        pingora_conf.pid_file = pid_path.to_string_lossy().to_string();
+    }
+    if let Some(ref user) = config.server.user {
+        pingora_conf.user = Some(user.clone());
+    }
+    if let Some(ref group) = config.server.group {
+        pingora_conf.group = Some(group.clone());
+    }
+
     info!(
         worker_threads = worker_threads,
         upstream_pool_size = pingora_conf.upstream_keepalive_pool_size,
+        graceful_shutdown_timeout_secs = config.server.graceful_shutdown_timeout_secs,
+        pid_file = ?config.server.pid_file,
+        user = ?config.server.user,
+        group = ?config.server.group,
         "Configuring Pingora server"
     );
+
+    // Change working directory if configured (before bootstrap)
+    if let Some(ref work_dir) = config.server.working_directory {
+        std::env::set_current_dir(work_dir).with_context(|| {
+            format!(
+                "Failed to change working directory to '{}'",
+                work_dir.display()
+            )
+        })?;
+        info!(path = %work_dir.display(), "Changed working directory");
+    }
 
     // Create Pingora server with our configuration
     let mut server = Server::new_with_opt_and_conf(Some(pingora_opt), pingora_conf);
@@ -729,6 +760,11 @@ fn run_server(
                             continue;
                         }
 
+                        // TODO: Once the Pingora fork's TlsSettings supports accepting
+                        // a pre-built rustls::ServerConfig, use tls::build_server_config()
+                        // here to apply cipher_suites, min/max_version, and session_resumption.
+                        // Currently Pingora's TlsSettings::build() creates its own ServerConfig
+                        // with hardcoded defaults, ignoring our TLS hardening settings.
                         match proxy_service.add_tls(
                             &listener.address,
                             &cert_path_str,
@@ -819,7 +855,10 @@ fn run_server(
 ///
 /// Registers handlers for SIGTERM, SIGINT, and SIGHUP and forwards them
 /// to the async runtime via the signal manager.
-fn setup_signal_handlers(signal_tx: std::sync::mpsc::Sender<SignalType>) {
+fn setup_signal_handlers(
+    signal_tx: std::sync::mpsc::Sender<SignalType>,
+    graceful_shutdown_timeout_secs: u64,
+) {
     use signal_hook::consts::signal::*;
     use signal_hook::iterator::Signals;
     use std::thread;
@@ -849,12 +888,16 @@ fn setup_signal_handlers(signal_tx: std::sync::mpsc::Sender<SignalType>) {
                 break;
             }
 
-            // For shutdown, we also need to exit after sending
+            // For shutdown, wait for graceful shutdown to complete before force-exiting
             if signal_type == SignalType::Shutdown {
-                // Give the async handler time to process
-                thread::sleep(std::time::Duration::from_secs(5));
+                // Wait for the configured graceful shutdown timeout plus a small buffer
+                let force_exit_secs = graceful_shutdown_timeout_secs.saturating_add(5);
+                thread::sleep(std::time::Duration::from_secs(force_exit_secs));
                 // Force exit if graceful shutdown takes too long
-                error!("Graceful shutdown timeout, forcing exit");
+                error!(
+                    timeout_secs = force_exit_secs,
+                    "Graceful shutdown timeout exceeded, forcing exit"
+                );
                 std::process::exit(1);
             }
         }

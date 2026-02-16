@@ -25,8 +25,8 @@ use crate::v2::reverse::ReverseConnectionClient;
 use crate::v2::uds::AgentClientV2Uds;
 use crate::v2::AgentCapabilities;
 use crate::{
-    AgentProtocolError, AgentResponse, RequestBodyChunkEvent, RequestHeadersEvent,
-    ResponseBodyChunkEvent, ResponseHeadersEvent,
+    AgentProtocolError, AgentResponse, GuardrailInspectEvent, RequestBodyChunkEvent,
+    RequestHeadersEvent, ResponseBodyChunkEvent, ResponseHeadersEvent,
 };
 
 /// Channel buffer size for all transports.
@@ -307,6 +307,25 @@ impl V2Transport {
             V2Transport::Reverse(client) => {
                 client.send_response_body_chunk(correlation_id, event).await
             }
+        }
+    }
+
+    /// Send a guardrail inspect event.
+    pub async fn send_guardrail_inspect(
+        &self,
+        correlation_id: &str,
+        event: &GuardrailInspectEvent,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        match self {
+            V2Transport::Grpc(_client) => Err(AgentProtocolError::InvalidMessage(
+                "GuardrailInspect events are not yet supported via gRPC".to_string(),
+            )),
+            V2Transport::Uds(client) => {
+                client.send_guardrail_inspect(correlation_id, event).await
+            }
+            V2Transport::Reverse(_client) => Err(AgentProtocolError::InvalidMessage(
+                "GuardrailInspect events are not yet supported via reverse connections".to_string(),
+            )),
         }
     }
 
@@ -1376,6 +1395,84 @@ impl AgentPool {
                 conn.error_count.fetch_add(1, Ordering::Relaxed);
                 let consecutive = conn.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
                 self.total_errors.fetch_add(1, Ordering::Relaxed);
+                if consecutive >= 3 {
+                    conn.healthy_cached.store(false, Ordering::Release);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Send a guardrail inspect event to an agent.
+    ///
+    /// The pool selects the best connection based on the load balancing strategy.
+    /// Guardrail events are one-shot (no body follow-up), so no correlation
+    /// affinity is stored.
+    pub async fn send_guardrail_inspect(
+        &self,
+        agent_id: &str,
+        correlation_id: &str,
+        event: &GuardrailInspectEvent,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
+        self.protocol_metrics.inc_requests();
+        self.protocol_metrics.inc_in_flight();
+
+        let conn = self.select_connection(agent_id)?;
+
+        match self.check_flow_control(&conn, agent_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                self.protocol_metrics.dec_in_flight();
+                return Ok(AgentResponse::default_allow());
+            }
+            Err(e) => {
+                self.protocol_metrics.dec_in_flight();
+                return Err(e);
+            }
+        }
+
+        let _permit = conn.concurrency_limiter.acquire().await.map_err(|_| {
+            self.protocol_metrics.dec_in_flight();
+            self.protocol_metrics.inc_connection_errors();
+            AgentProtocolError::ConnectionFailed("Concurrency limit reached".to_string())
+        })?;
+
+        conn.in_flight.fetch_add(1, Ordering::Relaxed);
+        conn.touch();
+
+        let result = conn
+            .client
+            .send_guardrail_inspect(correlation_id, event)
+            .await;
+
+        conn.in_flight.fetch_sub(1, Ordering::Relaxed);
+        conn.request_count.fetch_add(1, Ordering::Relaxed);
+        self.protocol_metrics.dec_in_flight();
+
+        match &result {
+            Ok(_) => {
+                conn.consecutive_errors.store(0, Ordering::Relaxed);
+                self.protocol_metrics.inc_responses();
+            }
+            Err(e) => {
+                conn.error_count.fetch_add(1, Ordering::Relaxed);
+                let consecutive = conn.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
+                self.total_errors.fetch_add(1, Ordering::Relaxed);
+
+                match e {
+                    AgentProtocolError::Timeout(_) => self.protocol_metrics.inc_timeouts(),
+                    AgentProtocolError::ConnectionFailed(_)
+                    | AgentProtocolError::ConnectionClosed => {
+                        self.protocol_metrics.inc_connection_errors();
+                    }
+                    AgentProtocolError::Serialization(_) => {
+                        self.protocol_metrics.inc_serialization_errors();
+                    }
+                    _ => {}
+                }
+
                 if consecutive >= 3 {
                     conn.healthy_cached.store(false, Ordering::Release);
                 }

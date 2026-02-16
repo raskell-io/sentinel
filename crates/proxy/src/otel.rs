@@ -125,7 +125,7 @@ pub fn create_traceparent(trace_id: &str, span_id: &str, sampled: bool) -> Strin
 #[cfg(feature = "opentelemetry")]
 mod otel_impl {
     use super::*;
-    use opentelemetry::trace::{SpanKind, Tracer, TracerProvider as _};
+    use opentelemetry::trace::{Span, SpanKind, Status, Tracer, TracerProvider as _};
     use opentelemetry::{global, KeyValue};
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
@@ -215,7 +215,7 @@ mod otel_impl {
                 .start(&tracer);
 
             RequestSpan {
-                _span: span,
+                span,
                 trace_id: trace_ctx
                     .map(|c| c.trace_id.clone())
                     .unwrap_or_else(generate_trace_id),
@@ -234,26 +234,40 @@ mod otel_impl {
 
     /// Request span wrapper
     pub struct RequestSpan {
-        _span: opentelemetry::global::BoxedSpan,
+        span: opentelemetry::global::BoxedSpan,
         pub trace_id: String,
         pub span_id: String,
     }
 
     impl RequestSpan {
-        pub fn set_status(&mut self, _status_code: u16) {
-            // Status is recorded when span ends
+        pub fn set_status(&mut self, status_code: u16) {
+            self.span
+                .set_attribute(KeyValue::new("http.status_code", status_code as i64));
+            if status_code >= 500 {
+                self.span.set_status(Status::error(format!(
+                    "HTTP {}",
+                    status_code
+                )));
+            }
         }
 
-        pub fn record_error(&mut self, _error: &str) {
-            // Error is recorded when span ends
+        pub fn record_error(&mut self, error: &str) {
+            self.span.add_event(
+                "exception",
+                vec![KeyValue::new("exception.message", error.to_string())],
+            );
+            self.span.set_status(Status::error(error.to_string()));
         }
 
-        pub fn set_upstream(&mut self, _upstream: &str, _address: &str) {
-            // Upstream info recorded
+        pub fn set_upstream(&mut self, upstream: &str, address: &str) {
+            self.span
+                .set_attribute(KeyValue::new("peer.service", upstream.to_string()));
+            self.span
+                .set_attribute(KeyValue::new("net.peer.name", address.to_string()));
         }
 
-        pub fn end(self) {
-            // Span ends on drop
+        pub fn end(mut self) {
+            self.span.end();
         }
     }
 }

@@ -609,7 +609,7 @@ impl ProxyHttp for SentinelProxy {
             );
 
             match pool.select_peer_with_metadata(None).await {
-                Ok((peer, metadata)) => {
+                Ok((mut peer, metadata)) => {
                     let selection_duration = selection_start.elapsed();
                     // Store selected peer address for feedback reporting in logging()
                     let peer_addr = peer.address().to_string();
@@ -641,6 +641,24 @@ impl ProxyHttp for SentinelProxy {
                         sticky_session_new = ctx.sticky_session_new_assignment,
                         "Selected upstream peer"
                     );
+                    // Apply per-route policy timeout (lowest priority)
+                    if let Some(ref rc) = ctx.route_config {
+                        if let Some(timeout_secs) = rc.policies.timeout_secs {
+                            peer.options.read_timeout =
+                                Some(Duration::from_secs(timeout_secs));
+                        }
+                    }
+
+                    // Apply filter timeout overrides (higher priority, overwrites policy)
+                    if let Some(connect_secs) = ctx.filter_connect_timeout_secs {
+                        peer.options.connection_timeout =
+                            Some(Duration::from_secs(connect_secs));
+                    }
+                    if let Some(upstream_secs) = ctx.filter_upstream_timeout_secs {
+                        peer.options.read_timeout =
+                            Some(Duration::from_secs(upstream_secs));
+                    }
+
                     return Ok(Box::new(peer));
                 }
                 Err(e) => {
@@ -701,6 +719,26 @@ impl ProxyHttp for SentinelProxy {
             route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
             "Starting request filter phase"
         );
+
+        // Apply per-listener timeouts from config
+        if let Some(server_addr) = session.downstream_session.server_addr() {
+            let server_addr_str = server_addr.to_string();
+            let config = ctx
+                .config
+                .get_or_insert_with(|| self.config_manager.current());
+            for listener in &config.listeners {
+                if listener.address == server_addr_str {
+                    // Apply downstream read timeout
+                    session.downstream_session.set_read_timeout(Some(
+                        std::time::Duration::from_secs(listener.request_timeout_secs),
+                    ));
+                    // Store keepalive for response phase
+                    ctx.listener_keepalive_timeout_secs =
+                        Some(listener.keepalive_timeout_secs);
+                    break;
+                }
+            }
+        }
 
         // Check rate limiting early (before other processing)
         // Fast path: skip if no rate limiting is configured for this route
@@ -1169,6 +1207,16 @@ impl ProxyHttp for SentinelProxy {
             }
         }
 
+        // Route-level filters (CORS preflight, Timeout, Log)
+        // Clone the Arc to avoid borrow conflict between &Config and &mut ctx
+        let config_for_filters = std::sync::Arc::clone(
+            ctx.config
+                .get_or_insert_with(|| self.config_manager.current()),
+        );
+        if super::filters::apply_request_filters(session, ctx, &config_for_filters).await? {
+            return Ok(true); // Filter handled request (e.g. CORS preflight)
+        }
+
         // Check for WebSocket upgrade requests
         let is_websocket_upgrade = session
             .req_header()
@@ -1605,7 +1653,7 @@ impl ProxyHttp for SentinelProxy {
 
     async fn response_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<(), Box<Error>> {
@@ -1696,6 +1744,41 @@ impl ProxyHttp for SentinelProxy {
         // Add GeoIP country header if geo lookup was performed
         if let Some(ref country_code) = ctx.geo_country_code {
             upstream_response.insert_header("X-GeoIP-Country", country_code)?;
+        }
+
+        // Apply route-specific response header modifications (policies)
+        if let Some(ref route_config) = ctx.route_config {
+            let mods = &route_config.policies.response_headers;
+            for (name, value) in &mods.set {
+                upstream_response
+                    .insert_header(name.clone(), value.as_str())
+                    .ok();
+            }
+            for (name, value) in &mods.add {
+                upstream_response
+                    .append_header(name.clone(), value.as_str())
+                    .ok();
+            }
+            for name in &mods.remove {
+                upstream_response.remove_header(name);
+            }
+        }
+
+        // Apply response-phase route filters (Headers, CORS, Compress, Log)
+        if let Some(config) = ctx.config.as_ref().map(std::sync::Arc::clone) {
+            super::filters::apply_response_filters(upstream_response, ctx, &config);
+        }
+
+        // Enable Pingora response compression if Compress filter marked it eligible
+        if ctx.compress_enabled {
+            session.upstream_compression.adjust_level(6);
+        }
+
+        // Apply per-listener keepalive timeout
+        if let Some(keepalive_secs) = ctx.listener_keepalive_timeout_secs {
+            session
+                .downstream_session
+                .set_keepalive(Some(keepalive_secs));
         }
 
         // Add sticky session cookie if a new assignment was made
@@ -1963,6 +2046,11 @@ impl ProxyHttp for SentinelProxy {
                 correlation_id = %ctx.trace_id,
                 "Applied request header modifications"
             );
+        }
+
+        // Apply request-phase Headers filters
+        if let Some(ref config) = ctx.config {
+            super::filters::apply_request_headers_filters(upstream_request, ctx, config);
         }
 
         // Remove sensitive headers that shouldn't go to upstream

@@ -270,6 +270,20 @@ pub struct RequestContext {
     pub(crate) sticky_session_set_cookie: Option<String>,
     /// Target index for sticky session (for logging)
     pub(crate) sticky_target_index: Option<usize>,
+
+    // === Listener Overrides ===
+    /// Keepalive timeout from listener config (seconds, for response phase)
+    pub(crate) listener_keepalive_timeout_secs: Option<u64>,
+
+    // === Filter Overrides ===
+    /// Upstream connect timeout override from Timeout filter (seconds)
+    pub(crate) filter_connect_timeout_secs: Option<u64>,
+    /// Upstream read timeout override from Timeout filter (seconds)
+    pub(crate) filter_upstream_timeout_secs: Option<u64>,
+    /// CORS origin matched by a CORS filter (for response headers)
+    pub(crate) cors_origin: Option<String>,
+    /// Whether response compression is enabled by a Compress filter
+    pub(crate) compress_enabled: bool,
 }
 
 /// Pending shadow request information stored in context for deferred execution
@@ -369,6 +383,11 @@ impl RequestContext {
             sticky_session_new_assignment: false,
             sticky_session_set_cookie: None,
             sticky_target_index: None,
+            listener_keepalive_timeout_secs: None,
+            filter_connect_timeout_secs: None,
+            filter_upstream_timeout_secs: None,
+            cors_origin: None,
+            compress_enabled: false,
         }
     }
 

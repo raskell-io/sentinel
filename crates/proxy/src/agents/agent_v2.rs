@@ -13,8 +13,8 @@ use sentinel_agent_protocol::v2::{
     MetricsCollector,
 };
 use sentinel_agent_protocol::{
-    AgentResponse, EventType, RequestBodyChunkEvent, RequestHeadersEvent, ResponseBodyChunkEvent,
-    ResponseHeadersEvent,
+    AgentResponse, EventType, GuardrailInspectEvent, RequestBodyChunkEvent, RequestHeadersEvent,
+    ResponseBodyChunkEvent, ResponseHeadersEvent,
 };
 use sentinel_common::{
     errors::{SentinelError, SentinelResult},
@@ -122,6 +122,7 @@ impl AgentV2 {
             (AgentEvent::ResponseBody, EventType::ResponseBodyChunk) => true,
             (AgentEvent::Log, EventType::RequestComplete) => true,
             (AgentEvent::WebSocketFrame, EventType::WebSocketFrame) => true,
+            (AgentEvent::Guardrail, EventType::GuardrailInspect) => true,
             _ => false,
         })
     }
@@ -193,26 +194,27 @@ impl AgentV2 {
         }
     }
 
-    /// Send configuration to the agent.
-    ///
-    /// Note: Configuration is sent through the control stream when connections
-    /// are established. This is a placeholder for explicit config updates.
+    /// Send configuration to the agent via the pool's config push mechanism.
     async fn send_configure(&self, _config: serde_json::Value) -> SentinelResult<()> {
-        debug!(
-            agent_id = %self.config.id,
-            "Configuration will be sent through control stream on connection"
-        );
+        use sentinel_agent_protocol::v2::ConfigUpdateType;
 
-        // Configuration is handled by the pool's connections during initialization
-        // For explicit config updates, we'd need to iterate through connections
-        // and send configure through their control streams
-
-        info!(
-            agent_id = %self.config.id,
-            "V2 agent configuration noted"
-        );
-
-        Ok(())
+        if let Some(push_id) = self.pool.push_config_to_agent(
+            &self.config.id,
+            ConfigUpdateType::RequestReload,
+        ) {
+            info!(
+                agent_id = %self.config.id,
+                push_id = %push_id,
+                "Configuration push sent to agent"
+            );
+            Ok(())
+        } else {
+            debug!(
+                agent_id = %self.config.id,
+                "Agent does not support config push, config will be sent on next connection"
+            );
+            Ok(())
+        }
     }
 
     /// Call agent with request headers event.
@@ -356,6 +358,42 @@ impl AgentV2 {
                     agent: self.config.id.clone(),
                     message: e.to_string(),
                     event: "response_body_chunk".to_string(),
+                    source: None,
+                }
+            })
+    }
+
+    /// Call agent with guardrail inspect event.
+    pub async fn call_guardrail_inspect(
+        &self,
+        event: &GuardrailInspectEvent,
+    ) -> SentinelResult<AgentResponse> {
+        let call_num = self.metrics.calls_total.fetch_add(1, Ordering::Relaxed) + 1;
+
+        let correlation_id = &event.correlation_id;
+
+        trace!(
+            agent_id = %self.config.id,
+            call_num = call_num,
+            correlation_id = %correlation_id,
+            inspection_type = ?event.inspection_type,
+            "Sending guardrail inspect to v2 agent"
+        );
+
+        self.pool
+            .send_guardrail_inspect(&self.config.id, correlation_id, event)
+            .await
+            .map_err(|e| {
+                error!(
+                    agent_id = %self.config.id,
+                    correlation_id = %correlation_id,
+                    error = %e,
+                    "V2 agent guardrail inspect call failed"
+                );
+                SentinelError::Agent {
+                    agent: self.config.id.clone(),
+                    message: e.to_string(),
+                    event: "guardrail_inspect".to_string(),
                     source: None,
                 }
             })

@@ -347,51 +347,63 @@ impl AgentClient {
             );
         }
 
-        // Handle insecure skip verify (dangerous - only for testing)
-        if tls_config.insecure_skip_verify {
+        // Build channel: use custom connector for insecure_skip_verify,
+        // otherwise use tonic's built-in TLS configuration
+        let channel = if tls_config.insecure_skip_verify {
             warn!(
                 agent_id = %id,
                 address = %address,
                 "SECURITY WARNING: TLS certificate verification disabled for gRPC agent connection"
             );
-            // Note: tonic doesn't have a direct "skip verify" option like some other libraries
-            // The best we can do is use a permissive TLS config. For truly insecure connections,
-            // users should use the non-TLS grpc() method instead.
-        }
 
-        // Build channel with TLS
-        let channel = Channel::from_shared(address.clone())
-            .map_err(|e| {
-                error!(
-                    agent_id = %id,
-                    address = %address,
-                    error = %e,
-                    "Invalid gRPC URI"
-                );
-                AgentProtocolError::ConnectionFailed(format!("Invalid URI: {}", e))
-            })?
-            .tls_config(client_tls_config)
-            .map_err(|e| {
-                error!(
-                    agent_id = %id,
-                    address = %address,
-                    error = %e,
-                    "Invalid TLS configuration"
-                );
-                AgentProtocolError::ConnectionFailed(format!("TLS config error: {}", e))
-            })?
-            .timeout(timeout)
-            .connect()
-            .await
-            .map_err(|e| {
-                error!(
-                    agent_id = %id,
-                    address = %address,
-                    error = %e,
-                    "Failed to connect to agent via gRPC with TLS"
-                );
-                AgentProtocolError::ConnectionFailed(format!("gRPC TLS connect failed: {}", e))
-            })?;
+            let connector = Self::build_insecure_connector()?;
+            Channel::from_shared(address.clone())
+                .map_err(|e| {
+                    AgentProtocolError::ConnectionFailed(format!("Invalid URI: {}", e))
+                })?
+                .timeout(timeout)
+                .connect_with_connector(connector)
+                .await
+                .map_err(|e| {
+                    error!(
+                        agent_id = %id,
+                        address = %address,
+                        error = %e,
+                        "Failed to connect via insecure gRPC TLS"
+                    );
+                    AgentProtocolError::ConnectionFailed(format!(
+                        "gRPC insecure TLS connect failed: {}",
+                        e
+                    ))
+                })?
+        } else {
+            Channel::from_shared(address.clone())
+                .map_err(|e| {
+                    AgentProtocolError::ConnectionFailed(format!("Invalid URI: {}", e))
+                })?
+                .tls_config(client_tls_config)
+                .map_err(|e| {
+                    error!(
+                        agent_id = %id,
+                        address = %address,
+                        error = %e,
+                        "Invalid TLS configuration"
+                    );
+                    AgentProtocolError::ConnectionFailed(format!("TLS config error: {}", e))
+                })?
+                .timeout(timeout)
+                .connect()
+                .await
+                .map_err(|e| {
+                    error!(
+                        agent_id = %id,
+                        address = %address,
+                        error = %e,
+                        "Failed to connect to agent via gRPC with TLS"
+                    );
+                    AgentProtocolError::ConnectionFailed(format!("gRPC TLS connect failed: {}", e))
+                })?
+        };
 
         let client = AgentProcessorClient::new(channel);
 
@@ -427,6 +439,73 @@ impl AgentClient {
         }
 
         None
+    }
+
+    /// Build an HTTPS connector that skips certificate verification.
+    ///
+    /// **DANGEROUS:** Only use this for testing with self-signed certificates.
+    fn build_insecure_connector(
+    ) -> Result<
+        hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
+        AgentProtocolError,
+    > {
+        use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+        use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+        use rustls::DigitallySignedStruct;
+
+        /// Certificate verifier that accepts all certificates without validation.
+        #[derive(Debug)]
+        struct NoVerifier;
+
+        impl ServerCertVerifier for NoVerifier {
+            fn verify_server_cert(
+                &self,
+                _end_entity: &CertificateDer<'_>,
+                _intermediates: &[CertificateDer<'_>],
+                _server_name: &ServerName<'_>,
+                _ocsp_response: &[u8],
+                _now: UnixTime,
+            ) -> Result<ServerCertVerified, rustls::Error> {
+                Ok(ServerCertVerified::assertion())
+            }
+
+            fn verify_tls12_signature(
+                &self,
+                _message: &[u8],
+                _cert: &CertificateDer<'_>,
+                _dss: &DigitallySignedStruct,
+            ) -> Result<HandshakeSignatureValid, rustls::Error> {
+                Ok(HandshakeSignatureValid::assertion())
+            }
+
+            fn verify_tls13_signature(
+                &self,
+                _message: &[u8],
+                _cert: &CertificateDer<'_>,
+                _dss: &DigitallySignedStruct,
+            ) -> Result<HandshakeSignatureValid, rustls::Error> {
+                Ok(HandshakeSignatureValid::assertion())
+            }
+
+            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                rustls::crypto::ring::default_provider()
+                    .signature_verification_algorithms
+                    .supported_schemes()
+            }
+        }
+
+        let tls_config = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerifier))
+            .with_no_client_auth();
+
+        let connector = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_tls_config(tls_config)
+            .https_or_http()
+            .enable_http2()
+            .build();
+
+        Ok(connector)
     }
 
     /// Create a new HTTP agent client

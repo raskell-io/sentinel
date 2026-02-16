@@ -52,6 +52,22 @@ impl MetricsManager {
         }
     }
 
+    /// Create from metrics configuration.
+    ///
+    /// Applies `enabled` and `path` from the config.
+    /// The `address` field determines which listener serves the metrics
+    /// endpoint but is handled at the listener level, not here.
+    pub fn from_config(
+        config: &sentinel_config::MetricsConfig,
+        service_name: impl Into<String>,
+        instance_id: impl Into<String>,
+    ) -> Self {
+        let mut manager = Self::new(service_name, instance_id);
+        manager.enabled = config.enabled;
+        manager.path = config.path.clone();
+        manager
+    }
+
     /// Set the metrics endpoint path.
     pub fn path(mut self, path: impl Into<String>) -> Self {
         self.path = path.into();

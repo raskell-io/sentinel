@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use pingora_timeout::timeout;
 use sentinel_agent_protocol::{
-    GuardrailDetection, GuardrailInspectEvent, GuardrailInspectionType, GuardrailResponse,
+    Decision, GuardrailDetection, GuardrailInspectEvent, GuardrailInspectionType,
+    GuardrailResponse,
 };
 use sentinel_config::{
     GuardrailAction, GuardrailFailureMode, PiiDetectionConfig, PromptInjectionConfig,
@@ -68,7 +69,6 @@ pub trait GuardrailAgentCaller: Send + Sync {
 
 /// Default implementation using the agent manager.
 pub struct AgentManagerCaller {
-    #[allow(dead_code)]
     agent_manager: Arc<AgentManager>,
 }
 
@@ -86,24 +86,51 @@ impl GuardrailAgentCaller for AgentManagerCaller {
         agent_name: &str,
         event: GuardrailInspectEvent,
     ) -> Result<GuardrailResponse, String> {
-        // Use the agent manager to send the guardrail event
-        // For now, we'll use a simple direct approach
-        // The agent manager needs a method to handle GuardrailInspect events
-
-        // This is a placeholder - the actual implementation would use
-        // the agent manager's connection pool and protocol handling
         trace!(
             agent = agent_name,
             inspection_type = ?event.inspection_type,
-            "Calling guardrail agent"
+            "Calling guardrail agent via agent manager"
         );
 
-        // For now, return a mock response until we integrate with agent manager
-        // In a real implementation, this would call the agent via the manager
-        Err(format!(
-            "Agent '{}' not configured for guardrail inspection",
-            agent_name
-        ))
+        let response = self
+            .agent_manager
+            .call_guardrail_agent(agent_name, event)
+            .await
+            .map_err(|e| format!("Guardrail agent '{}' call failed: {}", agent_name, e))?;
+
+        // Map AgentResponse → GuardrailResponse.
+        //
+        // If the agent puts a serialized GuardrailResponse in
+        // routing_metadata["guardrail_response"], use that directly.
+        // Otherwise, infer from the Decision field.
+        if let Some(raw) = response.routing_metadata.get("guardrail_response") {
+            serde_json::from_str::<GuardrailResponse>(raw).map_err(|e| {
+                format!(
+                    "Failed to parse guardrail response from agent '{}': {}",
+                    agent_name, e
+                )
+            })
+        } else {
+            // Infer from decision
+            match &response.decision {
+                Decision::Allow => Ok(GuardrailResponse::default()),
+                Decision::Block { body, .. } => Ok(GuardrailResponse {
+                    detected: true,
+                    confidence: 1.0,
+                    detections: vec![GuardrailDetection {
+                        category: "agent_block".to_string(),
+                        description: body
+                            .clone()
+                            .unwrap_or_else(|| "Blocked by guardrail agent".to_string()),
+                        severity: sentinel_agent_protocol::DetectionSeverity::High,
+                        confidence: Some(1.0),
+                        span: None,
+                    }],
+                    redacted_content: None,
+                }),
+                _ => Ok(GuardrailResponse::default()),
+            }
+        }
     }
 }
 

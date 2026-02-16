@@ -472,12 +472,21 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                 loop {
                     interval.tick().await;
 
-                    // Send health status
+                    // Collect health status from the handler
                     let health = handler_for_health.health_status();
-                    let health_msg = grpc_v2::ProxyControl {
+                    trace!(
+                        agent_id = %agent_id_for_health,
+                        state = ?health.state,
+                        message = ?health.message,
+                        "Agent health status collected"
+                    );
+
+                    // Send a heartbeat through the control stream (ConfigureEvent
+                    // with empty config serves as a keepalive ping to the agent)
+                    let heartbeat = grpc_v2::ProxyControl {
                         message: Some(grpc_v2::proxy_control::Message::Configure(
                             grpc_v2::ConfigureEvent {
-                                config_json: "{}".to_string(), // Health is sent differently
+                                config_json: "{}".to_string(),
                                 config_version: None,
                                 is_initial: false,
                                 timestamp_ms: now_ms(),
@@ -485,15 +494,11 @@ impl AgentServiceV2 for GrpcAgentHandlerV2 {
                         )),
                     };
 
-                    // Note: In a real implementation, we'd have a separate channel for
-                    // agent->proxy messages. For now, health is reported via the process stream.
-                    // This task is a placeholder for periodic background work.
-                    let _ = health_msg; // Suppress unused warning
-                    let _ = health;
-
-                    // Check if channel is closed
-                    if tx_for_health.is_closed() {
-                        debug!(agent_id = %agent_id_for_health, "Control stream closed, stopping health reporter");
+                    if tx_for_health.send(Ok(heartbeat)).await.is_err() {
+                        debug!(
+                            agent_id = %agent_id_for_health,
+                            "Control stream closed, stopping health reporter"
+                        );
                         break;
                     }
                 }

@@ -93,17 +93,142 @@ pub struct AccessLogEntry {
 }
 
 impl AccessLogEntry {
-    /// Format the entry as a string based on the specified format
-    pub fn format(&self, format: AccessLogFormat) -> String {
+    /// Format the entry as a string based on the specified format.
+    ///
+    /// When `fields` is provided, disabled fields are omitted from JSON output.
+    pub fn format(
+        &self,
+        format: AccessLogFormat,
+        fields: Option<&sentinel_config::AccessLogFields>,
+    ) -> String {
         match format {
-            AccessLogFormat::Json => self.format_json(),
+            AccessLogFormat::Json => self.format_json(fields),
             AccessLogFormat::Combined => self.format_combined(),
         }
     }
 
-    /// Format as JSON
-    fn format_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    /// Format as JSON, optionally filtering fields based on config
+    fn format_json(&self, fields: Option<&sentinel_config::AccessLogFields>) -> String {
+        let fields = match fields {
+            Some(f) => f,
+            None => return serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string()),
+        };
+
+        // Build a filtered JSON object based on enabled fields
+        let mut map = serde_json::Map::new();
+        if fields.timestamp {
+            map.insert(
+                "timestamp".to_string(),
+                serde_json::Value::String(self.timestamp.clone()),
+            );
+        }
+        if fields.trace_id {
+            map.insert(
+                "trace_id".to_string(),
+                serde_json::Value::String(self.trace_id.clone()),
+            );
+        }
+        if fields.method {
+            map.insert(
+                "method".to_string(),
+                serde_json::Value::String(self.method.clone()),
+            );
+        }
+        if fields.path {
+            map.insert(
+                "path".to_string(),
+                serde_json::Value::String(self.path.clone()),
+            );
+        }
+        if fields.query {
+            if let Some(ref q) = self.query {
+                map.insert("query".to_string(), serde_json::Value::String(q.clone()));
+            }
+        }
+        if fields.status {
+            map.insert(
+                "status".to_string(),
+                serde_json::json!(self.status),
+            );
+        }
+        if fields.latency_ms {
+            map.insert(
+                "duration_ms".to_string(),
+                serde_json::json!(self.duration_ms),
+            );
+        }
+        if fields.client_ip {
+            map.insert(
+                "client_ip".to_string(),
+                serde_json::Value::String(self.client_ip.clone()),
+            );
+        }
+        if fields.user_agent {
+            if let Some(ref ua) = self.user_agent {
+                map.insert(
+                    "user_agent".to_string(),
+                    serde_json::Value::String(ua.clone()),
+                );
+            }
+        }
+        if fields.referer {
+            if let Some(ref r) = self.referer {
+                map.insert("referer".to_string(), serde_json::Value::String(r.clone()));
+            }
+        }
+        if fields.body_bytes_sent {
+            map.insert(
+                "body_bytes_sent".to_string(),
+                serde_json::json!(self.body_bytes_sent),
+            );
+        }
+        if fields.upstream_addr {
+            if let Some(ref addr) = self.upstream_addr {
+                map.insert(
+                    "upstream_addr".to_string(),
+                    serde_json::Value::String(addr.clone()),
+                );
+            }
+        }
+        if fields.connection_reused {
+            map.insert(
+                "connection_reused".to_string(),
+                serde_json::json!(self.connection_reused),
+            );
+        }
+        if fields.rate_limit_hit {
+            map.insert(
+                "rate_limit_hit".to_string(),
+                serde_json::json!(self.rate_limit_hit),
+            );
+        }
+        if fields.geo_country {
+            if let Some(ref cc) = self.geo_country {
+                map.insert(
+                    "geo_country".to_string(),
+                    serde_json::Value::String(cc.clone()),
+                );
+            }
+        }
+        // Always include these core fields (not configurable)
+        if let Some(ref route) = self.route_id {
+            map.insert(
+                "route_id".to_string(),
+                serde_json::Value::String(route.clone()),
+            );
+        }
+        if let Some(ref upstream) = self.upstream {
+            map.insert(
+                "upstream".to_string(),
+                serde_json::Value::String(upstream.clone()),
+            );
+        }
+        map.insert(
+            "instance_id".to_string(),
+            serde_json::Value::String(self.instance_id.clone()),
+        );
+
+        serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
     }
 
     /// Format as Combined Log Format with trace_id extension
@@ -642,7 +767,11 @@ impl LogManager {
     /// to avoid building the entry when it would be discarded by sampling.
     pub fn log_access(&self, entry: &AccessLogEntry) {
         if let Some(ref writer) = self.access_log {
-            let formatted = entry.format(self.access_log_format);
+            let fields = self
+                .access_log_config
+                .as_ref()
+                .map(|c| &c.fields);
+            let formatted = entry.format(self.access_log_format, fields);
             let mut guard = writer.lock();
             if let Err(e) = guard.write_line(&formatted) {
                 error!("Failed to write access log: {}", e);
@@ -883,7 +1012,7 @@ mod tests {
             geo_country: Some("US".to_string()),
         };
 
-        let combined = entry.format(AccessLogFormat::Combined);
+        let combined = entry.format(AccessLogFormat::Combined, None);
 
         // Check Combined format structure
         assert!(combined.starts_with("192.168.1.1 - - ["));
