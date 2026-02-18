@@ -209,7 +209,7 @@ Individual agent crates will be published automatically by their release workflo
 - [x] npm: No old `sentinel-agent-sdk` package exists — nothing to deprecate
 - [x] PyPI: No old `sentinel-agent-sdk` package exists — nothing to deprecate
 - [x] Hex.pm: No old `sentinel_agent_sdk` package exists — nothing to deprecate
-- [ ] Docker: Check `ghcr.io/raskell-io/sentinel` images (requires `read:packages` scope)
+- [x] Docker: Updated descriptions on 3 old `ghcr.io/raskell-io/sentinel*` packages with deprecation notices pointing to `zentinelproxy`
 
 ### Phase 14: GitHub Org Housekeeping ✅
 
