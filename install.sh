@@ -164,16 +164,17 @@ install_binary() {
     local tmp_dir="$1"
     local install_dir="$2"
 
-    # Find the binary in the extracted files
+    # Find the binary in the extracted files (check zentinel first, then sentinel for pre-rename releases)
     local binary_path=""
-    if [ -f "${tmp_dir}/${BINARY_NAME}" ]; then
-        binary_path="${tmp_dir}/${BINARY_NAME}"
-    elif [ -f "${tmp_dir}/bin/${BINARY_NAME}" ]; then
-        binary_path="${tmp_dir}/bin/${BINARY_NAME}"
-    else
-        # Search for it
-        binary_path=$(find "$tmp_dir" -name "$BINARY_NAME" -type f | head -n 1)
-    fi
+    for name in "$BINARY_NAME" "sentinel"; do
+        if [ -f "${tmp_dir}/${name}" ]; then
+            binary_path="${tmp_dir}/${name}"
+            break
+        elif [ -f "${tmp_dir}/bin/${name}" ]; then
+            binary_path="${tmp_dir}/bin/${name}"
+            break
+        fi
+    done
 
     if [ -z "$binary_path" ] || [ ! -f "$binary_path" ]; then
         error "Could not find ${BINARY_NAME} binary in the downloaded archive"
