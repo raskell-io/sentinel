@@ -76,6 +76,7 @@ check_dependencies() {
 # Get the latest release version that has downloadable binaries.
 # Uses /releases (not /releases/latest) because the "latest" release may lack
 # binary assets if it was tagged manually without going through CI.
+# Checks for both zentinel-* and sentinel-* asset names (pre-rename releases).
 get_latest_version() {
     local tmp_releases="${tmp_dir:-.}/.releases.json"
     curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=10" \
@@ -84,7 +85,7 @@ get_latest_version() {
     if command -v jq >/dev/null 2>&1; then
         jq -r '
             [.[] | select(.draft == false and .prerelease == false and
-                (.assets | map(.name) | any(test("^zentinel-.*\\.tar\\.gz$"))))]
+                (.assets | map(.name) | any(test("^(zentinel|sentinel)-.*\\.tar\\.gz$"))))]
             | .[0].tag_name // empty
         ' "$tmp_releases"
     else
@@ -97,7 +98,7 @@ get_latest_version() {
                 tag = $0
             }
             /"prerelease": *true/ { tag = "" }
-            /"name":.*zentinel-.*tar\.gz"/ {
+            /"name":.*(zentinel|sentinel)-.*tar\.gz"/ {
                 if (tag) { print tag; exit }
             }
         ' "$tmp_releases"
@@ -112,9 +113,14 @@ download_binary() {
     local arch="$3"
     local tmp_dir="$4"
 
-    # Build artifact name
+    # Build artifact name — try zentinel-* first, fall back to sentinel-* (pre-rename releases)
     local artifact="zentinel-${version}-${os}-${arch}.tar.gz"
     local url="https://github.com/${REPO}/releases/download/${version}/${artifact}"
+
+    if ! curl -fsSL --head "$url" >/dev/null 2>&1; then
+        artifact="sentinel-${version}-${os}-${arch}.tar.gz"
+        url="https://github.com/${REPO}/releases/download/${version}/${artifact}"
+    fi
     local checksum_url="${url}.sha256"
 
     info "Downloading ${artifact}..."
