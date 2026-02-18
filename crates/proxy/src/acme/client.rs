@@ -397,8 +397,14 @@ impl AcmeClient {
             .map_err(|e| AcmeError::Finalization(format!("Failed to generate key: {}", e)))?;
 
         // Create CSR with all domains
-        let params = rcgen::CertificateParams::new(self.config.domains.clone())
+        let mut params = rcgen::CertificateParams::new(self.config.domains.clone())
             .map_err(|e| AcmeError::Finalization(format!("Failed to create CSR params: {}", e)))?;
+
+        // Set the Common Name to the first domain — rcgen defaults to "rcgen self signed cert"
+        // which ACME CAs reject as an invalid domain name
+        let mut dn = rcgen::DistinguishedName::new();
+        dn.push(rcgen::DnType::CommonName, self.config.domains[0].clone());
+        params.distinguished_name = dn;
 
         // Serialize CSR with the key pair (rcgen 0.14 API)
         let csr_request = params
