@@ -244,7 +244,7 @@ Individual agent crates will be published automatically by their release workflo
 - [ ] Keep `sentinel.raskell.io` redirect active: minimum 12 months
 - [ ] GitHub redirects: permanent (handled automatically by GitHub)
 - [ ] Monitor old URLs for traffic
-- [ ] Switch agent Cargo.toml git deps back to crates.io version deps after first tagged releases
+- [x] Switched 24 agent repos from git deps to crates.io version deps (`zentinel-agent-protocol`, `zentinel-common`, `zentinel-modsec`, `zentinel-agent-sdk`)
 
 ---
 
