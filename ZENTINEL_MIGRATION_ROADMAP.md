@@ -188,11 +188,11 @@ Individual agent crates will be published automatically by their release workflo
 - [ ] Prepare Open Graph images with new branding
 - [ ] Rename image assets in website repo (sentinel-mascot → zentinel-mascot, etc.)
 
-### Phase 11: WASM Binary Recompilation
+### Phase 11: WASM Binary Recompilation ✅
 
-- [ ] Rebuild `zentinel_convert_wasm` from zentinel-convert repo (`wasm-pack build`)
-- [ ] Rebuild `zentinel_playground_wasm` from main proxy repo
-- [ ] Deploy updated WASM binaries to website
+- [x] Rebuilt `zentinel_convert_wasm` from zentinel-convert repo (`wasm-pack build --target web --release`)
+- [x] Rebuilt `zentinel_playground_wasm` from main proxy repo (bumped sim/playground-wasm versions 0.4.3 → 0.5.0)
+- [x] Deployed updated WASM binaries to zentinelproxy.io website (`static/wasm/`)
 
 ### Phase 12: Package Registry Publishing (non-Rust)
 
