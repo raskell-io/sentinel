@@ -93,8 +93,7 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                 );
 
                 // Parse policies block (request-headers, response-headers, etc.)
-                let (request_headers, response_headers) =
-                    parse_route_header_policies(child)?;
+                let (request_headers, response_headers) = parse_route_header_policies(child)?;
 
                 // Build route policies with optional cache config
                 let policies = RoutePolicies {

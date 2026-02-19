@@ -1799,9 +1799,7 @@ impl ProxyHttp for ZentinelProxy {
                         }
                     }
                 };
-                upstream_response
-                    .insert_header("Cache-Status", value)
-                    .ok();
+                upstream_response.insert_header("Cache-Status", value).ok();
             }
         }
 
