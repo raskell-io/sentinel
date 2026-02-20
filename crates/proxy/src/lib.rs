@@ -51,6 +51,7 @@ pub mod decompression;
 pub mod discovery;
 pub mod disk_cache;
 pub mod distributed_rate_limit;
+pub mod hybrid_cache;
 pub mod errors;
 pub mod memcached_rate_limit;
 

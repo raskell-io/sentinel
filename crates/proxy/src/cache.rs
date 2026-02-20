@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::disk_cache::DiskCacheStorage;
+use crate::hybrid_cache::HybridCacheStorage;
 use zentinel_config::{CacheBackend, CacheStorageConfig};
 
 // ============================================================================
@@ -120,8 +121,17 @@ static HTTP_CACHE_STORAGE: Lazy<&'static (dyn Storage + Sync)> = Lazy::new(|| {
             )))
         }
         CacheBackend::Hybrid => {
-            warn!("Hybrid cache backend not yet implemented, falling back to memory");
-            Box::leak(Box::new(MemCache::new()))
+            let path = config
+                .disk_path
+                .as_ref()
+                .expect("disk-path is required for hybrid backend (validated by config parser)");
+            let memory: &'static MemCache = Box::leak(Box::new(MemCache::new()));
+            let disk: &'static DiskCacheStorage = Box::leak(Box::new(DiskCacheStorage::new(
+                path,
+                config.disk_shards,
+                config.max_size_bytes,
+            )));
+            Box::leak(Box::new(HybridCacheStorage::new(memory, disk)))
         }
     }
 });
@@ -170,7 +180,7 @@ pub fn get_cache_lock() -> &'static CacheLock {
 /// register them with the eviction manager. No-op for non-disk backends.
 pub async fn init_disk_cache_state() {
     let config = get_cache_config();
-    if config.backend == CacheBackend::Disk {
+    if matches!(config.backend, CacheBackend::Disk | CacheBackend::Hybrid) {
         let path = config.disk_path.as_ref().unwrap();
         let eviction = get_cache_eviction();
 
@@ -197,7 +207,7 @@ pub async fn init_disk_cache_state() {
 /// No-op for non-disk backends.
 pub async fn save_disk_cache_state() {
     let config = get_cache_config();
-    if config.backend == CacheBackend::Disk {
+    if matches!(config.backend, CacheBackend::Disk | CacheBackend::Hybrid) {
         let eviction_path = config.disk_path.as_ref().unwrap().join("eviction");
         if let Err(e) = std::fs::create_dir_all(&eviction_path) {
             error!(error = %e, "Failed to create eviction state directory");
