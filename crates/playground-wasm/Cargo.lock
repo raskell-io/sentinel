@@ -1487,7 +1487,7 @@ dependencies = [
 
 [[package]]
 name = "zentinel-common"
-version = "0.5.0"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1501,7 +1501,7 @@ dependencies = [
 
 [[package]]
 name = "zentinel-config"
-version = "0.5.0"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1520,8 +1520,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "zentinel-config-inspect"
+version = "0.5.4"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "zentinel-common",
+ "zentinel-config",
+]
+
+[[package]]
 name = "zentinel-playground-wasm"
-version = "0.5.0"
+version = "0.5.4"
 dependencies = [
  "console_error_panic_hook",
  "serde",
@@ -1529,12 +1541,14 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-test",
+ "zentinel-config",
+ "zentinel-config-inspect",
  "zentinel-sim",
 ]
 
 [[package]]
 name = "zentinel-sim"
-version = "0.5.0"
+version = "0.5.4"
 dependencies = [
  "regex",
  "serde",

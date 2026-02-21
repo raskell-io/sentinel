@@ -1,8 +1,8 @@
 //! WebAssembly bindings for the Zentinel Config Playground
 //!
 //! This crate provides JavaScript-friendly bindings for the Zentinel
-//! configuration simulator, enabling in-browser config validation and
-//! route decision tracing.
+//! configuration simulator, enabling in-browser config validation,
+//! route decision tracing, and topology inspection.
 //!
 //! # Usage from JavaScript
 //!
@@ -102,7 +102,7 @@ pub fn validate(config_kdl: &str) -> JsValue {
             message: w.message.clone(),
         }).collect(),
         effective_config: if result.valid {
-            result.effective_config.as_ref().map(|c| get_effective_config(c))
+            result.effective_config.as_ref().map(get_effective_config)
         } else {
             None
         },
@@ -373,6 +373,134 @@ pub fn simulate_with_agents(
 }
 
 // ============================================================================
+// Topology Inspection
+// ============================================================================
+
+/// Inspect a configuration and return its topology graph with heuristic warnings
+///
+/// Returns a JSON object with the full topology:
+/// ```json
+/// {
+///     "listeners": [...],
+///     "routes": [...],
+///     "filters": [...],
+///     "agents": [...],
+///     "upstreams": [...],
+///     "edges": [...],
+///     "warnings": [...]
+/// }
+/// ```
+#[wasm_bindgen]
+pub fn inspect_topology(config_kdl: &str) -> JsValue {
+    let config = match zentinel_config::Config::from_kdl(config_kdl) {
+        Ok(c) => c,
+        Err(e) => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Invalid configuration".to_string(),
+                details: vec![e.to_string()],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    let topology = zentinel_config_inspect::inspect(&config);
+    serde_wasm_bindgen::to_value(&topology).unwrap_or(JsValue::NULL)
+}
+
+/// Render the topology in a specific format
+///
+/// Supported formats: "text", "mermaid", "json", "dot"
+///
+/// Returns an object with:
+/// ```json
+/// {
+///     "format": "mermaid",
+///     "output": "flowchart LR\n..."
+/// }
+/// ```
+#[wasm_bindgen]
+pub fn render_topology(config_kdl: &str, format: &str) -> JsValue {
+    let config = match zentinel_config::Config::from_kdl(config_kdl) {
+        Ok(c) => c,
+        Err(e) => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Invalid configuration".to_string(),
+                details: vec![e.to_string()],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    let topology = zentinel_config_inspect::inspect(&config);
+
+    use zentinel_config_inspect::render;
+    let output = match format {
+        "mermaid" => render::mermaid::render(&topology),
+        "dot" => render::dot::render(&topology),
+        "json" => render::json::render(&topology),
+        "text" => render::text::render(&topology),
+        _ => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: format!("Unknown format: {format}"),
+                details: vec!["Valid formats: text, mermaid, json, dot".to_string()],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    serde_wasm_bindgen::to_value(&RenderResponse {
+        format: format.to_string(),
+        output,
+    })
+    .unwrap_or(JsValue::NULL)
+}
+
+/// Lint a configuration and return only warnings
+///
+/// Returns an object with:
+/// ```json
+/// {
+///     "warnings": [...],
+///     "has_errors": false
+/// }
+/// ```
+#[wasm_bindgen]
+pub fn lint_config(config_kdl: &str) -> JsValue {
+    let config = match zentinel_config::Config::from_kdl(config_kdl) {
+        Ok(c) => c,
+        Err(e) => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Invalid configuration".to_string(),
+                details: vec![e.to_string()],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
+    };
+
+    let topology = zentinel_config_inspect::inspect(&config);
+    let has_errors = topology.warnings.iter().any(|w| {
+        matches!(w.severity, zentinel_config_inspect::Severity::Error)
+    });
+
+    let warnings: Vec<LintWarning> = topology
+        .warnings
+        .iter()
+        .map(|w| LintWarning {
+            severity: format!("{}", w.severity),
+            code: w.code.to_string(),
+            message: w.message.clone(),
+            context: w.context.clone(),
+        })
+        .collect();
+
+    serde_wasm_bindgen::to_value(&LintResponse {
+        warnings,
+        has_errors,
+    })
+    .unwrap_or(JsValue::NULL)
+}
+
+// ============================================================================
 // Internal types for serialization
 // ============================================================================
 
@@ -407,6 +535,26 @@ struct WarningInfo {
 struct SimulationError {
     error: String,
     details: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct RenderResponse {
+    format: String,
+    output: String,
+}
+
+#[derive(serde::Serialize)]
+struct LintWarning {
+    severity: String,
+    code: String,
+    message: String,
+    context: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct LintResponse {
+    warnings: Vec<LintWarning>,
+    has_errors: bool,
 }
 
 // ============================================================================

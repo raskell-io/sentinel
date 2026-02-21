@@ -1,6 +1,6 @@
 # Config Inspect — Design & Implementation Plan
 
-> **Status:** In progress
+> **Status:** v1 complete (all renderers + CLI + heuristics), working on WASM integration
 > **Created:** 2026-02-21
 > **Crate:** `crates/config-inspect`
 

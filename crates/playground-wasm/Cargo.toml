@@ -17,6 +17,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # Local crates
 zentinel-sim = { path = "../sim", version = "0.5.4" }
+zentinel-config = { path = "../config", version = "0.5.4", default-features = false }
+zentinel-config-inspect = { path = "../config-inspect", version = "0.5.4" }
 
 # WASM bindings
 wasm-bindgen = "0.2"
