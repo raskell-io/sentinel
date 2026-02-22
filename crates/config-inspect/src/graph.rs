@@ -43,6 +43,7 @@ pub struct RouteNode {
     pub has_circuit_breaker: bool,
     pub has_retry: bool,
     pub websocket: bool,
+    pub cache_exclusions: Option<String>,
 }
 
 /// A named filter instance.
@@ -131,14 +132,32 @@ fn build_listener_nodes(listeners: &[ListenerConfig]) -> Vec<ListenerNode> {
 fn build_route_nodes(routes: &[RouteConfig]) -> Vec<RouteNode> {
     routes
         .iter()
-        .map(|r| RouteNode {
-            id: r.id.clone(),
-            priority: format!("{:?}", r.priority),
-            match_summary: summarize_matches(&r.matches),
-            service_type: format!("{:?}", r.service_type),
-            has_circuit_breaker: r.circuit_breaker.is_some(),
-            has_retry: r.retry_policy.is_some(),
-            websocket: r.websocket,
+        .map(|r| {
+            let cache_exclusions = r.policies.cache.as_ref().and_then(|c| {
+                let mut parts = Vec::new();
+                if !c.exclude_extensions.is_empty() {
+                    parts.push(format!("ext:{}", c.exclude_extensions.join(",")));
+                }
+                if !c.exclude_paths.is_empty() {
+                    parts.push(format!("paths:{}", c.exclude_paths.join(",")));
+                }
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join("; "))
+                }
+            });
+
+            RouteNode {
+                id: r.id.clone(),
+                priority: format!("{:?}", r.priority),
+                match_summary: summarize_matches(&r.matches),
+                service_type: format!("{:?}", r.service_type),
+                has_circuit_breaker: r.circuit_breaker.is_some(),
+                has_retry: r.retry_policy.is_some(),
+                websocket: r.websocket,
+                cache_exclusions,
+            }
         })
         .collect()
 }

@@ -2409,6 +2409,18 @@ impl ProxyHttp for ZentinelProxy {
             return Ok(());
         }
 
+        // Check if path is excluded from caching (by extension or pattern)
+        if !self.cache_manager.is_path_cacheable(route_id, &ctx.path) {
+            ctx.cache_status = Some(super::context::CacheStatus::Bypass("excluded"));
+            trace!(
+                correlation_id = %ctx.trace_id,
+                route_id = %route_id,
+                path = %ctx.path,
+                "Path excluded from caching"
+            );
+            return Ok(());
+        }
+
         // Enable caching for this request using Pingora's cache infrastructure
         debug!(
             correlation_id = %ctx.trace_id,

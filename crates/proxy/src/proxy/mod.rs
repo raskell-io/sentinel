@@ -716,6 +716,27 @@ impl ZentinelProxy {
         for route in &config.routes {
             // Use per-route cache config if present, otherwise fall back to service-type defaults
             let cache_config = if let Some(ref rc) = route.policies.cache {
+                // Pre-compile exclude_paths glob patterns into regex at registration time
+                let exclude_paths = rc
+                    .exclude_paths
+                    .iter()
+                    .filter_map(|pattern| {
+                        let regex_str = crate::cache::compile_glob_to_regex(pattern);
+                        match regex::Regex::new(&regex_str) {
+                            Ok(re) => Some(re),
+                            Err(e) => {
+                                warn!(
+                                    route_id = %route.id,
+                                    pattern = %pattern,
+                                    error = %e,
+                                    "Failed to compile cache exclude-path pattern"
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .collect();
+
                 CacheConfig {
                     enabled: rc.enabled,
                     default_ttl_secs: rc.default_ttl_secs,
@@ -725,6 +746,8 @@ impl ZentinelProxy {
                     stale_if_error_secs: rc.stale_if_error_secs,
                     cacheable_methods: rc.cacheable_methods.clone(),
                     cacheable_status_codes: rc.cacheable_status_codes.clone(),
+                    exclude_extensions: rc.exclude_extensions.clone(),
+                    exclude_paths,
                 }
             } else {
                 match route.service_type {

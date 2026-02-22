@@ -298,6 +298,32 @@ routes {
     }
 
     // -------------------------------------------------------------------------
+    // Broad route with cache exclusion rules
+    // -------------------------------------------------------------------------
+    route "site-with-exclusions" {
+        priority "normal"
+
+        matches {
+            path-prefix "/"
+        }
+
+        upstream "static-backend"
+
+        cache {
+            enabled #true
+            default-ttl-secs 3600
+
+            // Don't cache dynamic file types
+            exclude-extensions "php" "html" "asp"
+
+            // Don't cache admin or login paths
+            exclude-paths "/wp-admin/**" "/login" "/api/auth/**"
+
+            vary-headers "Accept-Encoding"
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // POST requests are not cached by default
     // -------------------------------------------------------------------------
     route "api-write" {

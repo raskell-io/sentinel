@@ -1760,6 +1760,8 @@ mod tests {
             cacheable_status_codes: vec![200],
             vary_headers: vec![],
             ignore_query_params: vec![],
+            exclude_extensions: vec![],
+            exclude_paths: vec![],
         };
 
         // --- CacheStorageConfig ---

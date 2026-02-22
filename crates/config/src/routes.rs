@@ -264,6 +264,14 @@ pub struct RouteCacheConfig {
     /// Query parameters to exclude from cache key
     #[serde(default)]
     pub ignore_query_params: Vec<String>,
+
+    /// File extensions to exclude from caching (without dot, e.g., "php", "html")
+    #[serde(default)]
+    pub exclude_extensions: Vec<String>,
+
+    /// Path patterns to exclude from caching (glob: *, **, ?)
+    #[serde(default)]
+    pub exclude_paths: Vec<String>,
 }
 
 impl Default for RouteCacheConfig {
@@ -279,6 +287,8 @@ impl Default for RouteCacheConfig {
             cacheable_status_codes: default_cacheable_status_codes(),
             vary_headers: Vec::new(),
             ignore_query_params: Vec::new(),
+            exclude_extensions: Vec::new(),
+            exclude_paths: Vec::new(),
         }
     }
 }

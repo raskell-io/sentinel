@@ -428,6 +428,36 @@ fn parse_cache_config(node: &kdl::KdlNode) -> Result<RouteCacheConfig> {
         Vec::new()
     };
 
+    // Parse exclude extensions (file extensions to skip caching)
+    let exclude_extensions = if let Some(children) = node.children() {
+        if let Some(ext_node) = children.get("exclude-extensions") {
+            ext_node
+                .entries()
+                .iter()
+                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Parse exclude paths (glob patterns to skip caching)
+    let exclude_paths = if let Some(children) = node.children() {
+        if let Some(paths_node) = children.get("exclude-paths") {
+            paths_node
+                .entries()
+                .iter()
+                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
     trace!(
         enabled = enabled,
         default_ttl = default_ttl_secs,
@@ -446,6 +476,8 @@ fn parse_cache_config(node: &kdl::KdlNode) -> Result<RouteCacheConfig> {
         cacheable_status_codes,
         vary_headers,
         ignore_query_params,
+        exclude_extensions,
+        exclude_paths,
     })
 }
 

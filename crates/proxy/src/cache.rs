@@ -244,6 +244,10 @@ pub struct CacheConfig {
     pub cacheable_methods: Vec<String>,
     /// Status codes that are cacheable
     pub cacheable_status_codes: Vec<u16>,
+    /// File extensions to exclude from caching (without dot, lowercase)
+    pub exclude_extensions: Vec<String>,
+    /// Path patterns to exclude from caching (pre-compiled from globs)
+    pub exclude_paths: Vec<Regex>,
 }
 
 impl Default for CacheConfig {
@@ -257,6 +261,8 @@ impl Default for CacheConfig {
             stale_if_error_secs: 300,
             cacheable_methods: vec!["GET".to_string(), "HEAD".to_string()],
             cacheable_status_codes: vec![200, 203, 204, 206, 300, 301, 308, 404, 410],
+            exclude_extensions: Vec::new(),
+            exclude_paths: Vec::new(),
         }
     }
 }
@@ -442,6 +448,56 @@ impl CacheManager {
                     .any(|m| m.eq_ignore_ascii_case(method))
             })
             .unwrap_or(false)
+    }
+
+    /// Check if a request path is cacheable for a route.
+    ///
+    /// Returns `false` if the path's file extension matches `exclude_extensions`
+    /// or if the path matches any `exclude_paths` pattern. Returns `true` otherwise.
+    pub fn is_path_cacheable(&self, route_id: &str, path: &str) -> bool {
+        let configs = self.route_configs.read();
+        let config = match configs.get(route_id) {
+            Some(c) => c,
+            None => return true,
+        };
+
+        // Check extension exclusion
+        if !config.exclude_extensions.is_empty() {
+            if let Some(ext) = path.rsplit('.').next() {
+                // Only treat it as an extension if there was actually a dot
+                if path.contains('.') {
+                    let ext_lower = ext.to_lowercase();
+                    if config
+                        .exclude_extensions
+                        .iter()
+                        .any(|e| e.eq_ignore_ascii_case(&ext_lower))
+                    {
+                        trace!(
+                            route_id = route_id,
+                            path = path,
+                            extension = %ext_lower,
+                            "Path excluded from cache by extension"
+                        );
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Check path pattern exclusion
+        for regex in &config.exclude_paths {
+            if regex.is_match(path) {
+                trace!(
+                    route_id = route_id,
+                    path = path,
+                    pattern = %regex.as_str(),
+                    "Path excluded from cache by pattern"
+                );
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Check if a status code is cacheable for a route
@@ -690,6 +746,13 @@ impl CacheManager {
 /// - `**` becomes `.*` (match anything)
 /// - `?` becomes `.` (match single char)
 /// - Other regex special chars are escaped
+///
+/// Public alias for use by route initialization code.
+pub fn compile_glob_to_regex(pattern: &str) -> String {
+    glob_to_regex(pattern)
+}
+
+/// Convert a glob-style pattern to a regex pattern.
 fn glob_to_regex(pattern: &str) -> String {
     let mut regex = String::with_capacity(pattern.len() * 2);
     regex.push('^');
