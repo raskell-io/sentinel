@@ -833,20 +833,6 @@ impl ZentinelProxy {
         manager
     }
 
-    /// Apply security headers to response
-    pub(super) fn apply_security_headers(
-        &self,
-        header: &mut ResponseHeader,
-    ) -> Result<(), Box<Error>> {
-        header.insert_header("X-Content-Type-Options", "nosniff")?;
-        header.insert_header("X-Frame-Options", "DENY")?;
-        header.insert_header("X-XSS-Protection", "1; mode=block")?;
-        header.insert_header("Referrer-Policy", "strict-origin-when-cross-origin")?;
-        header.remove_header("Server");
-        header.remove_header("X-Powered-By");
-        Ok(())
-    }
-
     /// Spawn background task to periodically clean up idle rate limiters and expired geo caches
     fn spawn_cleanup_task(
         rate_limit_manager: Arc<RateLimitManager>,

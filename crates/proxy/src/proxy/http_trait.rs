@@ -1707,13 +1707,6 @@ impl ProxyHttp for ZentinelProxy {
             }
         }
 
-        // Apply security headers
-        trace!(
-            correlation_id = %ctx.trace_id,
-            "Applying security headers"
-        );
-        self.apply_security_headers(upstream_response).ok();
-
         // Add correlation ID to response
         upstream_response.insert_header("X-Correlation-Id", &ctx.trace_id)?;
 
