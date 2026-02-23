@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
-/// API endpoint for the Zentinel bundle registry
-const API_BUNDLE_URL: &str = "https://api.zentinelproxy.io/v1/bundle.json";
+/// API endpoint for the Zentinel bundle registry.
+/// Trailing slash avoids a 308 redirect from Cloudflare Pages.
+const API_BUNDLE_URL: &str = "https://api.zentinelproxy.io/v1/bundle/";
 
 /// Legacy lock file URL (backward compatibility)
 const LEGACY_LOCK_URL: &str =
@@ -42,7 +43,7 @@ pub enum LockError {
 // API JSON response types
 // ---------------------------------------------------------------------------
 
-/// JSON response from `GET /v1/bundle.json`
+/// JSON response from `GET /v1/bundle/`
 #[derive(Debug, Deserialize)]
 pub struct ApiBundleResponse {
     pub schema_version: u32,
@@ -181,7 +182,7 @@ impl BundleLock {
     ///
     /// Order:
     /// 1. `ZENTINEL_API_URL` env var (if set) — for self-hosted registries
-    /// 2. `api.zentinelproxy.io/v1/bundle.json` — primary API
+    /// 2. `api.zentinelproxy.io/v1/bundle/` — primary API
     /// 3. `raw.githubusercontent.com/.../bundle-versions.lock` — legacy fallback
     pub async fn fetch_latest() -> Result<Self, LockError> {
         let client = reqwest::Client::builder()

@@ -3,6 +3,7 @@
 # This file pins the agent versions included in the bundle distribution.
 # The lock file is embedded in the Zentinel binary at compile time.
 #
+# Source of truth for agent metadata: api.zentinelproxy.io
 # Update via PR when agents release new versions.
 # Format: CalVer for bundle, SemVer for agents
 

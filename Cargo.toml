@@ -8,7 +8,6 @@ members = [
     "crates/wasm-runtime",
     "agents/echo",
     "agents/data-masking",
-    "tools/api-gen",
 ]
 exclude = [
     # WASM crates are built separately with wasm-pack
