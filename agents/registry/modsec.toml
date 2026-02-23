@@ -1,0 +1,19 @@
+[agent]
+name = "modsec"
+version = "0.3.0"
+repository = "zentinelproxy/zentinel-agent-modsec"
+binary_name = "zentinel-modsec-agent"
+
+[metadata]
+description = "Full OWASP Core Rule Set (CRS) support via libmodsecurity with 800+ detection rules."
+author = "Zentinel Core Team"
+license = "Apache-2.0"
+status = "stable"
+category = "security"
+tags = ["security", "waf", "modsecurity", "owasp", "crs"]
+protocol_version = "v2"
+min_zentinel_version = "25.12.0"
+
+[bundle]
+included = true
+group = "Security agents"

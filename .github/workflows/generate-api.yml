@@ -1,0 +1,113 @@
+# Generate static JSON API from agents/registry/*.toml
+#
+# Runs api-gen and commits the output to the api.zentinelproxy.io repo.
+# Triggered when registry TOML files change on main, or manually.
+
+name: Generate API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agents/registry/**'
+      - 'tools/api-gen/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: generate-api
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    name: Generate & publish API
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout zentinel repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: api-gen-${{ hashFiles('tools/api-gen/Cargo.toml') }}
+          restore-keys: api-gen-
+
+      - name: Build api-gen
+        run: cargo build -p zentinel-api-gen --release
+
+      - name: Run api-gen
+        run: |
+          target/release/zentinel-api-gen \
+            --registry agents/registry \
+            --output api-output \
+            --lock-file bundle-versions.lock
+
+      - name: Verify generated output
+        run: |
+          test -f api-output/v1/bundle.json
+          test -f api-output/v1/agents.json
+          test -f api-output/v1/health.json
+          # Verify JSON is valid
+          python3 -c "import json; json.load(open('api-output/v1/bundle.json'))"
+          python3 -c "import json; json.load(open('api-output/v1/health.json'))"
+          # Print summary
+          python3 -c "
+          import json
+          h = json.load(open('api-output/v1/health.json'))
+          print(f\"API: {h['api_version']} | Bundle: {h['bundle_version']} | Agents: {h['agent_count']}\")
+          "
+
+      - name: Checkout api.zentinelproxy.io repo
+        uses: actions/checkout@v4
+        with:
+          repository: zentinelproxy/api.zentinelproxy.io
+          token: ${{ secrets.API_REPO_TOKEN }}
+          path: api-repo
+
+      - name: Update API repo
+        run: |
+          # Clean old v1/ directory (but keep CNAME, README, etc.)
+          rm -rf api-repo/v1
+          # Copy generated output
+          cp -r api-output/v1 api-repo/v1
+
+      - name: Commit and push to api repo
+        working-directory: api-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            BUNDLE_VERSION=$(python3 -c "import json; print(json.load(open('v1/health.json'))['bundle_version'])")
+            git commit -m "api: update to bundle ${BUNDLE_VERSION}"
+            git push
+          fi
+
+      - name: Check for lock file changes
+        id: lock-diff
+        run: |
+          if ! git diff --quiet bundle-versions.lock; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit updated lock file
+        if: steps.lock-diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bundle-versions.lock
+          git commit -m "chore: regenerate bundle-versions.lock from registry"
+          git push

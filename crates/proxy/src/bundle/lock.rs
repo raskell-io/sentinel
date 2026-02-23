@@ -1,12 +1,23 @@
 //! Bundle lock file parsing
 //!
 //! Parses the `bundle-versions.lock` TOML file that defines which agent
-//! versions are included in the bundle.
+//! versions are included in the bundle. Also supports fetching bundle
+//! metadata from the Zentinel API (`api.zentinelproxy.io`).
 
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
+
+/// API endpoint for the Zentinel bundle registry
+const API_BUNDLE_URL: &str = "https://api.zentinelproxy.io/v1/bundle.json";
+
+/// Legacy lock file URL (backward compatibility)
+const LEGACY_LOCK_URL: &str =
+    "https://raw.githubusercontent.com/zentinelproxy/zentinel/main/bundle-versions.lock";
+
+/// Maximum schema version this CLI understands
+const MAX_SCHEMA_VERSION: u32 = 1;
 
 /// Errors that can occur when parsing the lock file
 #[derive(Debug, Error)]
@@ -22,6 +33,72 @@ pub enum LockError {
 
     #[error("Failed to fetch lock file from remote: {0}")]
     Fetch(String),
+
+    #[error("Unsupported API schema version {version} (max supported: {max}). Please update zentinel.")]
+    UnsupportedSchema { version: u32, max: u32 },
+}
+
+// ---------------------------------------------------------------------------
+// API JSON response types
+// ---------------------------------------------------------------------------
+
+/// JSON response from `GET /v1/bundle.json`
+#[derive(Debug, Deserialize)]
+pub struct ApiBundleResponse {
+    pub schema_version: u32,
+    pub bundle: ApiBundleMeta,
+    pub agents: HashMap<String, ApiBundleAgent>,
+}
+
+/// Bundle-level metadata from the API
+#[derive(Debug, Deserialize)]
+pub struct ApiBundleMeta {
+    pub version: String,
+    #[allow(dead_code)]
+    pub generated_at: String,
+}
+
+/// Per-agent data from the API bundle endpoint
+#[derive(Debug, Deserialize)]
+pub struct ApiBundleAgent {
+    pub version: String,
+    pub repository: String,
+    pub binary_name: String,
+    #[serde(default)]
+    pub download_urls: HashMap<String, String>,
+    #[serde(default)]
+    pub checksums: HashMap<String, String>,
+}
+
+impl From<ApiBundleResponse> for BundleLock {
+    fn from(api: ApiBundleResponse) -> Self {
+        let mut agents = HashMap::new();
+        let mut repositories = HashMap::new();
+        let mut binary_names = HashMap::new();
+        let mut download_urls = HashMap::new();
+
+        for (name, agent) in &api.agents {
+            agents.insert(name.clone(), agent.version.clone());
+            repositories.insert(name.clone(), agent.repository.clone());
+            binary_names.insert(name.clone(), agent.binary_name.clone());
+
+            // Store precomputed download URLs keyed as "agent-os-arch"
+            for (platform, url) in &agent.download_urls {
+                download_urls.insert(format!("{}-{}", name, platform), url.clone());
+            }
+        }
+
+        BundleLock {
+            bundle: BundleInfo {
+                version: api.bundle.version,
+            },
+            agents,
+            repositories,
+            binary_names,
+            checksums: HashMap::new(),
+            precomputed_urls: download_urls,
+        }
+    }
 }
 
 /// Bundle lock file structure
@@ -44,6 +121,11 @@ pub struct BundleLock {
     /// Optional checksums for verification
     #[serde(default)]
     pub checksums: HashMap<String, String>,
+
+    /// Precomputed download URLs from the API (not in TOML, populated by API fetch).
+    /// Keys are "agent-platform" (e.g., "waf-linux-x86_64"), values are full URLs.
+    #[serde(skip)]
+    pub precomputed_urls: HashMap<String, String>,
 }
 
 /// Bundle metadata
@@ -67,6 +149,9 @@ pub struct AgentInfo {
 
     /// Binary name (e.g., "zentinel-waf-agent")
     pub binary_name: String,
+
+    /// Precomputed download URLs from the API, keyed by platform (e.g., "linux-x86_64")
+    pub precomputed_urls: HashMap<String, String>,
 }
 
 impl BundleLock {
@@ -92,15 +177,44 @@ impl BundleLock {
         Ok(lock)
     }
 
-    /// Fetch the latest lock file from the repository
+    /// Fetch the latest bundle metadata, trying the API first with legacy fallback.
+    ///
+    /// Order:
+    /// 1. `ZENTINEL_API_URL` env var (if set) — for self-hosted registries
+    /// 2. `api.zentinelproxy.io/v1/bundle.json` — primary API
+    /// 3. `raw.githubusercontent.com/.../bundle-versions.lock` — legacy fallback
     pub async fn fetch_latest() -> Result<Self, LockError> {
-        let url =
-            "https://raw.githubusercontent.com/zentinelproxy/zentinel/main/bundle-versions.lock";
+        let client = reqwest::Client::builder()
+            .user_agent("zentinel-bundle")
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| LockError::Fetch(e.to_string()))?;
 
-        let client = reqwest::Client::new();
+        // Determine API URL (env override or default)
+        let api_url = std::env::var("ZENTINEL_API_URL")
+            .unwrap_or_else(|_| API_BUNDLE_URL.to_string());
+
+        // Try API endpoint first
+        match Self::fetch_from_api(&client, &api_url).await {
+            Ok(lock) => return Ok(lock),
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    url = %api_url,
+                    "API fetch failed, falling back to legacy lock file"
+                );
+            }
+        }
+
+        // Fall back to legacy raw GitHub URL
+        Self::fetch_from_legacy(&client).await
+    }
+
+    /// Fetch bundle metadata from the JSON API
+    async fn fetch_from_api(client: &reqwest::Client, url: &str) -> Result<Self, LockError> {
         let response = client
             .get(url)
-            .header("User-Agent", "zentinel-bundle")
+            .header("Accept", "application/json")
             .send()
             .await
             .map_err(|e| LockError::Fetch(e.to_string()))?;
@@ -110,6 +224,41 @@ impl BundleLock {
                 "HTTP {} from {}",
                 response.status(),
                 url
+            )));
+        }
+
+        let body = response
+            .text()
+            .await
+            .map_err(|e| LockError::Fetch(e.to_string()))?;
+
+        let api_response: ApiBundleResponse = serde_json::from_str(&body)
+            .map_err(|e| LockError::Fetch(format!("Invalid API response: {}", e)))?;
+
+        // Reject unknown schema versions
+        if api_response.schema_version > MAX_SCHEMA_VERSION {
+            return Err(LockError::UnsupportedSchema {
+                version: api_response.schema_version,
+                max: MAX_SCHEMA_VERSION,
+            });
+        }
+
+        Ok(BundleLock::from(api_response))
+    }
+
+    /// Fetch the legacy TOML lock file from raw.githubusercontent.com
+    async fn fetch_from_legacy(client: &reqwest::Client) -> Result<Self, LockError> {
+        let response = client
+            .get(LEGACY_LOCK_URL)
+            .send()
+            .await
+            .map_err(|e| LockError::Fetch(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(LockError::Fetch(format!(
+                "HTTP {} from {}",
+                response.status(),
+                LEGACY_LOCK_URL
             )));
         }
 
@@ -132,11 +281,13 @@ impl BundleLock {
                     .get(name)
                     .cloned()
                     .unwrap_or_else(|| format!("zentinel-{}-agent", name));
+                let precomputed_urls = self.precomputed_urls_for(name);
                 Some(AgentInfo {
                     name: name.clone(),
                     version: version.clone(),
                     repository: repository.clone(),
                     binary_name,
+                    precomputed_urls,
                 })
             })
             .collect()
@@ -151,12 +302,26 @@ impl BundleLock {
             .get(name)
             .cloned()
             .unwrap_or_else(|| format!("zentinel-{}-agent", name));
+        let precomputed_urls = self.precomputed_urls_for(name);
         Some(AgentInfo {
             name: name.to_string(),
             version: version.clone(),
             repository: repository.clone(),
             binary_name,
+            precomputed_urls,
         })
+    }
+
+    /// Extract precomputed URLs for a specific agent from the flat map
+    fn precomputed_urls_for(&self, agent_name: &str) -> HashMap<String, String> {
+        let prefix = format!("{}-", agent_name);
+        self.precomputed_urls
+            .iter()
+            .filter_map(|(key, url)| {
+                key.strip_prefix(&prefix)
+                    .map(|platform| (platform.to_string(), url.clone()))
+            })
+            .collect()
     }
 
     /// Get the list of agent names
@@ -166,19 +331,28 @@ impl BundleLock {
 }
 
 impl AgentInfo {
-    /// Get the download URL for this agent
+    /// Get the download URL for this agent.
+    ///
+    /// Uses a precomputed URL from the API when available, otherwise constructs
+    /// the URL from the repository, version, and binary name.
     ///
     /// # Arguments
     /// * `os` - Operating system (e.g., "linux", "darwin")
     /// * `arch` - Architecture (e.g., "amd64", "arm64")
     pub fn download_url(&self, os: &str, arch: &str) -> String {
-        // Map our arch names to release artifact naming conventions
         let release_arch = match arch {
             "amd64" => "x86_64",
             "arm64" => "aarch64",
             _ => arch,
         };
 
+        // Check for precomputed URL from API
+        let platform_key = format!("{}-{}", os, release_arch);
+        if let Some(url) = self.precomputed_urls.get(&platform_key) {
+            return url.clone();
+        }
+
+        // Fall back to constructed URL
         format!(
             "https://github.com/{}/releases/download/v{}/{}-{}-{}-{}.tar.gz",
             self.repository, self.version, self.binary_name, self.version, os, release_arch
@@ -371,6 +545,7 @@ denylist = "zentinelproxy/zentinel-agent-denylist"
             version: "0.2.0".to_string(),
             repository: "zentinelproxy/zentinel-agent-waf".to_string(),
             binary_name: "zentinel-waf-agent".to_string(),
+            precomputed_urls: HashMap::new(),
         };
 
         let url = agent.download_url("linux", "amd64");
@@ -387,6 +562,7 @@ denylist = "zentinelproxy/zentinel-agent-denylist"
             version: "1.0.0".to_string(),
             repository: "zentinelproxy/zentinel-agent-ratelimit".to_string(),
             binary_name: "zentinel-ratelimit-agent".to_string(),
+            precomputed_urls: HashMap::new(),
         };
 
         let url = agent.download_url("linux", "arm64");
@@ -403,6 +579,7 @@ denylist = "zentinelproxy/zentinel-agent-denylist"
             version: "0.5.0".to_string(),
             repository: "zentinelproxy/zentinel-agent-denylist".to_string(),
             binary_name: "zentinel-denylist-agent".to_string(),
+            precomputed_urls: HashMap::new(),
         };
 
         let url = agent.download_url("darwin", "arm64");
@@ -417,6 +594,7 @@ denylist = "zentinelproxy/zentinel-agent-denylist"
             version: "0.2.0".to_string(),
             repository: "zentinelproxy/zentinel-agent-waf".to_string(),
             binary_name: "zentinel-waf-agent".to_string(),
+            precomputed_urls: HashMap::new(),
         };
 
         let url = agent.checksum_url("linux", "amd64");
@@ -476,5 +654,109 @@ denylist = "zentinelproxy/zentinel-agent-denylist"
     fn test_from_file_not_found() {
         let result = BundleLock::from_file(Path::new("/nonexistent/path/lock.toml"));
         assert!(matches!(result, Err(LockError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_api_bundle_response_conversion() {
+        let mut agents = HashMap::new();
+        let mut download_urls = HashMap::new();
+        download_urls.insert(
+            "linux-x86_64".to_string(),
+            "https://example.com/waf-linux-x86_64.tar.gz".to_string(),
+        );
+        download_urls.insert(
+            "darwin-aarch64".to_string(),
+            "https://example.com/waf-darwin-aarch64.tar.gz".to_string(),
+        );
+
+        agents.insert(
+            "waf".to_string(),
+            ApiBundleAgent {
+                version: "0.3.0".to_string(),
+                repository: "zentinelproxy/zentinel-agent-waf".to_string(),
+                binary_name: "zentinel-waf-agent".to_string(),
+                download_urls,
+                checksums: HashMap::new(),
+            },
+        );
+
+        let api = ApiBundleResponse {
+            schema_version: 1,
+            bundle: ApiBundleMeta {
+                version: "26.02_13".to_string(),
+                generated_at: "2026-02-23T00:00:00Z".to_string(),
+            },
+            agents,
+        };
+
+        let lock = BundleLock::from(api);
+        assert_eq!(lock.bundle.version, "26.02_13");
+        assert_eq!(lock.agents.get("waf"), Some(&"0.3.0".to_string()));
+        assert_eq!(
+            lock.binary_names.get("waf"),
+            Some(&"zentinel-waf-agent".to_string())
+        );
+
+        // Precomputed URLs should be populated
+        let agent = lock.agent("waf").unwrap();
+        let url = agent.download_url("linux", "amd64");
+        assert_eq!(url, "https://example.com/waf-linux-x86_64.tar.gz");
+
+        let url = agent.download_url("darwin", "arm64");
+        assert_eq!(url, "https://example.com/waf-darwin-aarch64.tar.gz");
+    }
+
+    #[test]
+    fn test_precomputed_url_fallback() {
+        // When no precomputed URL exists, should fall back to constructed URL
+        let agent = AgentInfo {
+            name: "waf".to_string(),
+            version: "0.3.0".to_string(),
+            repository: "zentinelproxy/zentinel-agent-waf".to_string(),
+            binary_name: "zentinel-waf-agent".to_string(),
+            precomputed_urls: HashMap::new(),
+        };
+
+        let url = agent.download_url("linux", "amd64");
+        assert_eq!(
+            url,
+            "https://github.com/zentinelproxy/zentinel-agent-waf/releases/download/v0.3.0/zentinel-waf-agent-0.3.0-linux-x86_64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn test_precomputed_url_used_when_available() {
+        let mut precomputed = HashMap::new();
+        precomputed.insert(
+            "linux-x86_64".to_string(),
+            "https://api.example.com/waf-custom.tar.gz".to_string(),
+        );
+
+        let agent = AgentInfo {
+            name: "waf".to_string(),
+            version: "0.3.0".to_string(),
+            repository: "zentinelproxy/zentinel-agent-waf".to_string(),
+            binary_name: "zentinel-waf-agent".to_string(),
+            precomputed_urls: precomputed,
+        };
+
+        // Should use precomputed URL
+        let url = agent.download_url("linux", "amd64");
+        assert_eq!(url, "https://api.example.com/waf-custom.tar.gz");
+
+        // Should fall back for missing platform
+        let url = agent.download_url("darwin", "arm64");
+        assert!(url.contains("github.com"));
+    }
+
+    #[test]
+    fn test_unsupported_schema_version_error() {
+        let err = LockError::UnsupportedSchema {
+            version: 99,
+            max: 1,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("99"));
+        assert!(msg.contains("update zentinel"));
     }
 }

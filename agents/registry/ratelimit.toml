@@ -1,0 +1,19 @@
+[agent]
+name = "ratelimit"
+version = "0.3.0"
+repository = "zentinelproxy/zentinel-agent-ratelimit"
+binary_name = "zentinel-ratelimit-agent"
+
+[metadata]
+description = "Token bucket rate limiting with configurable windows and limits per route, IP, or custom keys."
+author = "Zentinel Core Team"
+license = "Apache-2.0"
+status = "deprecated"
+category = "core"
+tags = ["security", "traffic", "deprecated"]
+protocol_version = "v2"
+min_zentinel_version = "25.12.0"
+
+[bundle]
+included = true
+group = "Core agents"

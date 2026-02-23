@@ -1,0 +1,19 @@
+[agent]
+name = "bot-management"
+version = "0.4.0"
+repository = "zentinelproxy/zentinel-agent-bot-management"
+binary_name = "zentinel-bot-management-agent"
+
+[metadata]
+description = "Comprehensive bot detection with multi-signal analysis, known bot verification, and behavioral tracking."
+author = "Zentinel Core Team"
+license = "Apache-2.0"
+status = "stable"
+category = "security"
+tags = ["security", "bot-detection", "core"]
+protocol_version = "v2"
+min_zentinel_version = "26.01.0"
+
+[bundle]
+included = true
+group = "Security agents"
