@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.02_14](#260214---2026-02-24) | 0.5.5 | 2026-02-24 | Bundle command with agent registry, API-first bundle fetch |
 | [26.02_7](#26027---2026-02-16) | 0.5.0 | 2026-02-16 | Wire 18 config features into runtime, filter & config coverage tests |
 | [26.02_4](#26024---2026-02-04) | 0.4.10 | 2026-02-04 | Maintenance: CI, dependency audit, Pingora fork security fix |
 | [26.02_3](#26023---2026-02-03) | 0.4.9 | 2026-02-03 | First-time user smoke tests, protocol-version config, docs refresh |
@@ -29,6 +30,26 @@ for details.
 | [26.01_0](#26010---2026-01-01) | 0.2.0 | 2026-01-01 | First CalVer release |
 | [25.12](#2512) | 0.1.x | 2025-12 | Initial public releases |
 | [24.12](#2412) | 0.1.0 | 2024-12 | Initial development |
+
+---
+
+## [26.02_14] - 2026-02-24
+
+**Crate version:** 0.5.5
+
+### Added
+- **`zentinel bundle` command** — Install, manage, and update curated agent bundles without a package manager or registry service. Subcommands: `install`, `status`, `list`, `uninstall`, `update`.
+- **Static JSON API** (`api.zentinelproxy.io`) — Zola-generated metadata API serving agent versions, download URLs, and bundle manifests at `/v1/agents/` and `/v1/bundle/`.
+- **API-first bundle fetch** — `bundle update` and `bundle install` now query the static API as the primary source, with TOML lock file fallback for air-gapped environments.
+- **`bundle-versions.lock`** — TOML lock file embedded in the binary at compile time, pinning 22 agent versions with repository mappings and optional SHA256 checksums.
+- **Bundle install features** — Platform auto-detection (linux/darwin × amd64/arm64), `--dry-run`, `--force`, `--prefix`, `--skip-verify`, `--systemd` (generates per-agent service units).
+- **Three-tier fetch fallback** — `ZENTINEL_API_URL` env var → `api.zentinelproxy.io` → raw GitHub lock file, supporting self-hosted and air-gapped deployments.
+- **65 bundle unit tests** — Lock file parsing, install paths, binary extraction, status checking, config generation, systemd service templates, API response conversion.
+
+### Changed
+- **Moved API to Zola site on Cloudflare Pages** — Agent registry metadata is now statically generated and served via CDN.
+- **Dependency updates:**
+  - Minor dependency updates across the workspace
 
 ---
 
@@ -331,6 +352,7 @@ See [GitHub Releases](https://github.com/zentinelproxy/zentinel/releases?q=24.12
 
 ---
 
+[26.02_14]: https://github.com/zentinelproxy/zentinel/compare/26.02_13...26.02_14
 [26.02_1]: https://github.com/zentinelproxy/zentinel/compare/26.02_0...26.02_1
 [26.02_0]: https://github.com/zentinelproxy/zentinel/compare/26.01_11...26.02_0
 [26.01_11]: https://github.com/zentinelproxy/zentinel/compare/26.01_10...26.01_11
