@@ -3,49 +3,51 @@
 # This file pins the agent versions included in the bundle distribution.
 # The lock file is embedded in the Zentinel binary at compile time.
 #
+# Source of truth for agent metadata: api.zentinelproxy.io
 # Update via PR when agents release new versions.
 # Format: CalVer for bundle, SemVer for agents
 
 [bundle]
 # Bundle version (CalVer: YY.MM_PATCH)
-version = "26.01_1"
+version = "26.02_14"
 
 [agents]
 # Core agents (included in default bundle install)
-waf = "0.2.0"
-ratelimit = "0.2.0"
-denylist = "0.2.0"
+waf = "0.3.0"
+ratelimit = "0.3.0"
+denylist = "0.3.0"
 
 # Security agents
-zentinelsec = "0.1.0"
-modsec = "0.1.0"
-ip-reputation = "0.1.0"
-bot-management = "0.1.0"
-content-scanner = "0.1.0"
+zentinelsec = "0.3.0"
+modsec = "0.3.0"
+ip-reputation = "0.4.0"
+bot-management = "0.4.0"
+content-scanner = "0.4.0"
 
 # API security agents
-graphql-security = "0.1.0"
-grpc-inspector = "0.1.0"
-soap = "0.1.0"
-api-deprecation = "0.1.0"
+graphql-security = "0.4.0"
+grpc-inspector = "0.4.0"
+soap = "0.4.0"
+api-deprecation = "0.4.0"
 
 # Protocol agents
-websocket-inspector = "0.1.0"
-mqtt-gateway = "0.1.0"
+websocket-inspector = "0.4.0"
+mqtt-gateway = "0.4.0"
 
 # Scripting agents
-lua = "0.1.0"
-js = "0.1.0"
-wasm = "0.1.0"
+lua = "0.3.0"
+js = "0.3.0"
+wasm = "0.3.0"
 
 # Utility agents
-transform = "0.1.0"
-audit-logger = "0.1.0"
-mock-server = "0.1.0"
-chaos = "0.1.0"
+transform = "0.4.0"
+audit-logger = "0.4.0"
+mock-server = "0.4.0"
+chaos = "0.4.0"
+image-optimization = "0.1.0"
 
 # Identity agents
-spiffe = "0.1.0"
+spiffe = "0.3.0"
 
 [repositories]
 # Core agents
@@ -80,6 +82,7 @@ transform = "zentinelproxy/zentinel-agent-transform"
 audit-logger = "zentinelproxy/zentinel-agent-audit-logger"
 mock-server = "zentinelproxy/zentinel-agent-mock-server"
 chaos = "zentinelproxy/zentinel-agent-chaos"
+image-optimization = "zentinelproxy/zentinel-agent-image-optimization"
 
 # Identity agents
 spiffe = "zentinelproxy/zentinel-agent-spiffe"
