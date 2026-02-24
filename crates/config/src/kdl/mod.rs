@@ -422,7 +422,8 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
                             "response_headers" | "response-headers" => AgentEvent::ResponseHeaders,
                             "response_body" | "response-body" => AgentEvent::ResponseBody,
                             "log" | "request_complete" | "request-complete" => AgentEvent::Log,
-                            "websocket_frame" | "websocket-frame" | "web_socket_frame" | "web-socket-frame" => AgentEvent::WebSocketFrame,
+                            "websocket_frame" | "websocket-frame" | "web_socket_frame"
+                            | "web-socket-frame" => AgentEvent::WebSocketFrame,
                             "guardrail" => AgentEvent::Guardrail,
                             other => {
                                 return Err(anyhow::anyhow!("Unknown agent event: '{}'", other))
