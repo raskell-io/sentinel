@@ -44,6 +44,7 @@ transform = "0.4.0"
 audit-logger = "0.4.0"
 mock-server = "0.4.0"
 chaos = "0.4.0"
+image-optimization = "0.1.0"
 
 # Identity agents
 spiffe = "0.3.0"
@@ -81,6 +82,7 @@ transform = "zentinelproxy/zentinel-agent-transform"
 audit-logger = "zentinelproxy/zentinel-agent-audit-logger"
 mock-server = "zentinelproxy/zentinel-agent-mock-server"
 chaos = "zentinelproxy/zentinel-agent-chaos"
+image-optimization = "zentinelproxy/zentinel-agent-image-optimization"
 
 # Identity agents
 spiffe = "zentinelproxy/zentinel-agent-spiffe"
