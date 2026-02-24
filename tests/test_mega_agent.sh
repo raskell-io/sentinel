@@ -14,7 +14,7 @@
 # - Rust toolchain (cargo) with wasm32-unknown-unknown target
 # - Haskell toolchain (cabal) for policy agent
 # - Python 3
-# - curl, nc
+# - curl, nc, gh (GitHub CLI)
 # - All 26 agent repos as siblings at $REPO_ROOT/..
 #
 # Usage:
@@ -47,6 +47,8 @@ RULES="$TEST_DIR/rules"
 POLICIES="$TEST_DIR/policies"
 SOCKETS="$TEST_DIR/sockets"
 LOGS="$TEST_DIR/logs"
+BINDIR="$TEST_DIR/bin"
+STATE="$TEST_DIR/state"
 
 PROXY_PORT=""
 BACKEND_PORT=""
@@ -68,18 +70,19 @@ REQUESTS_FAILED=0
 LOGS_CLEAN=0
 LOGS_DIRTY=0
 
-# Per-agent tracking (associative arrays)
-declare -A AGENT_PIDS
-declare -A AGENT_GRPC_PORTS
-declare -A AGENT_BUILD_STATUS
-declare -A AGENT_START_STATUS
-declare -A AGENT_REQUEST_STATUS
-declare -A AGENT_LOG_STATUS
-
 CLEAN_HEADERS=(-H "User-Agent: ZentinelTest" -H "Accept: text/html")
 
+# Platform detection for release downloads
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64)  PLATFORM="linux-x86_64" ;;
+    aarch64) PLATFORM="linux-aarch64" ;;
+    arm64)   PLATFORM="darwin-aarch64" ;;
+    *)       PLATFORM="" ;;
+esac
+
 # ============================================================================
-# Agent Registry
+# Agent Registry (bash 3.2 compatible — no associative arrays)
 # ============================================================================
 
 AGENT_NAMES=(
@@ -111,94 +114,82 @@ AGENT_NAMES=(
     zentinelsec
 )
 
-declare -A AGENT_BINARY=(
-    [ai-gateway]=zentinel-ai-gateway-agent
-    [api-deprecation]=zentinel-api-deprecation-agent
-    [audit-logger]=zentinel-audit-logger-agent
-    [auth]=zentinel-auth-agent
-    [bot-management]=zentinel-bot-management-agent
-    [chaos]=zentinel-chaos-agent
-    [content-scanner]=zentinel-content-scanner-agent
-    [denylist]=zentinel-denylist-agent
-    [graphql-security]=zentinel-graphql-security-agent
-    [grpc-inspector]=zentinel-grpc-inspector-agent
-    [image-optimization]=zentinel-image-optimization-agent
-    [ip-reputation]=zentinel-ip-reputation-agent
-    [js]=zentinel-js-agent
-    [lua]=zentinel-lua-agent
-    [mock-server]=zentinel-mock-server-agent
-    [modsec]=zentinel-modsec-agent
-    [mqtt-gateway]=zentinel-mqtt-gateway-agent
-    [policy]=zentinel-policy-agent
-    [ratelimit]=zentinel-ratelimit-agent
-    [soap]=zentinel-soap-agent
-    [spiffe]=zentinel-spiffe-agent
-    [transform]=zentinel-transform-agent
-    [waf]=zentinel-waf-agent
-    [wasm]=zentinel-wasm-agent
-    [websocket-inspector]=zentinel-websocket-inspector-agent
-    [zentinelsec]=zentinel-zentinelsec-agent
-)
+agent_binary() {
+    case "$1" in
+        ai-gateway)            echo "zentinel-ai-gateway-agent" ;;
+        api-deprecation)       echo "zentinel-api-deprecation-agent" ;;
+        audit-logger)          echo "zentinel-audit-logger-agent" ;;
+        auth)                  echo "zentinel-auth-agent" ;;
+        bot-management)        echo "zentinel-bot-management-agent" ;;
+        chaos)                 echo "zentinel-chaos-agent" ;;
+        content-scanner)       echo "zentinel-content-scanner-agent" ;;
+        denylist)              echo "zentinel-denylist-agent" ;;
+        graphql-security)      echo "zentinel-graphql-security-agent" ;;
+        grpc-inspector)        echo "zentinel-grpc-inspector-agent" ;;
+        image-optimization)    echo "zentinel-image-optimization-agent" ;;
+        ip-reputation)         echo "zentinel-ip-reputation-agent" ;;
+        js)                    echo "zentinel-js-agent" ;;
+        lua)                   echo "zentinel-lua-agent" ;;
+        mock-server)           echo "zentinel-mock-server-agent" ;;
+        modsec)                echo "zentinel-modsec-agent" ;;
+        mqtt-gateway)          echo "zentinel-mqtt-gateway-agent" ;;
+        policy)                echo "zentinel-policy-agent" ;;
+        ratelimit)             echo "zentinel-ratelimit-agent" ;;
+        soap)                  echo "zentinel-soap-agent" ;;
+        spiffe)                echo "zentinel-spiffe-agent" ;;
+        transform)             echo "zentinel-transform-agent" ;;
+        waf)                   echo "zentinel-waf-agent" ;;
+        wasm)                  echo "zentinel-wasm-agent" ;;
+        websocket-inspector)   echo "zentinel-websocket-inspector-agent" ;;
+        zentinelsec)           echo "zentinel-zentinelsec-agent" ;;
+    esac
+}
 
-# Transport: uds (Unix socket) or grpc (TCP)
-declare -A AGENT_TRANSPORT=(
-    [ai-gateway]=uds
-    [api-deprecation]=uds
-    [audit-logger]=uds
-    [auth]=uds
-    [bot-management]=uds
-    [chaos]=uds
-    [content-scanner]=grpc
-    [denylist]=uds
-    [graphql-security]=uds
-    [grpc-inspector]=uds
-    [image-optimization]=uds
-    [ip-reputation]=uds
-    [js]=grpc
-    [lua]=uds
-    [mock-server]=uds
-    [modsec]=uds
-    [mqtt-gateway]=uds
-    [policy]=uds
-    [ratelimit]=uds
-    [soap]=uds
-    [spiffe]=uds
-    [transform]=grpc
-    [waf]=uds
-    [wasm]=grpc
-    [websocket-inspector]=uds
-    [zentinelsec]=grpc
-)
+agent_transport() {
+    case "$1" in
+        content-scanner|grpc-inspector|js|soap|transform|wasm|zentinelsec) echo "grpc" ;;
+        *) echo "uds" ;;
+    esac
+}
 
-# Events each agent subscribes to (valid: request_headers request_body response_headers response_body)
-declare -A AGENT_EVENTS=(
-    [ai-gateway]="request_headers request_body"
-    [api-deprecation]="request_headers response_headers"
-    [audit-logger]="request_headers request_body response_headers response_body"
-    [auth]="request_headers"
-    [bot-management]="request_headers"
-    [chaos]="request_headers response_headers response_body"
-    [content-scanner]="request_body"
-    [denylist]="request_headers"
-    [graphql-security]="request_headers request_body"
-    [grpc-inspector]="request_headers request_body"
-    [image-optimization]="request_headers response_headers response_body"
-    [ip-reputation]="request_headers"
-    [js]="request_headers response_headers"
-    [lua]="request_headers response_headers"
-    [mock-server]="request_headers request_body"
-    [modsec]="request_headers request_body response_headers response_body"
-    [mqtt-gateway]="request_body response_body"
-    [policy]="request_headers"
-    [ratelimit]="request_headers"
-    [soap]="request_headers request_body"
-    [spiffe]="request_headers"
-    [transform]="request_headers request_body response_headers response_body"
-    [waf]="request_headers"
-    [wasm]="request_headers response_headers"
-    [websocket-inspector]="request_headers response_headers request_body response_body"
-    [zentinelsec]="request_headers request_body response_headers response_body"
-)
+agent_events() {
+    case "$1" in
+        ai-gateway)          echo "request_headers request_body" ;;
+        api-deprecation)     echo "request_headers response_headers" ;;
+        audit-logger)        echo "request_headers request_body response_headers response_body" ;;
+        auth)                echo "request_headers" ;;
+        bot-management)      echo "request_headers" ;;
+        chaos)               echo "request_headers response_headers response_body" ;;
+        content-scanner)     echo "request_body" ;;
+        denylist)            echo "request_headers" ;;
+        graphql-security)    echo "request_headers request_body" ;;
+        grpc-inspector)      echo "request_headers request_body" ;;
+        image-optimization)  echo "request_headers response_headers response_body" ;;
+        ip-reputation)       echo "request_headers" ;;
+        js)                  echo "request_headers response_headers" ;;
+        lua)                 echo "request_headers response_headers" ;;
+        mock-server)         echo "request_headers request_body" ;;
+        modsec)              echo "request_headers request_body response_headers response_body" ;;
+        mqtt-gateway)        echo "request_body response_body" ;;
+        policy)              echo "request_headers" ;;
+        ratelimit)           echo "request_headers" ;;
+        soap)                echo "request_headers request_body" ;;
+        spiffe)              echo "request_headers" ;;
+        transform)           echo "request_headers request_body response_headers response_body" ;;
+        waf)                 echo "request_headers" ;;
+        wasm)                echo "request_headers response_headers" ;;
+        websocket-inspector) echo "request_headers response_headers request_body response_body" ;;
+        zentinelsec)         echo "request_headers request_body response_headers response_body" ;;
+    esac
+}
+
+# State helpers (file-based, bash 3.2 safe)
+set_state()   { echo "$3" > "$STATE/$1.$2"; }
+get_state()   { cat "$STATE/$1.$2" 2>/dev/null || echo "${3:-N/A}"; }
+set_pid()     { echo "$2" > "$STATE/$1.pid"; }
+get_pid()     { cat "$STATE/$1.pid" 2>/dev/null || echo ""; }
+set_port()    { echo "$2" > "$STATE/$1.port"; }
+get_port()    { cat "$STATE/$1.port" 2>/dev/null || echo ""; }
 
 # ============================================================================
 # Utility functions
@@ -210,9 +201,11 @@ log_failure() { echo -e "${RED}[FAIL]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
 log_phase() {
-    echo -e "\n${CYAN}═══════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${CYAN}=======================================${NC}"
     echo -e "${CYAN} $1${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════${NC}\n"
+    echo -e "${CYAN}=======================================${NC}"
+    echo ""
 }
 
 find_free_port() {
@@ -237,7 +230,8 @@ cleanup() {
     log_info "Cleaning up..."
 
     for name in "${AGENT_NAMES[@]}"; do
-        local pid="${AGENT_PIDS[$name]:-}"
+        local pid
+        pid=$(get_pid "$name")
         [[ -n "$pid" ]] && kill -TERM "$pid" 2>/dev/null || true
     done
     [[ -n "$PROXY_PID" ]] && kill -TERM "$PROXY_PID" 2>/dev/null || true
@@ -246,7 +240,8 @@ cleanup() {
     sleep 1
 
     for name in "${AGENT_NAMES[@]}"; do
-        local pid="${AGENT_PIDS[$name]:-}"
+        local pid
+        pid=$(get_pid "$name")
         [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null || true
     done
     [[ -n "$PROXY_PID" ]] && kill -9 "$PROXY_PID" 2>/dev/null || true
@@ -287,7 +282,6 @@ build_wasm_module() {
         return 1
     fi
 
-    # Ensure target is available
     if ! rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then
         log_info "  wasm module: installing wasm32-unknown-unknown target..."
         rustup target add wasm32-unknown-unknown
@@ -307,59 +301,103 @@ build_wasm_module() {
     log_info "  wasm module: ready"
 }
 
+download_agent() {
+    local name="$1"
+    local binary
+    binary=$(agent_binary "$name")
+    local repo_slug="zentinelproxy/zentinel-agent-$name"
+
+    [[ -z "$PLATFORM" ]] && return 1
+
+    local tag
+    tag=$(gh release list --repo "$repo_slug" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null) || return 1
+    [[ -z "$tag" ]] && return 1
+
+    local version="${tag#v}"
+    local asset="${binary}-${version}-${PLATFORM}.tar.gz"
+
+    log_info "  $name: downloading $asset..."
+    if gh release download "$tag" --repo "$repo_slug" --pattern "$asset" --dir "$BINDIR" --clobber 2>/dev/null; then
+        (cd "$BINDIR" && tar xzf "$asset" && rm -f "$asset")
+        if [[ -f "$BINDIR/$binary" ]]; then
+            chmod +x "$BINDIR/$binary"
+            return 0
+        fi
+    fi
+    return 1
+}
+
 build_agent() {
     local name="$1"
-    local binary="${AGENT_BINARY[$name]}"
+    local binary
+    binary=$(agent_binary "$name")
     local repo="$AGENT_ROOT/zentinel-agent-$name"
 
+    # 1) Already downloaded?
+    if [[ -f "$BINDIR/$binary" ]]; then
+        log_info "  $name: using downloaded binary"
+        set_state "$name" build "OK"
+        BUILDS_OK=$((BUILDS_OK + 1))
+        return 0
+    fi
+
+    # 2) Already built locally?
+    if [[ "$name" == "policy" ]]; then
+        local policy_bin
+        policy_bin=$(cd "$repo" 2>/dev/null && cabal list-bin "$binary" 2>/dev/null || true)
+        if [[ -n "$policy_bin" && -f "$policy_bin" ]]; then
+            log_info "  $name: using existing cabal binary"
+            set_state "$name" build "OK"
+            BUILDS_OK=$((BUILDS_OK + 1))
+            return 0
+        fi
+    elif [[ -f "$repo/target/release/$binary" ]]; then
+        log_info "  $name: using existing binary"
+        set_state "$name" build "OK"
+        BUILDS_OK=$((BUILDS_OK + 1))
+        return 0
+    fi
+
+    # 3) Try downloading from GitHub release
+    if download_agent "$name"; then
+        log_success "  $name: downloaded from release"
+        set_state "$name" build "OK"
+        BUILDS_OK=$((BUILDS_OK + 1))
+        return 0
+    fi
+
+    # 4) Fall back to building from source
     if [[ ! -d "$repo" ]]; then
-        log_failure "  $name: repo not found at zentinel-agent-$name"
-        AGENT_BUILD_STATUS[$name]="FAIL"
-        ((BUILDS_FAILED++)) || true
+        log_failure "  $name: no release and repo not found"
+        set_state "$name" build "FAIL"
+        BUILDS_FAILED=$((BUILDS_FAILED + 1))
         return 1
     fi
 
-    # Policy agent is Haskell (cabal)
     if [[ "$name" == "policy" ]]; then
-        local policy_bin
-        policy_bin=$(cd "$repo" && cabal list-bin "$binary" 2>/dev/null || true)
-        if [[ -n "$policy_bin" && -f "$policy_bin" ]]; then
-            log_info "  $name: using existing binary"
-            AGENT_BUILD_STATUS[$name]="OK"
-            ((BUILDS_OK++)) || true
-            return 0
-        fi
         log_info "  $name: building with cabal..."
         if (cd "$repo" && cabal build 2>"$LOGS/$name-build.log"); then
-            AGENT_BUILD_STATUS[$name]="OK"
-            ((BUILDS_OK++)) || true
+            set_state "$name" build "OK"
+            BUILDS_OK=$((BUILDS_OK + 1))
         else
             log_failure "  $name: cabal build failed"
             tail -5 "$LOGS/$name-build.log" 2>/dev/null || true
-            AGENT_BUILD_STATUS[$name]="FAIL"
-            ((BUILDS_FAILED++)) || true
+            set_state "$name" build "FAIL"
+            BUILDS_FAILED=$((BUILDS_FAILED + 1))
             return 1
         fi
         return 0
     fi
 
-    # Rust agents
-    if [[ -f "$repo/target/release/$binary" ]]; then
-        log_info "  $name: using existing binary"
-        AGENT_BUILD_STATUS[$name]="OK"
-        ((BUILDS_OK++)) || true
-        return 0
-    fi
-
-    log_info "  $name: building (release)..."
+    log_info "  $name: building from source..."
     if (cd "$repo" && cargo build --release 2>"$LOGS/$name-build.log"); then
-        AGENT_BUILD_STATUS[$name]="OK"
-        ((BUILDS_OK++)) || true
+        set_state "$name" build "OK"
+        BUILDS_OK=$((BUILDS_OK + 1))
     else
         log_failure "  $name: cargo build failed"
         tail -5 "$LOGS/$name-build.log" 2>/dev/null || true
-        AGENT_BUILD_STATUS[$name]="FAIL"
-        ((BUILDS_FAILED++)) || true
+        set_state "$name" build "FAIL"
+        BUILDS_FAILED=$((BUILDS_FAILED + 1))
         return 1
     fi
 }
@@ -385,12 +423,12 @@ build_all() {
 generate_stubs() {
     log_phase "Phase 2: Generate configs and stub files"
 
-    mkdir -p "$CONFIGS" "$SCRIPTS/lua" "$WASM" "$RULES" "$POLICIES" "$SOCKETS" "$LOGS"
+    mkdir -p "$CONFIGS" "$SCRIPTS/lua" "$WASM" "$RULES" "$POLICIES" "$SOCKETS" "$LOGS" "$BINDIR" "$STATE"
 
     # --- YAML config stubs ---
 
     cat > "$CONFIGS/api-deprecation.yaml" <<'YAML'
-deprecated_endpoints: []
+endpoints: []
 YAML
 
     cat > "$CONFIGS/audit-logger.yaml" <<YAML
@@ -413,15 +451,33 @@ max_aliases: 5
 YAML
 
     cat > "$CONFIGS/grpc-inspector.yaml" <<'YAML'
-rules: []
+settings:
+  fail_action: allow
+  debug_headers: false
+  log_blocked: true
+  log_allowed: false
 YAML
+
+    cat > "$CONFIGS/image-optimization.json" <<JSON
+{
+  "formats": ["webp"],
+  "quality": {"webp": 80},
+  "max_input_size_bytes": 10485760,
+  "max_pixel_count": 25000000,
+  "eligible_content_types": ["image/jpeg", "image/png"],
+  "passthrough_patterns": [],
+  "cache": {
+    "enabled": false
+  }
+}
+JSON
 
     cat > "$CONFIGS/ip-reputation.yaml" <<'YAML'
 providers: []
 YAML
 
     cat > "$CONFIGS/mock-server.yaml" <<'YAML'
-mocks: []
+stubs: []
 YAML
 
     cat > "$CONFIGS/soap.yaml" <<'YAML'
@@ -474,14 +530,24 @@ CEDAR
 
 start_backend() {
     BACKEND_PORT=$(find_free_port)
-    python3 -m http.server "$BACKEND_PORT" --directory "$TEST_DIR/www" \
-        > "$LOGS/backend.log" 2>&1 &
+    python3 -c "
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type','text/html')
+        self.end_headers()
+        self.wfile.write(b'<html><body>OK</body></html>')
+    do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_GET
+    def log_message(self, *a): pass
+HTTPServer(('127.0.0.1',$BACKEND_PORT),H).serve_forever()
+" > "$LOGS/backend.log" 2>&1 &
     BACKEND_PID=$!
 
     local retries=10
     while ! curl -sf "http://127.0.0.1:$BACKEND_PORT/" >/dev/null 2>&1; do
         sleep 0.5
-        ((retries--))
+        retries=$((retries - 1))
         if [[ $retries -eq 0 ]]; then
             log_failure "Backend failed to start"
             return 1
@@ -492,25 +558,27 @@ start_backend() {
 
 get_agent_bin_path() {
     local name="$1"
-    local binary="${AGENT_BINARY[$name]}"
+    local binary
+    binary=$(agent_binary "$name")
     local repo="$AGENT_ROOT/zentinel-agent-$name"
 
-    if [[ "$name" == "policy" ]]; then
-        (cd "$repo" && cabal list-bin "$binary" 2>/dev/null) || echo ""
+    if [[ -f "$BINDIR/$binary" ]]; then
+        echo "$BINDIR/$binary"
+    elif [[ "$name" == "policy" ]]; then
+        (cd "$repo" 2>/dev/null && cabal list-bin "$binary" 2>/dev/null) || echo ""
     else
         echo "$repo/target/release/$binary"
     fi
 }
 
-# Build the CLI args array for a given agent
 build_agent_args() {
     local name="$1"
-    local transport="${AGENT_TRANSPORT[$name]}"
+    local transport
+    transport=$(agent_transport "$name")
     local socket_path="$SOCKETS/$name.sock"
 
     # Transport args
     if [[ "$transport" == "uds" ]]; then
-        # Agents using -s short flag
         case "$name" in
             api-deprecation|audit-logger|bot-management|chaos|denylist|\
             graphql-security|grpc-inspector|image-optimization|ip-reputation|\
@@ -524,7 +592,7 @@ build_agent_args() {
     else
         local port
         port=$(find_free_port)
-        AGENT_GRPC_PORTS[$name]=$port
+        set_port "$name" "$port"
         echo "--grpc-address 127.0.0.1:$port"
     fi
 
@@ -538,6 +606,7 @@ build_agent_args() {
         content-scanner)  echo "--config $CONFIGS/content-scanner.yaml" ;;
         graphql-security) echo "--config $CONFIGS/graphql-security.yaml" ;;
         grpc-inspector)   echo "-c $CONFIGS/grpc-inspector.yaml" ;;
+        image-optimization) echo "-c $CONFIGS/image-optimization.json" ;;
         ip-reputation)    echo "-c $CONFIGS/ip-reputation.yaml" ;;
         js)               echo "--script $SCRIPTS/passthrough.js --fail-open" ;;
         lua)              echo "--script $SCRIPTS/lua/passthrough.lua" ;;
@@ -547,7 +616,7 @@ build_agent_args() {
         ratelimit)        echo "--default-rps 100 --default-burst 200" ;;
         soap)             echo "--config $CONFIGS/soap.yaml" ;;
         transform)        echo "--config $CONFIGS/transform.yaml" ;;
-        waf)              echo "--paranoia-level 1 --fail-open" ;;
+        waf)              echo "--paranoia-level 1" ;;
         wasm)             echo "--module $WASM/passthrough.wasm --fail-open" ;;
     esac
 }
@@ -555,10 +624,9 @@ build_agent_args() {
 start_agent() {
     local name="$1"
 
-    # Skip agents that failed to build
-    if [[ "${AGENT_BUILD_STATUS[$name]:-}" != "OK" ]]; then
-        AGENT_START_STATUS[$name]="SKIP"
-        ((STARTS_FAILED++)) || true
+    if [[ "$(get_state "$name" build)" != "OK" ]]; then
+        set_state "$name" start "SKIP"
+        STARTS_FAILED=$((STARTS_FAILED + 1))
         return 1
     fi
 
@@ -567,73 +635,76 @@ start_agent() {
 
     if [[ -z "$bin_path" || ! -f "$bin_path" ]]; then
         log_failure "  $name: binary not found"
-        AGENT_START_STATUS[$name]="FAIL"
-        ((STARTS_FAILED++)) || true
+        set_state "$name" start "FAIL"
+        STARTS_FAILED=$((STARTS_FAILED + 1))
         return 1
     fi
 
     local log_file="$LOGS/$name.log"
-    local transport="${AGENT_TRANSPORT[$name]}"
+    local transport
+    transport=$(agent_transport "$name")
 
-    # Build args (this also sets AGENT_GRPC_PORTS for grpc agents)
+    # Build args (this also sets port for grpc agents)
     local args_str
     args_str=$(build_agent_args "$name")
 
     # Start agent process
     # shellcheck disable=SC2086
     RUST_LOG=info "$bin_path" $args_str > "$log_file" 2>&1 &
-    AGENT_PIDS[$name]=$!
+    local agent_pid=$!
+    set_pid "$name" "$agent_pid"
 
     # Wait for agent to be ready
     local retries=20
     if [[ "$transport" == "uds" ]]; then
         local socket_path="$SOCKETS/$name.sock"
         while [[ ! -S "$socket_path" ]] && [[ $retries -gt 0 ]]; do
-            if ! kill -0 "${AGENT_PIDS[$name]}" 2>/dev/null; then
+            if ! kill -0 "$agent_pid" 2>/dev/null; then
                 log_failure "  $name: process died during startup"
                 tail -20 "$log_file"
-                AGENT_START_STATUS[$name]="FAIL"
-                ((STARTS_FAILED++)) || true
+                set_state "$name" start "FAIL"
+                STARTS_FAILED=$((STARTS_FAILED + 1))
                 return 1
             fi
             sleep 0.5
-            ((retries--))
+            retries=$((retries - 1))
         done
 
         if [[ -S "$socket_path" ]]; then
-            log_success "  $name: started (UDS, PID ${AGENT_PIDS[$name]})"
-            AGENT_START_STATUS[$name]="OK"
-            ((STARTS_OK++)) || true
+            log_success "  $name: started (UDS, PID $agent_pid)"
+            set_state "$name" start "OK"
+            STARTS_OK=$((STARTS_OK + 1))
         else
             log_failure "  $name: socket not created after 10s"
             tail -20 "$log_file"
-            AGENT_START_STATUS[$name]="FAIL"
-            ((STARTS_FAILED++)) || true
+            set_state "$name" start "FAIL"
+            STARTS_FAILED=$((STARTS_FAILED + 1))
             return 1
         fi
     else
-        local port="${AGENT_GRPC_PORTS[$name]}"
+        local port
+        port=$(get_port "$name")
         while ! nc -z 127.0.0.1 "$port" 2>/dev/null && [[ $retries -gt 0 ]]; do
-            if ! kill -0 "${AGENT_PIDS[$name]}" 2>/dev/null; then
+            if ! kill -0 "$agent_pid" 2>/dev/null; then
                 log_failure "  $name: process died during startup"
                 tail -20 "$log_file"
-                AGENT_START_STATUS[$name]="FAIL"
-                ((STARTS_FAILED++)) || true
+                set_state "$name" start "FAIL"
+                STARTS_FAILED=$((STARTS_FAILED + 1))
                 return 1
             fi
             sleep 0.5
-            ((retries--))
+            retries=$((retries - 1))
         done
 
         if nc -z 127.0.0.1 "$port" 2>/dev/null; then
-            log_success "  $name: started (gRPC :$port, PID ${AGENT_PIDS[$name]})"
-            AGENT_START_STATUS[$name]="OK"
-            ((STARTS_OK++)) || true
+            log_success "  $name: started (gRPC :$port, PID $agent_pid)"
+            set_state "$name" start "OK"
+            STARTS_OK=$((STARTS_OK + 1))
         else
             log_failure "  $name: port $port not listening after 10s"
             tail -20 "$log_file"
-            AGENT_START_STATUS[$name]="FAIL"
-            ((STARTS_FAILED++)) || true
+            set_state "$name" start "FAIL"
+            STARTS_FAILED=$((STARTS_FAILED + 1))
             return 1
         fi
     fi
@@ -662,7 +733,6 @@ generate_kdl_config() {
 
     local config_file="$TEST_DIR/config.kdl"
 
-    # System, listeners
     cat > "$config_file" <<EOF
 system {
     worker-threads 2
@@ -683,17 +753,19 @@ EOF
     # Agents block
     echo "agents {" >> "$config_file"
     for name in "${AGENT_NAMES[@]}"; do
-        [[ "${AGENT_START_STATUS[$name]:-}" != "OK" ]] && continue
+        [[ "$(get_state "$name" start)" != "OK" ]] && continue
 
-        local transport="${AGENT_TRANSPORT[$name]}"
-        local events="${AGENT_EVENTS[$name]}"
+        local transport events
+        transport=$(agent_transport "$name")
+        events=$(agent_events "$name")
 
         echo "    agent \"$name-agent\" type=\"custom\" {" >> "$config_file"
 
         if [[ "$transport" == "uds" ]]; then
             echo "        unix-socket \"$SOCKETS/$name.sock\"" >> "$config_file"
         else
-            local port="${AGENT_GRPC_PORTS[$name]}"
+            local port
+            port=$(get_port "$name")
             echo "        grpc \"http://127.0.0.1:$port\"" >> "$config_file"
         fi
 
@@ -713,7 +785,6 @@ EOF
     # Routes block
     echo "routes {" >> "$config_file"
 
-    # Control route (no agents)
     cat >> "$config_file" <<'EOF'
     route "control" {
         priority "high"
@@ -724,9 +795,8 @@ EOF
     }
 EOF
 
-    # Per-agent routes
     for name in "${AGENT_NAMES[@]}"; do
-        [[ "${AGENT_START_STATUS[$name]:-}" != "OK" ]] && continue
+        [[ "$(get_state "$name" start)" != "OK" ]] && continue
 
         cat >> "$config_file" <<EOF
     route "test-$name" {
@@ -740,7 +810,6 @@ EOF
 EOF
     done
 
-    # Default fallback
     cat >> "$config_file" <<'EOF'
     route "default" {
         priority "low"
@@ -752,7 +821,6 @@ EOF
 }
 EOF
 
-    # Upstreams, limits, observability
     cat >> "$config_file" <<EOF
 
 upstreams {
@@ -796,9 +864,9 @@ start_zentinel() {
     PROXY_PID=$!
 
     local retries=20
-    while ! curl -sf "${CLEAN_HEADERS[@]}" "http://127.0.0.1:$PROXY_PORT/control/" >/dev/null 2>&1; do
+    while ! curl -s -o /dev/null -w "%{http_code}" "${CLEAN_HEADERS[@]}" "http://127.0.0.1:$PROXY_PORT/" 2>/dev/null | grep -qv "000"; do
         sleep 0.5
-        ((retries--))
+        retries=$((retries - 1))
         if [[ $retries -eq 0 ]]; then
             log_failure "Zentinel failed to start"
             tail -30 "$LOGS/proxy.log"
@@ -816,7 +884,6 @@ start_zentinel() {
 send_requests() {
     log_phase "Phase 5: Send requests and validate"
 
-    # Control route (no agents — must return 200)
     local status
     status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
         "${CLEAN_HEADERS[@]}" "http://127.0.0.1:$PROXY_PORT/control/" || echo "000")
@@ -827,11 +894,10 @@ send_requests() {
         log_failure "  control: $status (expected 200)"
     fi
 
-    # Per-agent routes
     for name in "${AGENT_NAMES[@]}"; do
-        if [[ "${AGENT_START_STATUS[$name]:-}" != "OK" ]]; then
-            AGENT_REQUEST_STATUS[$name]="SKIP"
-            ((REQUESTS_FAILED++)) || true
+        if [[ "$(get_state "$name" start)" != "OK" ]]; then
+            set_state "$name" request "SKIP"
+            REQUESTS_FAILED=$((REQUESTS_FAILED + 1))
             continue
         fi
 
@@ -842,12 +908,12 @@ send_requests() {
 
         if [[ "$status" == "200" ]]; then
             log_success "  $name: $status"
-            AGENT_REQUEST_STATUS[$name]="OK"
-            ((REQUESTS_OK++)) || true
+            set_state "$name" request "OK"
+            REQUESTS_OK=$((REQUESTS_OK + 1))
         else
             log_failure "  $name: $status (expected 200)"
-            AGENT_REQUEST_STATUS[$name]="FAIL($status)"
-            ((REQUESTS_FAILED++)) || true
+            set_state "$name" request "FAIL($status)"
+            REQUESTS_FAILED=$((REQUESTS_FAILED + 1))
         fi
     done
 
@@ -864,33 +930,31 @@ scan_logs() {
     local error_pattern='ERROR|FATAL|panic|SIGSEGV|thread.*panicked'
     local any_dirty=false
 
-    # Agent logs
     for name in "${AGENT_NAMES[@]}"; do
         local log_file="$LOGS/$name.log"
         if [[ ! -f "$log_file" ]]; then
-            AGENT_LOG_STATUS[$name]="N/A"
+            set_state "$name" log "N/A"
             continue
         fi
 
         local matches
-        matches=$(grep -cE "$error_pattern" "$log_file" 2>/dev/null || echo "0")
+        matches=$(grep -cE "$error_pattern" "$log_file" 2>/dev/null) || true
 
         if [[ "$matches" -gt 0 ]]; then
             log_failure "  $name: $matches error(s) in log"
             grep -E "$error_pattern" "$log_file" | head -5
-            AGENT_LOG_STATUS[$name]="DIRTY"
-            ((LOGS_DIRTY++)) || true
+            set_state "$name" log "DIRTY"
+            LOGS_DIRTY=$((LOGS_DIRTY + 1))
             any_dirty=true
         else
-            AGENT_LOG_STATUS[$name]="CLEAN"
-            ((LOGS_CLEAN++)) || true
+            set_state "$name" log "CLEAN"
+            LOGS_CLEAN=$((LOGS_CLEAN + 1))
         fi
     done
 
-    # Proxy log
     if [[ -f "$LOGS/proxy.log" ]]; then
         local matches
-        matches=$(grep -cE "$error_pattern" "$LOGS/proxy.log" 2>/dev/null || echo "0")
+        matches=$(grep -cE "$error_pattern" "$LOGS/proxy.log" 2>/dev/null) || true
         if [[ "$matches" -gt 0 ]]; then
             log_failure "  proxy: $matches error(s) in log"
             grep -E "$error_pattern" "$LOGS/proxy.log" | head -5
@@ -920,17 +984,23 @@ print_summary() {
     local all_pass=true
 
     for name in "${AGENT_NAMES[@]}"; do
-        local build="${AGENT_BUILD_STATUS[$name]:-N/A}"
-        local start="${AGENT_START_STATUS[$name]:-N/A}"
-        local request="${AGENT_REQUEST_STATUS[$name]:-N/A}"
-        local logs="${AGENT_LOG_STATUS[$name]:-N/A}"
+        local build start request logs
+        build=$(get_state "$name" build)
+        start=$(get_state "$name" start)
+        request=$(get_state "$name" request)
+        logs=$(get_state "$name" log)
 
-        # Color codes
         local bc sc rc lc
-        [[ "$build" == "OK" ]]    && bc="$GREEN" || bc="$RED"
-        [[ "$start" == "OK" ]]    && sc="$GREEN" || sc="$RED"
-        [[ "$request" == "OK" ]]  && rc="$GREEN" || rc="$RED"
-        [[ "$logs" == "CLEAN" ]]  && lc="$GREEN" || { [[ "$logs" == "N/A" ]] && lc="$YELLOW" || lc="$RED"; }
+        [[ "$build" == "OK" ]]   && bc="$GREEN" || bc="$RED"
+        [[ "$start" == "OK" ]]   && sc="$GREEN" || sc="$RED"
+        [[ "$request" == "OK" ]] && rc="$GREEN" || rc="$RED"
+        if [[ "$logs" == "CLEAN" ]]; then
+            lc="$GREEN"
+        elif [[ "$logs" == "N/A" ]]; then
+            lc="$YELLOW"
+        else
+            lc="$RED"
+        fi
 
         printf "%-25s ${bc}%-8s${NC} ${sc}%-8s${NC} ${rc}%-12s${NC} ${lc}%-8s${NC}\n" \
             "$name" "$build" "$start" "$request" "$logs"
@@ -972,7 +1042,7 @@ main() {
     echo "Mega Agent Smoke Test (all $TOTAL_AGENTS agents)"
     echo "==========================================="
 
-    mkdir -p "$TEST_DIR" "$LOGS"
+    mkdir -p "$TEST_DIR" "$LOGS" "$STATE"
 
     generate_stubs
     build_all
@@ -990,7 +1060,6 @@ main() {
 
     start_zentinel
 
-    # Give agents time to stabilize connections
     sleep 2
 
     send_requests
