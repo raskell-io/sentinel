@@ -35,7 +35,9 @@ pub enum LockError {
     #[error("Failed to fetch lock file from remote: {0}")]
     Fetch(String),
 
-    #[error("Unsupported API schema version {version} (max supported: {max}). Please update zentinel.")]
+    #[error(
+        "Unsupported API schema version {version} (max supported: {max}). Please update zentinel."
+    )]
     UnsupportedSchema { version: u32, max: u32 },
 }
 
@@ -192,8 +194,8 @@ impl BundleLock {
             .map_err(|e| LockError::Fetch(e.to_string()))?;
 
         // Determine API URL (env override or default)
-        let api_url = std::env::var("ZENTINEL_API_URL")
-            .unwrap_or_else(|_| API_BUNDLE_URL.to_string());
+        let api_url =
+            std::env::var("ZENTINEL_API_URL").unwrap_or_else(|_| API_BUNDLE_URL.to_string());
 
         // Try API endpoint first
         match Self::fetch_from_api(&client, &api_url).await {
