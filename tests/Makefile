@@ -1,7 +1,7 @@
 # Zentinel Test Makefile
 # Provides convenient targets for running various test scenarios
 
-.PHONY: all help up down build test test-quick test-echo test-ratelimit test-waf test-security test-performance test-soak test-soak-quick test-soak-extended analyze-soak logs clean test-first-time test-first-time-waf test-first-time-lua
+.PHONY: all help up down build test test-quick test-echo test-ratelimit test-waf test-security test-performance test-soak test-soak-quick test-soak-extended analyze-soak logs clean test-first-time test-first-time-waf test-first-time-lua test-mega-agent
 
 DOCKER_COMPOSE = docker compose -f ../docker-compose.yml
 DOCKER_COMPOSE_TEST = docker compose -f ../docker-compose.yml -f ../docker-compose.test.yml
@@ -40,6 +40,7 @@ help:
 	@echo "  test-first-time     - Run all first-time user smoke tests"
 	@echo "  test-first-time-waf - WAF agent first-time user test"
 	@echo "  test-first-time-lua - Lua agent first-time user test"
+	@echo "  test-mega-agent     - All 26 agents smoke test"
 	@echo ""
 	@echo "Local (non-Docker):"
 	@echo "  test-local   - Run tests against local binaries"
@@ -165,6 +166,10 @@ test-first-time-waf:
 test-first-time-lua:
 	@echo "Running first-time user Lua agent smoke test..."
 	./test_first_time_lua.sh
+
+test-mega-agent:
+	@echo "Running mega agent smoke test (all 26 agents)..."
+	./test_mega_agent.sh
 
 # Run tests against local binaries (not Docker)
 test-local:
