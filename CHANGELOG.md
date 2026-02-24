@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.02_16](#260216---2026-02-24) | 0.5.7 | 2026-02-24 | Fix KDL parser missing agent event aliases |
 | [26.02_14](#260214---2026-02-24) | 0.5.5 | 2026-02-24 | Bundle command with agent registry, API-first bundle fetch |
 | [26.02_7](#26027---2026-02-16) | 0.5.0 | 2026-02-16 | Wire 18 config features into runtime, filter & config coverage tests |
 | [26.02_4](#26024---2026-02-04) | 0.4.10 | 2026-02-04 | Maintenance: CI, dependency audit, Pingora fork security fix |
@@ -30,6 +31,16 @@ for details.
 | [26.01_0](#26010---2026-01-01) | 0.2.0 | 2026-01-01 | First CalVer release |
 | [25.12](#2512) | 0.1.x | 2025-12 | Initial public releases |
 | [24.12](#2412) | 0.1.0 | 2024-12 | Initial development |
+
+---
+
+## [26.02_16] - 2026-02-24
+
+**Crate version:** 0.5.7
+
+### Fixed
+- **KDL config parser: missing agent event aliases** — `request_complete` and `request-complete` are now accepted as aliases for the `log` event, matching the documentation. Previously, using `request_complete` in an agent's `events` block caused a "Unknown agent event" error at startup.
+- **KDL config parser: missing event types** — Added parsing support for `websocket_frame` / `websocket-frame` and `guardrail` agent events, which were defined in the `AgentEvent` enum but not wired into the KDL parser.
 
 ---
 
