@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use zentinel_common::budget::{
     BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig,
@@ -14,6 +14,27 @@ use crate::routes::*;
 use super::helpers::{
     get_bool_entry, get_first_arg_string, get_float_entry, get_int_entry, get_string_entry,
 };
+
+/// Recognized child node names inside a `route` block.
+/// Any child node not in this set will produce a warning during parsing.
+const RECOGNIZED_ROUTE_CHILDREN: &[&str] = &[
+    "matches",
+    "priority",
+    "upstream",
+    "static-files",
+    "api-schema",
+    "inference",
+    "filters",
+    "builtin-handler",
+    "cache",
+    "shadow",
+    "waf-enabled",
+    "websocket",
+    "websocket-inspection",
+    "fallback",
+    "policies",
+    "service-type",
+];
 
 /// Parse routes configuration block
 pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
@@ -94,6 +115,22 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
 
                 // Parse policies block (request-headers, response-headers, etc.)
                 let (request_headers, response_headers) = parse_route_header_policies(child)?;
+
+                // Warn about unrecognized child nodes
+                if let Some(route_children) = child.children() {
+                    for child_node in route_children.nodes() {
+                        let name = child_node.name().value();
+                        if !RECOGNIZED_ROUTE_CHILDREN.contains(&name) {
+                            warn!(
+                                route_id = %id,
+                                directive = %name,
+                                "Unrecognized directive in route block (will be ignored). \
+                                 Agents must be configured in a top-level \"agents\" block \
+                                 and referenced via filters."
+                            );
+                        }
+                    }
+                }
 
                 // Build route policies with optional cache config
                 let policies = RoutePolicies {
