@@ -66,6 +66,14 @@ impl ProxyHttp for ZentinelProxy {
             error = %e,
             "Failed to connect to upstream peer"
         );
+        self.log_manager.log_request_error(
+            "error",
+            "Failed to connect to upstream peer",
+            &ctx.trace_id,
+            ctx.route_id.as_deref(),
+            ctx.upstream.as_deref(),
+            Some(format!("peer={} error={}", peer.address(), e)),
+        );
         // Custom error pages are handled in response_filter
         e
     }
@@ -273,6 +281,14 @@ impl ProxyHttp for ZentinelProxy {
                         path = %request_info.path,
                         host = %request_info.host,
                         "No matching route found for request"
+                    );
+                    self.log_manager.log_request_error(
+                        "warn",
+                        "No matching route found for request",
+                        &ctx.trace_id,
+                        None,
+                        None,
+                        Some(format!("method={} path={} host={}", request_info.method, request_info.path, request_info.host)),
                     );
                     Error::explain(ErrorType::InternalError, "No matching route found")
                 })?;
@@ -575,6 +591,14 @@ impl ProxyHttp for ZentinelProxy {
                     upstream = %upstream_name,
                     "Upstream pool not found"
                 );
+                self.log_manager.log_request_error(
+                    "error",
+                    "Upstream pool not found",
+                    &ctx.trace_id,
+                    ctx.route_id.as_deref(),
+                    Some(upstream_name),
+                    None,
+                );
                 Error::explain(
                     ErrorType::InternalError,
                     format!("Upstream pool '{}' not found", upstream_name),
@@ -693,6 +717,14 @@ impl ProxyHttp for ZentinelProxy {
             selection_duration_ms = selection_duration.as_millis(),
             last_error = ?last_error,
             "All upstream selection attempts failed"
+        );
+        self.log_manager.log_request_error(
+            "error",
+            "All upstream selection attempts failed",
+            &ctx.trace_id,
+            ctx.route_id.as_deref(),
+            Some(upstream_name),
+            Some(format!("attempts={} error={:?}", max_retries, last_error)),
         );
 
         // Record exhausted metric if fallback was used but all upstreams failed
@@ -1984,6 +2016,14 @@ impl ProxyHttp for ZentinelProxy {
                 attempts = ctx.upstream_attempts,
                 "Request completed with server error"
             );
+            self.log_manager.log_request_error(
+                "error",
+                "Request completed with server error",
+                &ctx.trace_id,
+                ctx.route_id.as_deref(),
+                ctx.upstream.as_deref(),
+                Some(format!("status={} method={} path={} duration_ms={}", status, ctx.method, ctx.path, duration.as_millis())),
+            );
         } else if status >= 400 {
             warn!(
                 correlation_id = %ctx.trace_id,
@@ -1994,6 +2034,14 @@ impl ProxyHttp for ZentinelProxy {
                 status = status,
                 duration_ms = duration.as_millis(),
                 "Request completed with client error"
+            );
+            self.log_manager.log_request_error(
+                "warn",
+                "Request completed with client error",
+                &ctx.trace_id,
+                ctx.route_id.as_deref(),
+                ctx.upstream.as_deref(),
+                Some(format!("status={} method={} path={}", status, ctx.method, ctx.path)),
             );
         } else {
             debug!(
@@ -3527,6 +3575,14 @@ impl ZentinelProxy {
                         error = %e,
                         "Agent streaming body inspection failed, blocking (fail-closed)"
                     );
+                    self.log_manager.log_request_error(
+                        "error",
+                        "Agent streaming body inspection failed, blocking (fail-closed)",
+                        &ctx.trace_id,
+                        ctx.route_id.as_deref(),
+                        ctx.upstream.as_deref(),
+                        Some(format!("error={}", e)),
+                    );
                     return Err(Error::explain(
                         ErrorType::HTTPStatus(503),
                         "Service unavailable",
@@ -3536,6 +3592,14 @@ impl ZentinelProxy {
                         correlation_id = %ctx.trace_id,
                         error = %e,
                         "Agent streaming body inspection failed, allowing (fail-open)"
+                    );
+                    self.log_manager.log_request_error(
+                        "warn",
+                        "Agent streaming body inspection failed, allowing (fail-open)",
+                        &ctx.trace_id,
+                        ctx.route_id.as_deref(),
+                        ctx.upstream.as_deref(),
+                        Some(format!("error={}", e)),
                     );
                 }
             }
@@ -3706,6 +3770,14 @@ impl ZentinelProxy {
                         error = %e,
                         "Agent body inspection failed, blocking (fail-closed)"
                     );
+                    self.log_manager.log_request_error(
+                        "error",
+                        "Agent body inspection failed, blocking (fail-closed)",
+                        &ctx.trace_id,
+                        ctx.route_id.as_deref(),
+                        ctx.upstream.as_deref(),
+                        Some(format!("error={}", e)),
+                    );
                     return Err(Error::explain(
                         ErrorType::HTTPStatus(503),
                         "Service unavailable",
@@ -3715,6 +3787,14 @@ impl ZentinelProxy {
                         correlation_id = %ctx.trace_id,
                         error = %e,
                         "Agent body inspection failed, allowing (fail-open)"
+                    );
+                    self.log_manager.log_request_error(
+                        "warn",
+                        "Agent body inspection failed, allowing (fail-open)",
+                        &ctx.trace_id,
+                        ctx.route_id.as_deref(),
+                        ctx.upstream.as_deref(),
+                        Some(format!("error={}", e)),
                     );
                 }
             }

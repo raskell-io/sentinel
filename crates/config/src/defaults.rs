@@ -132,6 +132,16 @@ limits {
 // Observability uses defaults:
 // - Metrics enabled at /metrics
 // - JSON logging at info level
+// - Error log enabled at /var/log/zentinel/error.log (level: warn)
+observability {
+    logging {
+        error-log {
+            enabled #true
+            file "/var/log/zentinel/error.log"
+            level "warn"
+        }
+    }
+}
 "#;
 
 use crate::{

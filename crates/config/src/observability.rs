@@ -104,7 +104,7 @@ impl Default for LoggingConfig {
             timestamps: default_true(),
             file: None,
             access_log: None,
-            error_log: None,
+            error_log: Some(ErrorLogConfig::default()),
             audit_log: None,
         }
     }

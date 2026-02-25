@@ -664,6 +664,7 @@ pub struct LogManager {
     access_log_format: AccessLogFormat,
     access_log_config: Option<zentinel_config::AccessLogConfig>,
     error_log: Option<Mutex<LogFileWriter>>,
+    error_log_level: String,
     audit_log: Option<Mutex<LogFileWriter>>,
     audit_config: Option<AuditLogConfig>,
 }
@@ -686,17 +687,20 @@ impl LogManager {
             (None, AccessLogFormat::Json)
         };
 
-        let error_log = if let Some(ref error_config) = config.error_log {
+        let (error_log, error_log_level) = if let Some(ref error_config) = config.error_log {
             if error_config.enabled {
-                Some(Mutex::new(LogFileWriter::new(
-                    &error_config.file,
-                    error_config.buffer_size,
-                )?))
+                (
+                    Some(Mutex::new(LogFileWriter::new(
+                        &error_config.file,
+                        error_config.buffer_size,
+                    )?)),
+                    error_config.level.clone(),
+                )
             } else {
-                None
+                (None, "warn".to_string())
             }
         } else {
-            None
+            (None, "warn".to_string())
         };
 
         let audit_log = if let Some(ref audit_config) = config.audit_log {
@@ -717,6 +721,7 @@ impl LogManager {
             access_log_format,
             access_log_config: config.access_log.clone(),
             error_log,
+            error_log_level,
             audit_log,
             audit_config: config.audit_log.clone(),
         })
@@ -729,6 +734,7 @@ impl LogManager {
             access_log_format: AccessLogFormat::Json,
             access_log_config: None,
             error_log: None,
+            error_log_level: "warn".to_string(),
             audit_log: None,
             audit_config: None,
         }
@@ -853,6 +859,47 @@ impl LogManager {
     /// Check if audit logging is enabled
     pub fn audit_log_enabled(&self) -> bool {
         self.audit_log.is_some()
+    }
+
+    /// Check if the given level meets the configured minimum error log level.
+    /// Level hierarchy: "warn" logs both warn and error, "error" logs only error.
+    fn should_log_error_level(&self, level: &str) -> bool {
+        match self.error_log_level.as_str() {
+            "error" => level == "error",
+            _ => level == "warn" || level == "error", // "warn" (default) logs both
+        }
+    }
+
+    /// Convenience method to construct an ErrorLogEntry and write it to the error log.
+    /// Checks both that error logging is enabled and that the level meets the configured minimum.
+    pub fn log_request_error(
+        &self,
+        level: &str,
+        message: &str,
+        trace_id: &str,
+        route_id: Option<&str>,
+        upstream: Option<&str>,
+        details: Option<String>,
+    ) {
+        if self.error_log.is_none() || !self.should_log_error_level(level) {
+            return;
+        }
+        let entry = ErrorLogEntry {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            trace_id: trace_id.to_string(),
+            level: level.to_string(),
+            message: message.to_string(),
+            route_id: route_id.map(|s| s.to_string()),
+            upstream: upstream.map(|s| s.to_string()),
+            details,
+        };
+        self.log_error(&entry);
+    }
+}
+
+impl Drop for LogManager {
+    fn drop(&mut self) {
+        self.flush();
     }
 }
 
