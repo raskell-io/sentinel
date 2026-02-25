@@ -288,7 +288,10 @@ impl ProxyHttp for ZentinelProxy {
                         &ctx.trace_id,
                         None,
                         None,
-                        Some(format!("method={} path={} host={}", request_info.method, request_info.path, request_info.host)),
+                        Some(format!(
+                            "method={} path={} host={}",
+                            request_info.method, request_info.path, request_info.host
+                        )),
                     );
                     Error::explain(ErrorType::InternalError, "No matching route found")
                 })?;
@@ -2022,7 +2025,13 @@ impl ProxyHttp for ZentinelProxy {
                 &ctx.trace_id,
                 ctx.route_id.as_deref(),
                 ctx.upstream.as_deref(),
-                Some(format!("status={} method={} path={} duration_ms={}", status, ctx.method, ctx.path, duration.as_millis())),
+                Some(format!(
+                    "status={} method={} path={} duration_ms={}",
+                    status,
+                    ctx.method,
+                    ctx.path,
+                    duration.as_millis()
+                )),
             );
         } else if status >= 400 {
             warn!(
@@ -2041,7 +2050,10 @@ impl ProxyHttp for ZentinelProxy {
                 &ctx.trace_id,
                 ctx.route_id.as_deref(),
                 ctx.upstream.as_deref(),
-                Some(format!("status={} method={} path={}", status, ctx.method, ctx.path)),
+                Some(format!(
+                    "status={} method={} path={}",
+                    status, ctx.method, ctx.path
+                )),
             );
         } else {
             debug!(
