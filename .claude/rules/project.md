@@ -286,8 +286,7 @@ assert!(elapsed < Duration::from_millis(100)); // Flaky!
 
 ### Agent Protocol Versioning
 
-- v1 and v2 coexist
-- Version negotiated at handshake
+- v2 is the only supported protocol version
 - Breaking changes require new major version
 
 ### Config Compatibility

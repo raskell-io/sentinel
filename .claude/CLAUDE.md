@@ -67,9 +67,9 @@ KDL configuration parsing, validation, and schema. Handles all configuration fil
 - **Docs:** `crates/config/docs/` — KDL format, schema reference, validation rules, examples
 
 #### `zentinel-agent-protocol` (`crates/agent-protocol/`)
-Agent communication protocols (v1 legacy and v2 current). Handles UDS, gRPC, and reverse connections.
+Agent communication protocol (v2). Handles UDS, gRPC, and reverse connections.
 - **Key types:** `AgentPool`, `AgentClientV2`, `Decision`, `ReverseConnectionListener`
-- **Docs:** `crates/agent-protocol/docs/` — v1/ and v2/ protocol specs, API reference, transport options
+- **Docs:** `crates/agent-protocol/docs/` — v2/ protocol specs, API reference, transport options
 
 #### `zentinel-common` (`crates/common/`)
 Shared types, utilities, and error handling used across all crates.
@@ -122,9 +122,7 @@ zentinel-agent-protocol
 
 ### Agent Protocol
 
-Two versions supported:
-- **v1 (Legacy)** — JSON over UDS, simple request/response
-- **v2 (Current)** — Binary UDS, gRPC, connection pooling, streaming, cancellation
+Uses the **v2** protocol — binary UDS, gRPC, connection pooling, streaming, cancellation.
 
 Agents handle: WAF, authentication, rate limiting, custom policy, request validation.
 
@@ -190,7 +188,7 @@ Each crate has a `docs/` directory for technical reference:
 ```
 crates/proxy/docs/           # Architecture, routing, filtering
 crates/config/docs/          # KDL format, schema, validation
-crates/agent-protocol/docs/  # Protocol v1/, v2/, transports
+crates/agent-protocol/docs/  # Protocol v2/, transports
 crates/common/docs/          # Shared types, errors, patterns
 ```
 
@@ -214,7 +212,7 @@ content/
 ├── getting-started/    # Installation, quick start
 ├── concepts/           # Architecture, routing, request lifecycle
 ├── configuration/      # All config options
-├── agents/             # Agent protocol v1/, v2/
+├── agents/             # Agent protocol v2/
 ├── examples/           # Production-ready configs
 ├── operations/         # Security, monitoring, troubleshooting
 ├── deployment/         # Docker, K8s, systemd
