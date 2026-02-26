@@ -12,7 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
-| [26.02_17](#260217---2026-02-26) | 0.5.10 | 2026-02-26 | Remove v1 agent protocol |
+| [26.02_18](#260218---2026-02-26) | 0.5.10 | 2026-02-26 | Remove v1 agent protocol |
 | [26.02_16](#260216---2026-02-24) | 0.5.7 | 2026-02-24 | Fix KDL parser missing agent event aliases |
 | [26.02_14](#260214---2026-02-24) | 0.5.5 | 2026-02-24 | Bundle command with agent registry, API-first bundle fetch |
 | [26.02_7](#26027---2026-02-16) | 0.5.0 | 2026-02-16 | Wire 18 config features into runtime, filter & config coverage tests |
@@ -35,7 +35,7 @@ for details.
 
 ---
 
-## [26.02_17] - 2026-02-26
+## [26.02_18] - 2026-02-26
 
 **Crate version:** 0.5.10
 
