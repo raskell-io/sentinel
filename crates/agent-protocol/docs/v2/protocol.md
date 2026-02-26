@@ -57,7 +57,7 @@ message AgentMessage {
 
 ### Streaming Semantics
 
-Unlike v1's request-response model, v2 uses bidirectional streaming:
+The protocol uses bidirectional streaming:
 
 ```
 Proxy                                    Agent
@@ -360,16 +360,6 @@ pub struct CancelRequestMessage {
 ---
 
 ## Compatibility
-
-### v1 to v2 Migration
-
-| v1 Feature | v2 Equivalent |
-|------------|---------------|
-| Length-prefixed JSON | Binary UDS (type byte added) |
-| Unary gRPC calls | Bidirectional streaming |
-| Per-request connections | Multiplexed connections |
-| N/A | Request cancellation |
-| N/A | Reverse connections |
 
 ### Version Negotiation
 

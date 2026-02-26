@@ -450,35 +450,6 @@ match pool.send_request_headers("waf", &headers).await {
 
 ---
 
-## Migration from v1
-
-### Before (v1)
-
-```rust
-use zentinel_agent_protocol::AgentClient;
-
-let client = AgentClient::unix_socket(
-    "proxy",
-    "/tmp/agent.sock",
-    Duration::from_secs(5),
-).await?;
-
-let response = client.send_event(EventType::RequestHeaders, &event).await?;
-```
-
-### After (v2 with pooling)
-
-```rust
-use zentinel_agent_protocol::v2::AgentPool;
-
-let pool = AgentPool::new();
-pool.add_agent("agent", "/tmp/agent.sock").await?;
-
-let response = pool.send_request_headers("agent", &headers).await?;
-```
-
----
-
 ## Header Utilities
 
 The `headers` module provides optimized header types that minimize allocations in the hot path.

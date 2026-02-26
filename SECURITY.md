@@ -64,7 +64,7 @@ Zentinel's security is built on the principles in our [Manifesto](MANIFESTO.md):
 ## Known Limitations
 
 - WASM agents run in-process (sandboxed via Wasmtime)
-- Agent protocol v1 does not encrypt UDS traffic (use v2 with gRPC+TLS for sensitive environments)
+- UDS agent traffic is not encrypted (use gRPC+TLS for sensitive environments)
 
 ## Security Updates
 

@@ -8,28 +8,37 @@ Inspired by [SPOE](https://www.haproxy.com/blog/extending-haproxy-with-the-strea
 
 - **Dual Transport Support**: Unix Domain Sockets (default) and gRPC
 - **Event-Driven Architecture**: 8 lifecycle event types for request/response processing
+- **Connection Pooling**: Built-in `AgentPool` with 4 load balancing strategies
 - **Flexible Decisions**: Allow, Block, Redirect, or Challenge requests
 - **Header Mutations**: Add, set, or remove headers on requests and responses
 - **Body Streaming**: Inspect and mutate request/response bodies chunk by chunk
 - **WebSocket Support**: Inspect and filter WebSocket frames
 - **Guardrail Inspection**: Built-in support for prompt injection and PII detection
-- **Reference Implementations**: Echo and Denylist agents included
+- **Reverse Connections**: Agents can connect to the proxy (NAT traversal)
+- **Request Cancellation**: Cancel in-flight requests
 
 ## Quick Start
 
 ### Implementing an Agent (Server)
 
 ```rust
-use zentinel_agent_protocol::{
-    AgentServer, AgentHandler, AgentResponse, Decision,
-    RequestHeadersEvent, RequestMetadata,
+use zentinel_agent_protocol::v2::{
+    UdsAgentServerV2, AgentHandlerV2, AgentResponse, Decision,
+    RequestHeadersEvent, RequestMetadata, AgentCapabilities,
 };
 use async_trait::async_trait;
 
 struct MyAgent;
 
 #[async_trait]
-impl AgentHandler for MyAgent {
+impl AgentHandlerV2 for MyAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities {
+            handles_request_headers: true,
+            ..Default::default()
+        }
+    }
+
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
         // Block requests to /admin
         if event.uri.starts_with("/admin") {
@@ -41,7 +50,7 @@ impl AgentHandler for MyAgent {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "my-agent",
         "/tmp/my-agent.sock",
         Box::new(MyAgent),
@@ -54,34 +63,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Connecting from the Proxy (Client)
 
 ```rust
-use zentinel_agent_protocol::{AgentClient, EventType, RequestHeadersEvent};
+use zentinel_agent_protocol::v2::{AgentPool, AgentPoolConfig, LoadBalanceStrategy};
 use std::time::Duration;
 
-// Unix socket transport
-let mut client = AgentClient::unix_socket(
-    "proxy",
-    "/tmp/my-agent.sock",
-    Duration::from_secs(5),
-).await?;
+let config = AgentPoolConfig {
+    connections_per_agent: 4,
+    load_balance_strategy: LoadBalanceStrategy::LeastConnections,
+    request_timeout: Duration::from_secs(30),
+    ..Default::default()
+};
 
-// Or gRPC transport
-let mut client = AgentClient::grpc(
-    "proxy",
-    "http://localhost:50051",
-    Duration::from_secs(5),
-).await?;
+let pool = AgentPool::with_config(config);
 
-// Send an event
-let response = client.send_event(EventType::RequestHeaders, &event).await?;
+// Add agents (transport auto-detected from endpoint)
+pool.add_agent("waf", "localhost:50051").await?;       // gRPC
+pool.add_agent("auth", "/var/run/auth.sock").await?;   // UDS
+
+// Send requests through the pool
+let response = pool.send_request_headers("waf", &headers).await?;
 ```
 
 ## Protocol Overview
 
 | Property | Value |
 |----------|-------|
-| Protocol Version | 1 |
-| Max Message Size | 10 MB |
-| UDS Message Format | 4-byte big-endian length prefix + JSON payload |
+| Protocol Version | 2 |
+| Max Message Size | 16 MB (UDS) / 4 MB (gRPC) |
+| UDS Message Format | 4-byte big-endian length prefix + 1-byte type prefix + JSON payload |
 | gRPC Format | Protocol Buffers over HTTP/2 |
 
 ## Event Types
@@ -115,27 +123,27 @@ Agents respond with one of four decisions:
 Detailed documentation is available in the [`docs/`](./docs/) directory:
 
 - [Architecture & Flow Diagrams](./docs/architecture.md) - System architecture, request lifecycle, component interactions
-- [Protocol Specification](./docs/protocol.md) - Wire format, message types, constraints
-- [Agent Handler Interface](./docs/handler.md) - All hook methods and their semantics
-- [Client & Server APIs](./docs/api.md) - Using AgentClient and AgentServer
-- [Error Handling](./docs/errors.md) - Error types and recovery strategies
-- [Examples](./docs/examples.md) - Common patterns and reference implementations
+- [Protocol Specification](./docs/v2/protocol.md) - Wire format, message types, constraints
+- [Client & Server APIs](./docs/v2/api.md) - Using AgentPool, AgentClientV2, and UdsAgentServerV2
+- [Connection Pooling](./docs/v2/pooling.md) - Load balancing and connection management
+- [Transport Options](./docs/v2/transports.md) - gRPC, UDS, and reverse connections
 
 ## Architecture
 
 ```
-┌─────────────────┐         ┌─────────────────┐
-│  Zentinel Proxy │         │  External Agent │
-│   (Dataplane)   │         │   (WAF/Auth/    │
-│                 │         │   Custom Logic) │
-│  ┌───────────┐  │  UDS/   │  ┌───────────┐  │
-│  │AgentClient│◄─┼─gRPC───►│  │AgentServer│  │
-│  └───────────┘  │         │  └─────┬─────┘  │
-│                 │         │        │        │
-└─────────────────┘         │  ┌─────▼─────┐  │
-                            │  │AgentHandler│ │
-                            │  └───────────┘  │
-                            └─────────────────┘
+┌─────────────────┐         ┌──────────────────┐
+│  Zentinel Proxy │         │  External Agent  │
+│   (Dataplane)   │         │   (WAF/Auth/     │
+│                 │         │   Custom Logic)  │
+│  ┌───────────┐  │  UDS/   │  ┌────────────┐  │
+│  │ AgentPool │◄─┼─gRPC───►│  │UdsAgentSrv │  │
+│  └───────────┘  │         │  │     V2      │  │
+│                 │         │  └──────┬──────┘  │
+└─────────────────┘         │  ┌─────▼──────┐  │
+                            │  │AgentHandler │  │
+                            │  │     V2      │  │
+                            │  └────────────┘  │
+                            └──────────────────┘
 ```
 
 See [Architecture & Flow Diagrams](./docs/architecture.md) for detailed diagrams including:
@@ -147,31 +155,10 @@ See [Architecture & Flow Diagrams](./docs/architecture.md) for detailed diagrams
 
 ## Reference Implementations
 
-Two reference agents are included for testing and as implementation examples:
+Two reference agents are available as standalone projects:
 
-### EchoAgent
-
-Adds an `X-Agent-Processed: true` header to all requests. Useful for verifying agent connectivity.
-
-```rust
-use zentinel_agent_protocol::{AgentServer, EchoAgent};
-
-let server = AgentServer::new("echo", "/tmp/echo.sock", Box::new(EchoAgent));
-```
-
-### DenylistAgent
-
-Blocks requests matching configured paths or client IPs.
-
-```rust
-use zentinel_agent_protocol::{AgentServer, DenylistAgent};
-
-let agent = DenylistAgent::new(
-    vec!["/admin".to_string(), "/internal".to_string()],
-    vec!["10.0.0.1".to_string()],
-);
-let server = AgentServer::new("denylist", "/tmp/denylist.sock", Box::new(agent));
-```
+- **[echo agent](https://github.com/zentinelproxy/zentinel)** (`agents/echo/`) — Adds an `X-Agent-Processed: true` header to all requests. Useful for verifying agent connectivity.
+- **[data-masking agent](https://github.com/zentinelproxy/zentinel)** (`agents/data-masking/`) — Masks sensitive data (SSNs, credit cards, emails) in response bodies. Example of body streaming and response transformation.
 
 ## Language SDKs
 

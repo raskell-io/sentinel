@@ -279,5 +279,5 @@ wrk -t4 -c100 -d30s --latency http://localhost:8080/
 ## References
 
 - [Original critique analysis](../.claude/agent-protocol-bottlenecks-roadmap.md)
-- [Agent Protocol v2 Design](../../../AGENT_PROTOCOL_2.0.md)
+- [Agent Protocol v2 Design](../../../.claude/AGENT_PROTOCOL_2.0.md)
 - [Pingora Integration Patterns](../../proxy/docs/agents.md)

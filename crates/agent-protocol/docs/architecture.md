@@ -14,8 +14,8 @@
 │                            │                                                │
 │                            ▼                                                │
 │                    ┌───────────────┐                                        │
-│                    │  AgentPool    │  ◄── v2: Connection pooling            │
-│                    │  (v1 or v2)   │      with load balancing               │
+│                    │  AgentPool    │  Connection pooling                    │
+│                    │              │  with load balancing                    │
 │                    └───────┬───────┘                                        │
 │                            │                                                │
 └────────────────────────────┼────────────────────────────────────────────────┘
@@ -46,22 +46,7 @@
 
 ---
 
-## Protocol Version Comparison
-
-| Feature | v1 | v2 |
-|---------|----|----|
-| Transport | UDS (JSON), gRPC | UDS (binary), gRPC, Reverse |
-| Connection pooling | No | Yes (4 strategies) |
-| Bidirectional streaming | Limited | Full support |
-| Metrics export | No | Prometheus format |
-| Config push | No | Yes |
-| Health tracking | Basic | Comprehensive |
-| Flow control | No | Yes |
-| Cancellation | No | Yes |
-
----
-
-## v2 Transport Architecture
+## Transport Architecture
 
 ### Transport Options
 
@@ -441,15 +426,7 @@ Message Types:
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                            v1 (Legacy)                               │   │
-│   │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐               │   │
-│   │  │ AgentClient  │  │ AgentServer  │  │ AgentHandler │               │   │
-│   │  │ (UDS/gRPC)   │  │              │  │ (trait)      │               │   │
-│   │  └──────────────┘  └──────────────┘  └──────────────┘               │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                            v2 (New)                                  │   │
+│   │                           Components                                 │   │
 │   │                                                                      │   │
 │   │   Clients:                                                          │   │
 │   │   ┌────────────────┐  ┌────────────────┐  ┌────────────────┐        │   │

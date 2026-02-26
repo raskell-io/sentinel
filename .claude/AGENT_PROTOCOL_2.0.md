@@ -1,5 +1,7 @@
 # Agent Protocol 2.0 Design
 
+> **Note:** V1 was removed in release 26.02_18 (Feb 2026). References to v1 below are historical context for the v2 design.
+
 **Status:** Draft
 **Author:** Zentinel Core Team
 **Last Updated:** 2026-01-12
@@ -1014,17 +1016,17 @@ world agent {
 | **v2-alpha** | Q3 2025 | Capability handshake, health reporting |
 | **v2-beta** | Q4 2025 | Bidirectional streaming, binary protocol, cancellation, flow control |
 | **v2-rc** | Q1 2026 | WASM runtime, metrics export, config push |
-| **v2-stable** | Q2 2026 | Full release, v1 deprecated (not removed) |
-| **v1-removal** | Q1 2027 | v1 support removed |
+| **v2-stable** | Q2 2026 | Full release, v1 deprecated |
+| **v1-removal** | Feb 2026 | v1 removed ✅ (completed Feb 2026) |
 
 > **⚠️ Important:** v2-perf phase is a **hard prerequisite** for v2-beta. Do not ship bidirectional streaming without fixing the v1 performance bottlenecks, or they will be amplified under streaming load.
 
 ### Backward Compatibility
 
 1. **Version detection**: Proxy detects protocol version during handshake
-2. **Fallback mode**: v2 agents can operate in v1 mode if needed
-3. **v1 agents**: Continue working with v2 proxy (no new features)
-4. **Gradual adoption**: Features can be adopted incrementally
+2. **v1 removed**: v1 protocol was removed in Feb 2026 (release 26.02_18)
+3. **v2 only**: All agents must use the v2 protocol
+4. **Gradual adoption**: v2 features can be adopted incrementally
 
 ### Handshake Flow
 

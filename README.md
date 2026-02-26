@@ -178,7 +178,7 @@ Each crate has its own `docs/` directory with detailed documentation.
 |-------|-------------|
 | [`zentinel-proxy`](crates/proxy/) | Core reverse proxy built on Pingora |
 | [`zentinel-config`](crates/config/) | KDL configuration parsing and validation |
-| [`zentinel-agent-protocol`](crates/agent-protocol/) | Agent protocol v1 (legacy) and v2 (current) |
+| [`zentinel-agent-protocol`](crates/agent-protocol/) | Agent communication protocol (v2) |
 | [`zentinel-common`](crates/common/) | Shared types, errors, and utilities |
 | [`wasm-runtime`](crates/wasm-runtime/) | WASM agent runtime using Wasmtime |
 | [`playground-wasm`](crates/playground-wasm/) | Browser bindings for the config playground |
