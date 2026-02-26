@@ -1023,10 +1023,10 @@ world agent {
 
 ### Backward Compatibility
 
-1. **Version detection**: Proxy detects protocol version during handshake
+1. **Version detection**: Proxy detected protocol version during handshake
 2. **v1 removed**: v1 protocol was removed in Feb 2026 (release 26.02_18)
 3. **v2 only**: All agents must use the v2 protocol
-4. **Gradual adoption**: v2 features can be adopted incrementally
+4. **Gradual adoption**: v2 features could be adopted incrementally
 
 ### Handshake Flow
 
@@ -1035,8 +1035,7 @@ Agent connects → Sends HandshakeRequest with capabilities
                  ↓
 Proxy validates → Sends HandshakeResponse with accepted features
                  ↓
-If v2 supported → Use bidirectional streaming
-If v1 only     → Fall back to request/response
+v2 negotiated  → Use bidirectional streaming
 ```
 
 ---
