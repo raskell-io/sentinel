@@ -19,7 +19,7 @@ use crate::v2::uds::{
 };
 use crate::v2::HandshakeRequest;
 use crate::{
-    AgentProtocolError, AgentResponse as V1Response, RequestBodyChunkEvent, RequestCompleteEvent,
+    AgentProtocolError, AgentResponse, RequestBodyChunkEvent, RequestCompleteEvent,
     RequestHeadersEvent, ResponseBodyChunkEvent, ResponseHeadersEvent, WebSocketFrameEvent,
 };
 
@@ -257,13 +257,13 @@ async fn handle_request_headers(
     handler: &Arc<dyn AgentHandlerV2>,
     encoding: &UdsEncoding,
     payload: &[u8],
-) -> (String, V1Response, u64) {
+) -> (String, AgentResponse, u64) {
     let event: RequestHeadersEvent = match encoding.deserialize(payload) {
         Ok(e) => e,
         Err(e) => {
             warn!(error = %e, "Failed to deserialize RequestHeaders");
             let cid = extract_correlation_id(encoding, payload);
-            return (cid, V1Response::default_allow(), 0);
+            return (cid, AgentResponse::default_allow(), 0);
         }
     };
     let cid = event.metadata.correlation_id.clone();
@@ -276,13 +276,13 @@ async fn handle_request_body_chunk(
     handler: &Arc<dyn AgentHandlerV2>,
     encoding: &UdsEncoding,
     payload: &[u8],
-) -> (String, V1Response, u64) {
+) -> (String, AgentResponse, u64) {
     let event: RequestBodyChunkEvent = match encoding.deserialize(payload) {
         Ok(e) => e,
         Err(e) => {
             warn!(error = %e, "Failed to deserialize RequestBodyChunk");
             let cid = extract_correlation_id(encoding, payload);
-            return (cid, V1Response::default_allow(), 0);
+            return (cid, AgentResponse::default_allow(), 0);
         }
     };
     let cid = event.correlation_id.clone();
@@ -295,13 +295,13 @@ async fn handle_response_headers(
     handler: &Arc<dyn AgentHandlerV2>,
     encoding: &UdsEncoding,
     payload: &[u8],
-) -> (String, V1Response, u64) {
+) -> (String, AgentResponse, u64) {
     let event: ResponseHeadersEvent = match encoding.deserialize(payload) {
         Ok(e) => e,
         Err(e) => {
             warn!(error = %e, "Failed to deserialize ResponseHeaders");
             let cid = extract_correlation_id(encoding, payload);
-            return (cid, V1Response::default_allow(), 0);
+            return (cid, AgentResponse::default_allow(), 0);
         }
     };
     let cid = event.correlation_id.clone();
@@ -314,13 +314,13 @@ async fn handle_response_body_chunk(
     handler: &Arc<dyn AgentHandlerV2>,
     encoding: &UdsEncoding,
     payload: &[u8],
-) -> (String, V1Response, u64) {
+) -> (String, AgentResponse, u64) {
     let event: ResponseBodyChunkEvent = match encoding.deserialize(payload) {
         Ok(e) => e,
         Err(e) => {
             warn!(error = %e, "Failed to deserialize ResponseBodyChunk");
             let cid = extract_correlation_id(encoding, payload);
-            return (cid, V1Response::default_allow(), 0);
+            return (cid, AgentResponse::default_allow(), 0);
         }
     };
     let cid = event.correlation_id.clone();
@@ -333,13 +333,13 @@ async fn handle_request_complete(
     handler: &Arc<dyn AgentHandlerV2>,
     encoding: &UdsEncoding,
     payload: &[u8],
-) -> (String, V1Response, u64) {
+) -> (String, AgentResponse, u64) {
     let event: RequestCompleteEvent = match encoding.deserialize(payload) {
         Ok(e) => e,
         Err(e) => {
             warn!(error = %e, "Failed to deserialize RequestComplete");
             let cid = extract_correlation_id(encoding, payload);
-            return (cid, V1Response::default_allow(), 0);
+            return (cid, AgentResponse::default_allow(), 0);
         }
     };
     let cid = event.correlation_id.clone();
@@ -352,13 +352,13 @@ async fn handle_websocket_frame(
     handler: &Arc<dyn AgentHandlerV2>,
     encoding: &UdsEncoding,
     payload: &[u8],
-) -> (String, V1Response, u64) {
+) -> (String, AgentResponse, u64) {
     let event: WebSocketFrameEvent = match encoding.deserialize(payload) {
         Ok(e) => e,
         Err(e) => {
             warn!(error = %e, "Failed to deserialize WebSocketFrame");
             let cid = extract_correlation_id(encoding, payload);
-            return (cid, V1Response::websocket_allow(), 0);
+            return (cid, AgentResponse::websocket_allow(), 0);
         }
     };
     let cid = event.correlation_id.clone();
@@ -371,7 +371,7 @@ async fn handle_configure(
     handler: &Arc<dyn AgentHandlerV2>,
     encoding: &UdsEncoding,
     payload: &[u8],
-) -> (String, V1Response, u64) {
+) -> (String, AgentResponse, u64) {
     // Configure payloads carry config + optional version
     #[derive(serde::Deserialize)]
     struct ConfigurePayload {
@@ -388,7 +388,7 @@ async fn handle_configure(
         Err(e) => {
             warn!(error = %e, "Failed to deserialize Configure");
             let cid = extract_correlation_id(encoding, payload);
-            return (cid, V1Response::default_allow(), 0);
+            return (cid, AgentResponse::default_allow(), 0);
         }
     };
 
@@ -398,9 +398,9 @@ async fn handle_configure(
         .on_configure(parsed.config, parsed.config_version)
         .await;
     let resp = if accepted {
-        V1Response::default_allow()
+        AgentResponse::default_allow()
     } else {
-        V1Response::block(500, Some("Configuration rejected".to_string()))
+        AgentResponse::block(500, Some("Configuration rejected".to_string()))
     };
     (cid, resp, start.elapsed().as_millis() as u64)
 }
@@ -412,7 +412,7 @@ async fn handle_configure(
 async fn write_response<W: tokio::io::AsyncWriteExt + Unpin>(
     writer: &mut W,
     encoding: &UdsEncoding,
-    (correlation_id, mut response, _processing_time_ms): (String, V1Response, u64),
+    (correlation_id, mut response, _processing_time_ms): (String, AgentResponse, u64),
 ) -> Result<(), AgentProtocolError> {
     // Inject correlation_id so the client can route the response
     response.audit.custom.insert(
@@ -470,8 +470,8 @@ mod tests {
                 .with_event(crate::EventType::RequestHeaders)
         }
 
-        async fn on_request_headers(&self, event: RequestHeadersEvent) -> V1Response {
-            V1Response::default_allow().add_request_header(crate::HeaderOp::Set {
+        async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
+            AgentResponse::default_allow().add_request_header(crate::HeaderOp::Set {
                 name: "x-test-agent".to_string(),
                 value: event.metadata.correlation_id.clone(),
             })

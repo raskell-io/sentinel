@@ -8,9 +8,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
 
+use zentinel_agent_protocol::v2::server::AgentHandlerV2;
+use zentinel_agent_protocol::v2::uds::AgentClientV2Uds;
+use zentinel_agent_protocol::v2::uds_server::UdsAgentServerV2;
+use zentinel_agent_protocol::v2::AgentCapabilities;
 use zentinel_agent_protocol::{
-    AgentHandler, AgentResponse, AgentServer, AuditMetadata, Decision, EventType, HeaderOp,
-    RequestHeadersEvent, RequestMetadata,
+    AgentResponse, AuditMetadata, Decision, HeaderOp, RequestHeadersEvent, RequestMetadata,
 };
 use zentinel_common::CorrelationId;
 use zentinel_config::Config;
@@ -32,7 +35,11 @@ impl TestAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for TestAgent {
+impl AgentHandlerV2 for TestAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
             .add_request_header(HeaderOp::Set {
@@ -58,7 +65,11 @@ impl BlockingAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for BlockingAgent {
+impl AgentHandlerV2 for BlockingAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("blocking-agent", "Blocking Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
         for path in &self.block_paths {
             if event.uri.starts_with(path) {
@@ -201,7 +212,7 @@ async fn test_agent_server_client_roundtrip() {
     let socket_path = dir.path().join("test-agent.sock");
 
     // Start test agent server
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "test-agent",
         socket_path.clone(),
         Box::new(TestAgent::new("Test")),
@@ -215,13 +226,14 @@ async fn test_agent_server_client_roundtrip() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Create client and send request
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     let event = RequestHeadersEvent {
         metadata: RequestMetadata {
@@ -244,7 +256,7 @@ async fn test_agent_server_client_roundtrip() {
     };
 
     let response = client
-        .send_event(EventType::RequestHeaders, &event)
+        .send_request_headers("test-corr-123", &event)
         .await
         .expect("Should receive response");
 
@@ -264,7 +276,7 @@ async fn test_blocking_agent_rejects_request() {
     let socket_path = dir.path().join("block-agent.sock");
 
     // Start blocking agent server
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "block-agent",
         socket_path.clone(),
         Box::new(BlockingAgent::new(vec!["/admin".to_string()])),
@@ -276,13 +288,14 @@ async fn test_blocking_agent_rejects_request() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     // Test blocked path
     let event = RequestHeadersEvent {
@@ -306,7 +319,7 @@ async fn test_blocking_agent_rejects_request() {
     };
 
     let response = client
-        .send_event(EventType::RequestHeaders, &event)
+        .send_request_headers("test-123", &event)
         .await
         .expect("Should receive response");
 
@@ -339,7 +352,7 @@ async fn test_blocking_agent_rejects_request() {
     };
 
     let response = client
-        .send_event(EventType::RequestHeaders, &event)
+        .send_request_headers("test-456", &event)
         .await
         .expect("Should receive response");
 

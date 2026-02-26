@@ -19,7 +19,7 @@ use crate::grpc_v2::{
 use crate::v2::pool::CHANNEL_BUFFER_SIZE;
 use crate::v2::{AgentCapabilities, HandshakeRequest, HandshakeResponse, HealthStatus};
 use crate::{
-    AgentResponse as V1Response, Decision, EventType, HeaderOp, RequestBodyChunkEvent,
+    AgentResponse, Decision, EventType, HeaderOp, RequestBodyChunkEvent,
     RequestCompleteEvent, RequestHeadersEvent, RequestMetadata, ResponseBodyChunkEvent,
     ResponseHeadersEvent, WebSocketFrameEvent,
 };
@@ -44,33 +44,33 @@ pub trait AgentHandlerV2: Send + Sync {
     }
 
     /// Handle a request headers event.
-    async fn on_request_headers(&self, _event: RequestHeadersEvent) -> V1Response {
-        V1Response::default_allow()
+    async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
+        AgentResponse::default_allow()
     }
 
     /// Handle a request body chunk event.
-    async fn on_request_body_chunk(&self, _event: RequestBodyChunkEvent) -> V1Response {
-        V1Response::default_allow()
+    async fn on_request_body_chunk(&self, _event: RequestBodyChunkEvent) -> AgentResponse {
+        AgentResponse::default_allow()
     }
 
     /// Handle a response headers event.
-    async fn on_response_headers(&self, _event: ResponseHeadersEvent) -> V1Response {
-        V1Response::default_allow()
+    async fn on_response_headers(&self, _event: ResponseHeadersEvent) -> AgentResponse {
+        AgentResponse::default_allow()
     }
 
     /// Handle a response body chunk event.
-    async fn on_response_body_chunk(&self, _event: ResponseBodyChunkEvent) -> V1Response {
-        V1Response::default_allow()
+    async fn on_response_body_chunk(&self, _event: ResponseBodyChunkEvent) -> AgentResponse {
+        AgentResponse::default_allow()
     }
 
     /// Handle a request complete event.
-    async fn on_request_complete(&self, _event: RequestCompleteEvent) -> V1Response {
-        V1Response::default_allow()
+    async fn on_request_complete(&self, _event: RequestCompleteEvent) -> AgentResponse {
+        AgentResponse::default_allow()
     }
 
     /// Handle a WebSocket frame event.
-    async fn on_websocket_frame(&self, _event: WebSocketFrameEvent) -> V1Response {
-        V1Response::websocket_allow()
+    async fn on_websocket_frame(&self, _event: WebSocketFrameEvent) -> AgentResponse {
+        AgentResponse::websocket_allow()
     }
 
     /// Get current health status.
@@ -742,7 +742,7 @@ fn convert_websocket_frame_from_grpc(e: grpc_v2::WebSocketFrameEvent) -> WebSock
 
 fn create_agent_response(
     correlation_id: String,
-    resp: V1Response,
+    resp: AgentResponse,
     processing_time_ms: u64,
 ) -> AgentToProxy {
     let decision = match resp.decision {

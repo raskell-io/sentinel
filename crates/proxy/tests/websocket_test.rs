@@ -15,9 +15,12 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{accept_async, connect_async};
 
+use zentinel_agent_protocol::v2::server::AgentHandlerV2;
+use zentinel_agent_protocol::v2::uds::AgentClientV2Uds;
+use zentinel_agent_protocol::v2::uds_server::UdsAgentServerV2;
+use zentinel_agent_protocol::v2::AgentCapabilities;
 use zentinel_agent_protocol::{
-    AgentHandler, AgentResponse, AgentServer, Decision, EventType, RequestHeadersEvent,
-    WebSocketDecision, WebSocketFrameEvent,
+    AgentResponse, Decision, RequestHeadersEvent, WebSocketDecision, WebSocketFrameEvent,
 };
 
 // ============================================================================
@@ -129,7 +132,11 @@ impl AllowingAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for AllowingAgent {
+impl AgentHandlerV2 for AllowingAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
     }
@@ -166,7 +173,11 @@ impl FilteringAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for FilteringAgent {
+impl AgentHandlerV2 for FilteringAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
     }
@@ -222,7 +233,11 @@ impl ClosingAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for ClosingAgent {
+impl AgentHandlerV2 for ClosingAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
     }
@@ -281,7 +296,11 @@ impl DirectionalAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for DirectionalAgent {
+impl AgentHandlerV2 for DirectionalAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
     }
@@ -339,7 +358,7 @@ async fn test_agent_allows_all_frames() {
     let agent_clone = agent.clone();
 
     // Start agent server
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "allow-agent",
         socket_path.clone(),
         Box::new(AllowingAgentWrapper(agent_clone)),
@@ -353,13 +372,14 @@ async fn test_agent_allows_all_frames() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Create client and send WebSocket frame event
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     let event = WebSocketFrameEvent {
         correlation_id: "test-123".to_string(),
@@ -372,8 +392,9 @@ async fn test_agent_allows_all_frames() {
         client_ip: "127.0.0.1".to_string(),
     };
 
+    let correlation_id = event.correlation_id.clone();
     let response = client
-        .send_event(EventType::WebSocketFrame, &event)
+        .send_websocket_frame(&correlation_id, &event)
         .await
         .expect("Should receive response");
 
@@ -391,7 +412,11 @@ async fn test_agent_allows_all_frames() {
 struct AllowingAgentWrapper(Arc<AllowingAgent>);
 
 #[async_trait::async_trait]
-impl AgentHandler for AllowingAgentWrapper {
+impl AgentHandlerV2 for AllowingAgentWrapper {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
         self.0.on_request_headers(event).await
     }
@@ -414,7 +439,7 @@ async fn test_agent_drops_blocked_frames() {
     let agent_clone = agent.clone();
 
     // Start agent server
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "filter-agent",
         socket_path.clone(),
         Box::new(FilteringAgentWrapper(agent_clone)),
@@ -426,13 +451,14 @@ async fn test_agent_drops_blocked_frames() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     // Send allowed frame
     let event = WebSocketFrameEvent {
@@ -446,8 +472,9 @@ async fn test_agent_drops_blocked_frames() {
         client_ip: "127.0.0.1".to_string(),
     };
 
+    let correlation_id = event.correlation_id.clone();
     let response = client
-        .send_event(EventType::WebSocketFrame, &event)
+        .send_websocket_frame(&correlation_id, &event)
         .await
         .expect("Should receive response");
 
@@ -468,8 +495,9 @@ async fn test_agent_drops_blocked_frames() {
         client_ip: "127.0.0.1".to_string(),
     };
 
+    let correlation_id = event.correlation_id.clone();
     let response = client
-        .send_event(EventType::WebSocketFrame, &event)
+        .send_websocket_frame(&correlation_id, &event)
         .await
         .expect("Should receive response");
 
@@ -486,7 +514,11 @@ async fn test_agent_drops_blocked_frames() {
 struct FilteringAgentWrapper(Arc<FilteringAgent>);
 
 #[async_trait::async_trait]
-impl AgentHandler for FilteringAgentWrapper {
+impl AgentHandlerV2 for FilteringAgentWrapper {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
         self.0.on_request_headers(event).await
     }
@@ -509,7 +541,7 @@ async fn test_agent_closes_connection() {
     ));
     let agent_clone = agent.clone();
 
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "close-agent",
         socket_path.clone(),
         Box::new(ClosingAgentWrapper(agent_clone)),
@@ -521,13 +553,14 @@ async fn test_agent_closes_connection() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     // Send safe frame
     let event = WebSocketFrameEvent {
@@ -541,8 +574,9 @@ async fn test_agent_closes_connection() {
         client_ip: "127.0.0.1".to_string(),
     };
 
+    let correlation_id = event.correlation_id.clone();
     let response = client
-        .send_event(EventType::WebSocketFrame, &event)
+        .send_websocket_frame(&correlation_id, &event)
         .await
         .expect("Should receive response");
 
@@ -563,8 +597,9 @@ async fn test_agent_closes_connection() {
         client_ip: "127.0.0.1".to_string(),
     };
 
+    let correlation_id = event.correlation_id.clone();
     let response = client
-        .send_event(EventType::WebSocketFrame, &event)
+        .send_websocket_frame(&correlation_id, &event)
         .await
         .expect("Should receive response");
 
@@ -585,7 +620,11 @@ async fn test_agent_closes_connection() {
 struct ClosingAgentWrapper(Arc<ClosingAgent>);
 
 #[async_trait::async_trait]
-impl AgentHandler for ClosingAgentWrapper {
+impl AgentHandlerV2 for ClosingAgentWrapper {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
         self.0.on_request_headers(event).await
     }
@@ -603,7 +642,7 @@ async fn test_bidirectional_frame_inspection() {
     let agent = Arc::new(DirectionalAgent::new());
     let agent_clone = agent.clone();
 
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "direction-agent",
         socket_path.clone(),
         Box::new(DirectionalAgentWrapper(agent_clone)),
@@ -615,13 +654,14 @@ async fn test_bidirectional_frame_inspection() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     // Send client->server frames
     for i in 0..3 {
@@ -639,8 +679,9 @@ async fn test_bidirectional_frame_inspection() {
             client_ip: "127.0.0.1".to_string(),
         };
 
+        let correlation_id = event.correlation_id.clone();
         client
-            .send_event(EventType::WebSocketFrame, &event)
+            .send_websocket_frame(&correlation_id, &event)
             .await
             .expect("Should receive response");
     }
@@ -661,8 +702,9 @@ async fn test_bidirectional_frame_inspection() {
             client_ip: "127.0.0.1".to_string(),
         };
 
+        let correlation_id = event.correlation_id.clone();
         client
-            .send_event(EventType::WebSocketFrame, &event)
+            .send_websocket_frame(&correlation_id, &event)
             .await
             .expect("Should receive response");
     }
@@ -678,7 +720,11 @@ async fn test_bidirectional_frame_inspection() {
 struct DirectionalAgentWrapper(Arc<DirectionalAgent>);
 
 #[async_trait::async_trait]
-impl AgentHandler for DirectionalAgentWrapper {
+impl AgentHandlerV2 for DirectionalAgentWrapper {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
         self.0.on_request_headers(event).await
     }
@@ -697,7 +743,7 @@ async fn test_frame_index_tracking() {
     let indices = Arc::new(Mutex::new(Vec::new()));
     let indices_clone = indices.clone();
 
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "index-agent",
         socket_path.clone(),
         Box::new(IndexTrackingAgent {
@@ -711,13 +757,14 @@ async fn test_frame_index_tracking() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     // Send frames with specific indices
     for i in 0..5 {
@@ -732,8 +779,9 @@ async fn test_frame_index_tracking() {
             client_ip: "127.0.0.1".to_string(),
         };
 
+        let correlation_id = event.correlation_id.clone();
         client
-            .send_event(EventType::WebSocketFrame, &event)
+            .send_websocket_frame(&correlation_id, &event)
             .await
             .expect("Should receive response");
     }
@@ -751,7 +799,11 @@ struct IndexTrackingAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for IndexTrackingAgent {
+impl AgentHandlerV2 for IndexTrackingAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
     }
@@ -772,7 +824,7 @@ async fn test_binary_frame_inspection() {
     let received_data = Arc::new(Mutex::new(Vec::new()));
     let received_clone = received_data.clone();
 
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "binary-agent",
         socket_path.clone(),
         Box::new(BinaryDataAgent {
@@ -786,13 +838,14 @@ async fn test_binary_frame_inspection() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     // Send binary frame with raw bytes
     let binary_data: Vec<u8> = vec![0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD];
@@ -807,8 +860,9 @@ async fn test_binary_frame_inspection() {
         client_ip: "127.0.0.1".to_string(),
     };
 
+    let correlation_id = event.correlation_id.clone();
     client
-        .send_event(EventType::WebSocketFrame, &event)
+        .send_websocket_frame(&correlation_id, &event)
         .await
         .expect("Should receive response");
 
@@ -826,7 +880,11 @@ struct BinaryDataAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for BinaryDataAgent {
+impl AgentHandlerV2 for BinaryDataAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
     }
@@ -851,7 +909,7 @@ async fn test_fragmented_message_handling() {
     let fin_flags = Arc::new(Mutex::new(Vec::new()));
     let fin_clone = fin_flags.clone();
 
-    let server = AgentServer::new(
+    let server = UdsAgentServerV2::new(
         "fragment-agent",
         socket_path.clone(),
         Box::new(FragmentTrackingAgent { fins: fin_clone }),
@@ -863,13 +921,14 @@ async fn test_fragmented_message_handling() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut client = zentinel_agent_protocol::AgentClient::unix_socket(
+    let client = AgentClientV2Uds::new(
         "test-client",
-        &socket_path,
+        socket_path.to_string_lossy(),
         Duration::from_secs(5),
     )
     .await
-    .expect("Client should connect");
+    .expect("Client should create");
+    client.connect().await.expect("Client should connect");
 
     // Send fragmented message (fin=false, then fin=true)
     let events = [
@@ -893,8 +952,9 @@ async fn test_fragmented_message_handling() {
             client_ip: "127.0.0.1".to_string(),
         };
 
+        let correlation_id = event.correlation_id.clone();
         client
-            .send_event(EventType::WebSocketFrame, &event)
+            .send_websocket_frame(&correlation_id, &event)
             .await
             .expect("Should receive response");
     }
@@ -912,7 +972,11 @@ struct FragmentTrackingAgent {
 }
 
 #[async_trait::async_trait]
-impl AgentHandler for FragmentTrackingAgent {
+impl AgentHandlerV2 for FragmentTrackingAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("test-agent", "Test Agent", "0.1.0")
+    }
+
     async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
         AgentResponse::default_allow()
     }

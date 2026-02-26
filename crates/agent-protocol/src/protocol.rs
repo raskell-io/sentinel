@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Agent protocol version
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Maximum message size (10MB)
 pub const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
@@ -174,21 +174,6 @@ pub struct RequestMetadata {
     /// Agents can use this to create child spans that link to the proxy's span.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traceparent: Option<String>,
-}
-
-/// Configure event
-///
-/// Sent once when an agent connects, before any request events.
-/// Contains agent-specific configuration from the proxy's config file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfigureEvent {
-    /// Agent ID (from proxy config)
-    pub agent_id: String,
-    /// Agent-specific configuration (JSON object)
-    ///
-    /// The structure of this config depends on the agent type.
-    /// Agents should parse this into their own config struct.
-    pub config: serde_json::Value,
 }
 
 /// Request headers event
@@ -571,17 +556,6 @@ pub enum WebSocketDecision {
         /// Close reason
         reason: String,
     },
-}
-
-/// Agent request message
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentRequest {
-    /// Protocol version
-    pub version: u32,
-    /// Event type
-    pub event_type: EventType,
-    /// Event payload (JSON)
-    pub payload: serde_json::Value,
 }
 
 /// Agent response message

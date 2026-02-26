@@ -12,10 +12,12 @@ use clap::Parser;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
+use zentinel_agent_protocol::v2::server::{AgentHandlerV2, GrpcAgentServerV2};
+use zentinel_agent_protocol::v2::uds_server::UdsAgentServerV2;
+use zentinel_agent_protocol::v2::AgentCapabilities;
 use zentinel_agent_protocol::{
-    AgentHandler, AgentResponse, AgentServer, AuditMetadata, GrpcAgentServer, HeaderOp,
-    RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, ResponseBodyChunkEvent,
-    ResponseHeadersEvent,
+    AgentResponse, AuditMetadata, HeaderOp, RequestBodyChunkEvent, RequestCompleteEvent,
+    RequestHeadersEvent, ResponseBodyChunkEvent, ResponseHeadersEvent,
 };
 
 /// Echo agent command-line arguments
@@ -70,7 +72,11 @@ impl EchoAgent {
 }
 
 #[async_trait]
-impl AgentHandler for EchoAgent {
+impl AgentHandlerV2 for EchoAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("echo-agent", "Echo Agent", env!("CARGO_PKG_VERSION"))
+    }
+
     async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
         let request_num = self
             .request_count
@@ -385,7 +391,7 @@ async fn main() -> Result<()> {
             );
 
             let agent = Box::new(EchoAgent::new(args.prefix, args.verbose));
-            let server = AgentServer::new("echo-agent", socket, agent);
+            let server = UdsAgentServerV2::new("echo-agent", socket, agent);
 
             info!("Echo agent ready and listening on Unix socket");
 
@@ -404,7 +410,7 @@ async fn main() -> Result<()> {
             );
 
             let agent = Box::new(EchoAgent::new(args.prefix, args.verbose));
-            let server = GrpcAgentServer::new("echo-agent", agent);
+            let server = GrpcAgentServerV2::new("echo-agent", agent);
             let addr = grpc_addr
                 .parse()
                 .context("Invalid gRPC address format (expected host:port)")?;
@@ -428,7 +434,7 @@ async fn main() -> Result<()> {
             );
 
             let agent = Box::new(EchoAgent::new(args.prefix, args.verbose));
-            let server = AgentServer::new("echo-agent", socket, agent);
+            let server = UdsAgentServerV2::new("echo-agent", socket, agent);
 
             info!("Echo agent ready and listening on Unix socket");
 

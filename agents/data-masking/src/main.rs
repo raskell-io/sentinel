@@ -11,7 +11,8 @@ use clap::Parser;
 use std::path::PathBuf;
 use tracing::info;
 
-use zentinel_agent_protocol::{AgentServer, GrpcAgentServer};
+use zentinel_agent_protocol::v2::server::GrpcAgentServerV2;
+use zentinel_agent_protocol::v2::uds_server::UdsAgentServerV2;
 use zentinel_data_masking_agent::{DataMaskingAgent, DataMaskingConfig};
 
 /// Data Masking Agent command-line arguments.
@@ -78,7 +79,7 @@ async fn main() -> Result<()> {
                 "Starting data masking agent (Unix socket)"
             );
 
-            let server = AgentServer::new("data-masking-agent", socket, agent);
+            let server = UdsAgentServerV2::new("data-masking-agent", socket, agent);
 
             info!("Data masking agent ready and listening on Unix socket");
 
@@ -94,7 +95,7 @@ async fn main() -> Result<()> {
                 "Starting data masking agent (gRPC)"
             );
 
-            let server = GrpcAgentServer::new("data-masking-agent", agent);
+            let server = GrpcAgentServerV2::new("data-masking-agent", agent);
             let addr = grpc_addr
                 .parse()
                 .context("Invalid gRPC address format (expected host:port)")?;
@@ -115,7 +116,7 @@ async fn main() -> Result<()> {
                 "Starting data masking agent (Unix socket, default)"
             );
 
-            let server = AgentServer::new("data-masking-agent", socket, agent);
+            let server = UdsAgentServerV2::new("data-masking-agent", socket, agent);
 
             info!("Data masking agent ready and listening on Unix socket");
 

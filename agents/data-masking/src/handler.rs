@@ -1,4 +1,4 @@
-//! AgentHandler implementation for the Data Masking Agent.
+//! AgentHandlerV2 implementation for the Data Masking Agent.
 
 use crate::buffer::ChunkBuffer;
 use crate::config::{validate_config, DataMaskingConfig, TokenStoreConfig};
@@ -10,10 +10,11 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
+use zentinel_agent_protocol::v2::server::AgentHandlerV2;
+use zentinel_agent_protocol::v2::AgentCapabilities;
 use zentinel_agent_protocol::{
-    AgentHandler, AgentResponse, AuditMetadata, BodyMutation, ConfigureEvent, HeaderOp,
-    RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, ResponseBodyChunkEvent,
-    ResponseHeadersEvent,
+    AgentResponse, AuditMetadata, BodyMutation, HeaderOp, RequestBodyChunkEvent,
+    RequestCompleteEvent, RequestHeadersEvent, ResponseBodyChunkEvent, ResponseHeadersEvent,
 };
 
 /// Per-request state.
@@ -67,20 +68,21 @@ fn create_engine(config: &DataMaskingConfig) -> Result<MaskingEngine, anyhow::Er
 }
 
 #[async_trait]
-impl AgentHandler for DataMaskingAgent {
-    async fn on_configure(&self, event: ConfigureEvent) -> AgentResponse {
-        info!(agent_id = %event.agent_id, "Received configuration");
+impl AgentHandlerV2 for DataMaskingAgent {
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new("data-masking", "Data Masking Agent", env!("CARGO_PKG_VERSION"))
+    }
+
+    async fn on_configure(&self, config: serde_json::Value, _version: Option<String>) -> bool {
+        info!("Received configuration");
 
         // Parse agent-specific configuration
-        match serde_json::from_value::<DataMaskingConfig>(event.config.clone()) {
+        match serde_json::from_value::<DataMaskingConfig>(config) {
             Ok(new_config) => {
                 // Validate configuration
                 if let Err(e) = validate_config(&new_config) {
                     error!(error = %e, "Invalid configuration");
-                    return AgentResponse::block(
-                        500,
-                        Some(format!("Invalid configuration: {}", e)),
-                    );
+                    return false;
                 }
 
                 // Create new engine with updated config
@@ -93,17 +95,17 @@ impl AgentHandler for DataMaskingAgent {
                         *engine_guard = Some(engine);
 
                         info!("Configuration updated successfully");
-                        AgentResponse::default_allow()
+                        true
                     }
                     Err(e) => {
                         error!(error = %e, "Failed to create engine");
-                        AgentResponse::block(500, Some(format!("Engine error: {}", e)))
+                        false
                     }
                 }
             }
             Err(e) => {
                 warn!(error = %e, "Failed to parse configuration, using defaults");
-                AgentResponse::default_allow()
+                true
             }
         }
     }
