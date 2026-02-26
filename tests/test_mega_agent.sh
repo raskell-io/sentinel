@@ -183,15 +183,6 @@ agent_events() {
     esac
 }
 
-# Agents that use UdsAgentServerV2 need protocol-version "v2" in the config,
-# otherwise the proxy sends v1 JSON which causes "Unknown message type: 0x7b"
-agent_protocol_version() {
-    case "$1" in
-        bot-management|image-optimization|lua) echo "v2" ;;
-        *) echo "v1" ;;
-    esac
-}
-
 # State helpers (file-based, bash 3.2 safe)
 set_state()   { echo "$3" > "$STATE/$1.$2"; }
 get_state()   { cat "$STATE/$1.$2" 2>/dev/null || echo "${3:-N/A}"; }
@@ -764,10 +755,9 @@ EOF
     for name in "${AGENT_NAMES[@]}"; do
         [[ "$(get_state "$name" start)" != "OK" ]] && continue
 
-        local transport events proto_ver
+        local transport events
         transport=$(agent_transport "$name")
         events=$(agent_events "$name")
-        proto_ver=$(agent_protocol_version "$name")
 
         echo "    agent \"$name-agent\" type=\"custom\" {" >> "$config_file"
 
@@ -787,9 +777,6 @@ EOF
 
         echo "        timeout-ms 500" >> "$config_file"
         echo "        failure-mode \"open\"" >> "$config_file"
-        if [[ "$proto_ver" == "v2" ]]; then
-            echo "        protocol-version \"v2\"" >> "$config_file"
-        fi
         echo "    }" >> "$config_file"
     done
     echo "}" >> "$config_file"

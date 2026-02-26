@@ -271,7 +271,6 @@ agents {
     agent "lua-agent" {
         type "custom"
         grpc "http://127.0.0.1:$LUA_GRPC_PORT"
-        protocol-version "v2"
         events "request_headers"
         timeout-ms 200
         failure-mode "open"

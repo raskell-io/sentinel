@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// Agent protocol version
 pub const PROTOCOL_VERSION: u32 = 2;
 
-/// Maximum message size (10MB)
+/// Maximum message size for gRPC transport (10MB)
 pub const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 
 /// Agent event type
