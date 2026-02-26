@@ -782,6 +782,23 @@ EOF
     echo "}" >> "$config_file"
     echo "" >> "$config_file"
 
+    # Filters block — each agent gets a filter that wires it to routes
+    echo "filters {" >> "$config_file"
+    for name in "${AGENT_NAMES[@]}"; do
+        [[ "$(get_state "$name" start)" != "OK" ]] && continue
+
+        cat >> "$config_file" <<EOF
+    filter "$name-filter" {
+        type "agent"
+        agent "$name-agent"
+        timeout-ms 500
+        failure-mode "open"
+    }
+EOF
+    done
+    echo "}" >> "$config_file"
+    echo "" >> "$config_file"
+
     # Routes block
     echo "routes {" >> "$config_file"
 
@@ -805,7 +822,7 @@ EOF
             path-prefix "/test-$name/"
         }
         upstream "test-backend"
-        agents "$name-agent"
+        filters "$name-filter"
     }
 EOF
     done
