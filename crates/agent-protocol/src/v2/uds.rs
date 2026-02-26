@@ -272,6 +272,38 @@ impl From<UdsCapabilities> for AgentCapabilities {
     }
 }
 
+impl From<AgentCapabilities> for UdsCapabilities {
+    fn from(caps: AgentCapabilities) -> Self {
+        use crate::v2::server::event_type_to_i32;
+        UdsCapabilities {
+            agent_id: caps.agent_id,
+            name: caps.name,
+            version: caps.version,
+            supported_events: caps
+                .supported_events
+                .iter()
+                .map(|e| event_type_to_i32(*e))
+                .collect(),
+            features: UdsFeatures {
+                streaming_body: caps.features.streaming_body,
+                websocket: caps.features.websocket,
+                guardrails: caps.features.guardrails,
+                config_push: caps.features.config_push,
+                metrics_export: caps.features.metrics_export,
+                concurrent_requests: caps.features.concurrent_requests,
+                cancellation: caps.features.cancellation,
+                flow_control: caps.features.flow_control,
+                health_reporting: caps.features.health_reporting,
+            },
+            limits: UdsLimits {
+                max_body_size: caps.limits.max_body_size as u64,
+                max_concurrency: caps.limits.max_concurrency,
+                preferred_chunk_size: caps.limits.preferred_chunk_size as u64,
+            },
+        }
+    }
+}
+
 /// Convert i32 to EventType.
 fn event_type_from_i32(value: i32) -> Option<EventType> {
     match value {
@@ -656,6 +688,26 @@ impl AgentClientV2Uds {
             .await
     }
 
+    /// Send a request complete event.
+    pub async fn send_request_complete(
+        &self,
+        correlation_id: &str,
+        event: &crate::RequestCompleteEvent,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        self.send_event(MessageType::RequestComplete, correlation_id, event)
+            .await
+    }
+
+    /// Send a WebSocket frame event.
+    pub async fn send_websocket_frame(
+        &self,
+        correlation_id: &str,
+        event: &crate::WebSocketFrameEvent,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        self.send_event(MessageType::WebSocketFrame, correlation_id, event)
+            .await
+    }
+
     /// Send a guardrail inspect event.
     pub async fn send_guardrail_inspect(
         &self,
@@ -663,6 +715,16 @@ impl AgentClientV2Uds {
         event: &crate::GuardrailInspectEvent,
     ) -> Result<AgentResponse, AgentProtocolError> {
         self.send_event(MessageType::GuardrailInspect, correlation_id, event)
+            .await
+    }
+
+    /// Send a configure event.
+    pub async fn send_configure(
+        &self,
+        correlation_id: &str,
+        event: &serde_json::Value,
+    ) -> Result<AgentResponse, AgentProtocolError> {
+        self.send_event(MessageType::Configure, correlation_id, event)
             .await
     }
 

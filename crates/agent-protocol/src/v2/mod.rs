@@ -20,6 +20,7 @@ pub mod reverse;
 pub mod server;
 mod streaming;
 pub mod uds;
+pub mod uds_server;
 
 pub use capabilities::*;
 pub use client::{AgentClientV2, CancelReason, ConfigUpdateCallback, FlowState, MetricsCallback};
@@ -46,6 +47,7 @@ pub use uds::{
     AgentClientV2Uds, MessageType, UdsCapabilities, UdsEncoding, UdsFeatures, UdsHandshakeRequest,
     UdsHandshakeResponse, UdsLimits, MAX_UDS_MESSAGE_SIZE,
 };
+pub use uds_server::UdsAgentServerV2;
 
 /// Protocol version 2
 pub const PROTOCOL_VERSION_2: u32 = 2;

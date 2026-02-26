@@ -613,7 +613,7 @@ fn convert_capabilities_to_grpc(caps: &AgentCapabilities) -> grpc_v2::AgentCapab
     }
 }
 
-fn event_type_to_i32(event_type: EventType) -> i32 {
+pub(crate) fn event_type_to_i32(event_type: EventType) -> i32 {
     match event_type {
         EventType::Configure => 8,
         EventType::RequestHeaders => 1,
