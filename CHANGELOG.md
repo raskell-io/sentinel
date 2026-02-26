@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.02_17](#260217---2026-02-26) | 0.5.10 | 2026-02-26 | Remove v1 agent protocol |
 | [26.02_16](#260216---2026-02-24) | 0.5.7 | 2026-02-24 | Fix KDL parser missing agent event aliases |
 | [26.02_14](#260214---2026-02-24) | 0.5.5 | 2026-02-24 | Bundle command with agent registry, API-first bundle fetch |
 | [26.02_7](#26027---2026-02-16) | 0.5.0 | 2026-02-16 | Wire 18 config features into runtime, filter & config coverage tests |
@@ -31,6 +32,18 @@ for details.
 | [26.01_0](#26010---2026-01-01) | 0.2.0 | 2026-01-01 | First CalVer release |
 | [25.12](#2512) | 0.1.x | 2025-12 | Initial public releases |
 | [24.12](#2412) | 0.1.0 | 2024-12 | Initial development |
+
+---
+
+## [26.02_17] - 2026-02-26
+
+**Crate version:** 0.5.10
+
+### Removed
+- **V1 agent protocol** — All 25 external agents have migrated to v2. Removed the v1 `Agent` implementation, `AgentConnectionPool`, `UnifiedAgent` dispatch enum, and `AgentProtocolVersion` config enum (~1,600 lines deleted). All agents now use the v2 binary protocol with bidirectional streaming, connection pooling, and health reporting.
+
+### Changed
+- **`protocol-version` KDL field** — Now a deprecated no-op that emits a warning. Existing configs continue to work without modification.
 
 ---
 
