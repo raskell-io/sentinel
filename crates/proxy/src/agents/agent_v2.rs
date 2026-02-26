@@ -399,6 +399,82 @@ impl AgentV2 {
             })
     }
 
+    /// Call agent with a generic event, dispatching to the appropriate typed method.
+    ///
+    /// The event is serialized and deserialized to convert between the generic
+    /// type and the specific event struct expected by each typed method.
+    pub async fn call_event<T: serde::Serialize>(
+        &self,
+        event_type: EventType,
+        event: &T,
+    ) -> ZentinelResult<AgentResponse> {
+        let json = serde_json::to_value(event).map_err(|e| ZentinelError::Agent {
+            agent: self.config.id.clone(),
+            message: format!("Failed to serialize event: {}", e),
+            event: format!("{:?}", event_type),
+            source: None,
+        })?;
+
+        match event_type {
+            EventType::RequestHeaders => {
+                let typed: RequestHeadersEvent =
+                    serde_json::from_value(json).map_err(|e| ZentinelError::Agent {
+                        agent: self.config.id.clone(),
+                        message: format!("Failed to deserialize RequestHeadersEvent: {}", e),
+                        event: format!("{:?}", event_type),
+                        source: None,
+                    })?;
+                self.call_request_headers(&typed).await
+            }
+            EventType::RequestBodyChunk => {
+                let typed: RequestBodyChunkEvent =
+                    serde_json::from_value(json).map_err(|e| ZentinelError::Agent {
+                        agent: self.config.id.clone(),
+                        message: format!("Failed to deserialize RequestBodyChunkEvent: {}", e),
+                        event: format!("{:?}", event_type),
+                        source: None,
+                    })?;
+                self.call_request_body_chunk(&typed).await
+            }
+            EventType::ResponseHeaders => {
+                let typed: ResponseHeadersEvent =
+                    serde_json::from_value(json).map_err(|e| ZentinelError::Agent {
+                        agent: self.config.id.clone(),
+                        message: format!("Failed to deserialize ResponseHeadersEvent: {}", e),
+                        event: format!("{:?}", event_type),
+                        source: None,
+                    })?;
+                self.call_response_headers(&typed).await
+            }
+            EventType::ResponseBodyChunk => {
+                let typed: ResponseBodyChunkEvent =
+                    serde_json::from_value(json).map_err(|e| ZentinelError::Agent {
+                        agent: self.config.id.clone(),
+                        message: format!("Failed to deserialize ResponseBodyChunkEvent: {}", e),
+                        event: format!("{:?}", event_type),
+                        source: None,
+                    })?;
+                self.call_response_body_chunk(&typed).await
+            }
+            EventType::GuardrailInspect => {
+                let typed: GuardrailInspectEvent =
+                    serde_json::from_value(json).map_err(|e| ZentinelError::Agent {
+                        agent: self.config.id.clone(),
+                        message: format!("Failed to deserialize GuardrailInspectEvent: {}", e),
+                        event: format!("{:?}", event_type),
+                        source: None,
+                    })?;
+                self.call_guardrail_inspect(&typed).await
+            }
+            _ => Err(ZentinelError::Agent {
+                agent: self.config.id.clone(),
+                message: format!("Unsupported event type {:?}", event_type),
+                event: format!("{:?}", event_type),
+                source: None,
+            }),
+        }
+    }
+
     /// Cancel an in-flight request.
     pub async fn cancel_request(
         &self,

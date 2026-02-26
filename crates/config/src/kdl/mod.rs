@@ -196,9 +196,7 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
 // Agent Parsing
 // ============================================================================
 
-use crate::agents::{
-    AgentEvent, AgentProtocolVersion, AgentTlsConfig, AgentTransport, AgentType, BodyStreamingMode,
-};
+use crate::agents::{AgentEvent, AgentTlsConfig, AgentTransport, AgentType, BodyStreamingMode};
 use crate::routes::FailureMode;
 use std::path::PathBuf;
 use zentinel_common::types::CircuitBreakerConfig;
@@ -361,8 +359,6 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
     let mut chunk_timeout_ms = 5000u64;
     let mut config: Option<serde_json::Value> = None;
     let mut max_concurrent_calls = 100usize; // Per-agent concurrency limit
-    let mut protocol_version = AgentProtocolVersion::default();
-
     for child in children.nodes() {
         match child.name().value() {
             "unix-socket" => {
@@ -478,18 +474,10 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
                 }
             }
             "protocol-version" => {
-                if let Some(version) = get_first_arg_string(child) {
-                    protocol_version = match version.as_str() {
-                        "v1" | "1" => AgentProtocolVersion::V1,
-                        "v2" | "2" => AgentProtocolVersion::V2,
-                        other => {
-                            return Err(anyhow::anyhow!(
-                                "Unknown protocol version: '{}'. Use 'v1' or 'v2'",
-                                other
-                            ))
-                        }
-                    };
-                }
+                warn!(
+                    agent_id = %id,
+                    "The 'protocol-version' field is deprecated and ignored. All agents use v2 protocol."
+                );
             }
             _ => {}
         }
@@ -512,8 +500,7 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
         agent_type,
         transport,
         events,
-        protocol_version,
-        pool: None, // No v2 pool config by default
+        pool: None,
         timeout_ms,
         failure_mode,
         circuit_breaker,

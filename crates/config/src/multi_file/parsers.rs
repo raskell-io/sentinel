@@ -266,8 +266,7 @@ pub(super) fn parse_agent(node: &KdlNode) -> Result<AgentConfig> {
         agent_type,
         transport,
         events: vec![crate::AgentEvent::RequestHeaders],
-        protocol_version: Default::default(), // V1 by default
-        pool: None,                           // No v2 pool config by default
+        pool: None,
         timeout_ms: get_int_entry(node, "timeout-ms")
             .map(|v| v as u64)
             .unwrap_or(100),

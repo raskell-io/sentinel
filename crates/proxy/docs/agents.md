@@ -358,28 +358,19 @@ agent "content-filter" {
 
 ## Connection Pooling
 
-Each agent maintains a connection pool for efficient reuse:
-
-```rust
-pub struct AgentConnectionPool {
-    connections: Vec<Connection>,
-    max_connections: usize,
-    idle_timeout: Duration,
-}
-
-impl AgentConnectionPool {
-    pub async fn get(&self) -> Result<PooledConnection, Error>;
-    pub fn return_connection(&self, conn: Connection);
-}
-```
+Each agent uses the v2 protocol's built-in connection pool with configurable
+connections per agent, load balancing, and health checking. The pool is managed
+internally by the agent and handles reconnection automatically.
 
 Configuration:
 
 ```kdl
 agent "waf-agent" {
-    connection-pool {
-        max-connections 10
-        idle-timeout-secs 60
+    pool {
+        connections-per-agent 4
+        load-balance-strategy "round_robin"
+        connect-timeout-ms 5000
+        health-check-interval-ms 10000
     }
 }
 ```

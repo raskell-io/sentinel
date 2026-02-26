@@ -58,8 +58,8 @@ pub mod waf;
 
 // Agents
 pub use agents::{
-    AgentConfig, AgentEvent, AgentPoolConfig, AgentProtocolVersion, AgentTlsConfig, AgentTransport,
-    AgentType, BodyStreamingMode, LoadBalanceStrategy,
+    AgentConfig, AgentEvent, AgentPoolConfig, AgentTlsConfig, AgentTransport, AgentType,
+    BodyStreamingMode, LoadBalanceStrategy,
 };
 
 // Defaults

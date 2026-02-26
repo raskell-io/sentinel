@@ -60,18 +60,7 @@ fn default_hybrid_threshold() -> usize {
 // Agent Configuration
 // ============================================================================
 
-/// Agent protocol version
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentProtocolVersion {
-    /// Protocol v1 (default) - Simple request/response
-    #[default]
-    V1,
-    /// Protocol v2 - Bidirectional streaming with capabilities, health, metrics
-    V2,
-}
-
-/// V2-specific pool configuration
+/// Pool configuration for agent connections
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPoolConfig {
     /// Number of connections to maintain per agent (default: 4)
@@ -175,15 +164,7 @@ pub struct AgentConfig {
     /// Events this agent handles
     pub events: Vec<AgentEvent>,
 
-    /// Protocol version (default: v1)
-    ///
-    /// - `v1`: Simple request/response protocol (backwards compatible)
-    /// - `v2`: Bidirectional streaming with capabilities, health reporting,
-    ///   metrics export, and flow control
-    #[serde(default)]
-    pub protocol_version: AgentProtocolVersion,
-
-    /// V2 pool configuration (only used when protocol_version is v2)
+    /// Pool configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool: Option<AgentPoolConfig>,
 

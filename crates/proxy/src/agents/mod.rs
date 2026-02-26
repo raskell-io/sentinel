@@ -1,23 +1,16 @@
 //! Agent integration module for Zentinel proxy.
 //!
 //! This module provides integration with external processing agents for WAF,
-//! auth, rate limiting, and custom logic. It implements the SPOE-inspired
-//! protocol with bounded behavior and failure isolation.
+//! auth, rate limiting, and custom logic. Agents communicate using the v2
+//! binary protocol with bidirectional streaming, capabilities, health
+//! reporting, metrics export, and flow control.
 //!
 //! # Architecture
 //!
 //! - [`AgentManager`]: Coordinates all agents, handles routing to appropriate agents
-//! - [`Agent`]: Protocol v1 agent with connection, circuit breaker, and metrics
-//! - [`AgentV2`]: Protocol v2 agent with bidirectional streaming and pooling
-//! - [`AgentConnectionPool`]: Connection pooling for efficient connection reuse (v1)
+//! - [`AgentV2`]: Agent with bidirectional streaming and connection pooling
 //! - [`AgentDecision`]: Combined result from processing through agents
 //! - [`AgentCallContext`]: Request context passed to agents
-//!
-//! # Protocol Versions
-//!
-//! - **V1**: Simple request/response protocol (backwards compatible)
-//! - **V2**: Bidirectional streaming with capabilities, health reporting,
-//!   metrics export, and flow control
 //!
 //! # Queue Isolation
 //!
@@ -40,21 +33,17 @@
 //! }
 //! ```
 
-mod agent;
 mod agent_v2;
 mod context;
 mod decision;
 mod manager;
 mod metrics;
-mod pool;
 
-pub use agent::Agent;
 pub use agent_v2::AgentV2;
 pub use context::AgentCallContext;
 pub use decision::{AgentAction, AgentDecision};
 pub use manager::AgentManager;
 pub use metrics::AgentMetrics;
-pub use pool::AgentConnectionPool;
 
 #[cfg(test)]
 mod tests {
@@ -104,9 +93,7 @@ mod tests {
     #[tokio::test]
     async fn test_per_agent_queue_isolation_config() {
         use std::path::PathBuf;
-        use zentinel_config::{
-            AgentConfig, AgentEvent, AgentProtocolVersion, AgentTransport, AgentType,
-        };
+        use zentinel_config::{AgentConfig, AgentEvent, AgentTransport, AgentType};
 
         // Verify the max_concurrent_calls field works in AgentConfig
         let config = AgentConfig {
@@ -116,7 +103,6 @@ mod tests {
                 path: PathBuf::from("/tmp/test.sock"),
             },
             events: vec![AgentEvent::RequestHeaders],
-            protocol_version: AgentProtocolVersion::V1,
             pool: None,
             timeout_ms: 1000,
             failure_mode: Default::default(),
@@ -140,7 +126,6 @@ mod tests {
                 path: PathBuf::from("/tmp/default.sock"),
             },
             events: vec![AgentEvent::RequestHeaders],
-            protocol_version: AgentProtocolVersion::V1,
             pool: None,
             timeout_ms: 1000,
             failure_mode: Default::default(),
@@ -158,21 +143,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_v2_agent_config() {
+    async fn test_agent_pool_config() {
         use zentinel_config::{
-            AgentConfig, AgentEvent, AgentPoolConfig, AgentProtocolVersion, AgentTransport,
-            AgentType, LoadBalanceStrategy,
+            AgentConfig, AgentEvent, AgentPoolConfig, AgentTransport, AgentType,
+            LoadBalanceStrategy,
         };
 
         let config = AgentConfig {
-            id: "v2-agent".to_string(),
+            id: "pooled-agent".to_string(),
             agent_type: AgentType::Waf,
             transport: AgentTransport::Grpc {
                 address: "localhost:50051".to_string(),
                 tls: None,
             },
             events: vec![AgentEvent::RequestHeaders, AgentEvent::RequestBody],
-            protocol_version: AgentProtocolVersion::V2,
             pool: Some(AgentPoolConfig {
                 connections_per_agent: 8,
                 load_balance_strategy: LoadBalanceStrategy::LeastConnections,
@@ -195,7 +179,6 @@ mod tests {
             max_concurrent_calls: 100,
         };
 
-        assert_eq!(config.protocol_version, AgentProtocolVersion::V2);
         assert!(config.pool.is_some());
         let pool = config.pool.unwrap();
         assert_eq!(pool.connections_per_agent, 8);
