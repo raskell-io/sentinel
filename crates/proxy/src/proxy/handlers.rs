@@ -364,6 +364,9 @@ impl ZentinelProxy {
         // Extract just the agent IDs for logging and body inspection
         let agent_ids: Vec<String> = agent_filters.iter().map(|(id, _)| id.clone()).collect();
 
+        // Save agent IDs in context for response-phase processing
+        ctx.route_agent_ids = agent_ids.clone();
+
         debug!(
             correlation_id = %ctx.trace_id,
             route_id = %route_id,

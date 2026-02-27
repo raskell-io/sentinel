@@ -104,6 +104,19 @@ impl AgentManager {
         })
     }
 
+    /// Check if any of the given route agents handle a specific event type.
+    pub async fn any_agent_handles_event(
+        &self,
+        route_agents: &[String],
+        event_type: EventType,
+    ) -> bool {
+        let agents = self.agents.read().await;
+        route_agents
+            .iter()
+            .filter_map(|id| agents.get(id))
+            .any(|agent| agent.handles_event(event_type))
+    }
+
     /// Process request headers through agents.
     ///
     /// # Arguments

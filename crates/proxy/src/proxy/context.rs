@@ -303,6 +303,16 @@ pub struct RequestContext {
     pub(crate) cors_origin: Option<String>,
     /// Whether response compression is enabled by a Compress filter
     pub(crate) compress_enabled: bool,
+
+    // === Response-Phase Agent Processing ===
+    /// Agent IDs resolved from route filters (saved in request phase for response phase)
+    pub(crate) route_agent_ids: Vec<String>,
+    /// Whether response-phase agent processing is enabled (agent subscribes to response events)
+    pub(crate) response_agent_processing_enabled: bool,
+    /// Accumulated response body buffer for agent processing (when agent needs full body)
+    pub(crate) response_agent_body_buffer: Vec<u8>,
+    /// Whether response body has been fully received by agent
+    pub(crate) response_agent_body_complete: bool,
 }
 
 /// Pending shadow request information stored in context for deferred execution
@@ -408,6 +418,10 @@ impl RequestContext {
             filter_upstream_timeout_secs: None,
             cors_origin: None,
             compress_enabled: false,
+            route_agent_ids: Vec::new(),
+            response_agent_processing_enabled: false,
+            response_agent_body_buffer: Vec::new(),
+            response_agent_body_complete: false,
         }
     }
 
