@@ -333,15 +333,8 @@ build_agent() {
     binary=$(agent_binary "$name")
     local repo="$AGENT_ROOT/zentinel-agent-$name"
 
-    # 1) Already downloaded?
-    if [[ -f "$BINDIR/$binary" ]]; then
-        log_info "  $name: using downloaded binary"
-        set_state "$name" build "OK"
-        BUILDS_OK=$((BUILDS_OK + 1))
-        return 0
-    fi
-
-    # 2) Already built locally?
+    # 1) Already built locally? Prefer local builds — they have the latest
+    #    protocol changes. Downloaded release binaries may be stale.
     if [[ "$name" == "policy" ]]; then
         local policy_bin
         policy_bin=$(cd "$repo" 2>/dev/null && cabal list-bin "$binary" 2>/dev/null || true)
@@ -358,7 +351,38 @@ build_agent() {
         return 0
     fi
 
-    # 3) Try downloading from GitHub release
+    # 2) Build from source if repo exists
+    if [[ -d "$repo" ]]; then
+        if [[ "$name" == "policy" ]]; then
+            log_info "  $name: building with cabal..."
+            if (cd "$repo" && cabal build 2>"$LOGS/$name-build.log"); then
+                set_state "$name" build "OK"
+                BUILDS_OK=$((BUILDS_OK + 1))
+            else
+                log_failure "  $name: cabal build failed"
+                tail -5 "$LOGS/$name-build.log" 2>/dev/null || true
+                set_state "$name" build "FAIL"
+                BUILDS_FAILED=$((BUILDS_FAILED + 1))
+                return 1
+            fi
+            return 0
+        fi
+
+        log_info "  $name: building from source..."
+        if (cd "$repo" && cargo build --release 2>"$LOGS/$name-build.log"); then
+            set_state "$name" build "OK"
+            BUILDS_OK=$((BUILDS_OK + 1))
+            return 0
+        else
+            log_failure "  $name: cargo build failed"
+            tail -5 "$LOGS/$name-build.log" 2>/dev/null || true
+            set_state "$name" build "FAIL"
+            BUILDS_FAILED=$((BUILDS_FAILED + 1))
+            return 1
+        fi
+    fi
+
+    # 3) No local repo — try downloading from GitHub release
     if download_agent "$name"; then
         log_success "  $name: downloaded from release"
         set_state "$name" build "OK"
@@ -366,40 +390,10 @@ build_agent() {
         return 0
     fi
 
-    # 4) Fall back to building from source
-    if [[ ! -d "$repo" ]]; then
-        log_failure "  $name: no release and repo not found"
-        set_state "$name" build "FAIL"
-        BUILDS_FAILED=$((BUILDS_FAILED + 1))
-        return 1
-    fi
-
-    if [[ "$name" == "policy" ]]; then
-        log_info "  $name: building with cabal..."
-        if (cd "$repo" && cabal build 2>"$LOGS/$name-build.log"); then
-            set_state "$name" build "OK"
-            BUILDS_OK=$((BUILDS_OK + 1))
-        else
-            log_failure "  $name: cabal build failed"
-            tail -5 "$LOGS/$name-build.log" 2>/dev/null || true
-            set_state "$name" build "FAIL"
-            BUILDS_FAILED=$((BUILDS_FAILED + 1))
-            return 1
-        fi
-        return 0
-    fi
-
-    log_info "  $name: building from source..."
-    if (cd "$repo" && cargo build --release 2>"$LOGS/$name-build.log"); then
-        set_state "$name" build "OK"
-        BUILDS_OK=$((BUILDS_OK + 1))
-    else
-        log_failure "  $name: cargo build failed"
-        tail -5 "$LOGS/$name-build.log" 2>/dev/null || true
-        set_state "$name" build "FAIL"
-        BUILDS_FAILED=$((BUILDS_FAILED + 1))
-        return 1
-    fi
+    log_failure "  $name: no local repo and no release available"
+    set_state "$name" build "FAIL"
+    BUILDS_FAILED=$((BUILDS_FAILED + 1))
+    return 1
 }
 
 build_all() {
@@ -562,10 +556,13 @@ get_agent_bin_path() {
     binary=$(agent_binary "$name")
     local repo="$AGENT_ROOT/zentinel-agent-$name"
 
-    if [[ -f "$BINDIR/$binary" ]]; then
-        echo "$BINDIR/$binary"
-    elif [[ "$name" == "policy" ]]; then
+    # Prefer local builds over downloaded binaries
+    if [[ "$name" == "policy" ]]; then
         (cd "$repo" 2>/dev/null && cabal list-bin "$binary" 2>/dev/null) || echo ""
+    elif [[ -f "$repo/target/release/$binary" ]]; then
+        echo "$repo/target/release/$binary"
+    elif [[ -f "$BINDIR/$binary" ]]; then
+        echo "$BINDIR/$binary"
     else
         echo "$repo/target/release/$binary"
     fi

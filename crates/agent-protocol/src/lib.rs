@@ -59,8 +59,8 @@ pub use protocol::{
     BodyMutation, Decision, DetectionSeverity, EventType, GuardrailDetection,
     GuardrailInspectEvent, GuardrailInspectionType, GuardrailResponse, HeaderOp,
     RequestBodyChunkEvent, RequestCompleteEvent, RequestHeadersEvent, RequestMetadata,
-    ResponseBodyChunkEvent, ResponseHeadersEvent, TextSpan, WebSocketDecision,
-    WebSocketFrameEvent, WebSocketOpcode, MAX_MESSAGE_SIZE,
+    ResponseBodyChunkEvent, ResponseHeadersEvent, TextSpan, WebSocketDecision, WebSocketFrameEvent,
+    WebSocketOpcode, MAX_MESSAGE_SIZE,
 };
 
 #[cfg(test)]

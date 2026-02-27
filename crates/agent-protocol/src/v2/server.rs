@@ -19,9 +19,9 @@ use crate::grpc_v2::{
 use crate::v2::pool::CHANNEL_BUFFER_SIZE;
 use crate::v2::{AgentCapabilities, HandshakeRequest, HandshakeResponse, HealthStatus};
 use crate::{
-    AgentResponse, Decision, EventType, HeaderOp, RequestBodyChunkEvent,
-    RequestCompleteEvent, RequestHeadersEvent, RequestMetadata, ResponseBodyChunkEvent,
-    ResponseHeadersEvent, WebSocketFrameEvent,
+    AgentResponse, Decision, EventType, HeaderOp, RequestBodyChunkEvent, RequestCompleteEvent,
+    RequestHeadersEvent, RequestMetadata, ResponseBodyChunkEvent, ResponseHeadersEvent,
+    WebSocketFrameEvent,
 };
 
 /// v2 agent handler trait.

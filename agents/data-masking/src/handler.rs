@@ -70,7 +70,11 @@ fn create_engine(config: &DataMaskingConfig) -> Result<MaskingEngine, anyhow::Er
 #[async_trait]
 impl AgentHandlerV2 for DataMaskingAgent {
     fn capabilities(&self) -> AgentCapabilities {
-        AgentCapabilities::new("data-masking", "Data Masking Agent", env!("CARGO_PKG_VERSION"))
+        AgentCapabilities::new(
+            "data-masking",
+            "Data Masking Agent",
+            env!("CARGO_PKG_VERSION"),
+        )
     }
 
     async fn on_configure(&self, config: serde_json::Value, _version: Option<String>) -> bool {
