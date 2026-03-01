@@ -164,7 +164,7 @@ agent_events() {
         denylist)            echo "request_headers" ;;
         graphql-security)    echo "request_headers request_body" ;;
         grpc-inspector)      echo "request_headers request_body" ;;
-        image-optimization)  echo "request_headers response_headers response_body" ;;
+        image-optimization)  echo "request_headers response_headers response_body request_complete" ;;
         ip-reputation)       echo "request_headers" ;;
         js)                  echo "request_headers response_headers" ;;
         lua)                 echo "request_headers response_headers" ;;

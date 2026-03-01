@@ -20,7 +20,11 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(feature = "runtime")]
+use std::collections::HashSet;
 use std::path::Path;
+#[cfg(feature = "runtime")]
+use std::path::PathBuf;
 use tracing::{debug, info, trace, warn};
 use validator::Validate;
 
@@ -344,7 +348,10 @@ impl Config {
         );
 
         let config = match extension {
-            "kdl" => Self::from_kdl(&content),
+            "kdl" => {
+                let expanded = Self::expand_kdl_includes(&content, path)?;
+                Self::from_kdl(&expanded)
+            }
             "json" => Self::from_json(&content),
             "toml" => Self::from_toml(&content),
             _ => Err(anyhow::anyhow!("Unsupported config format: {}", extension)),
@@ -360,6 +367,160 @@ impl Config {
         );
 
         Ok(config)
+    }
+
+    /// Expand `include` directives in KDL content.
+    ///
+    /// This pre-processes the KDL string, resolving any `include` directives
+    /// by reading the referenced files (supporting glob patterns) and
+    /// recursively expanding their includes. Returns a single KDL string
+    /// with all includes inlined.
+    #[cfg(feature = "runtime")]
+    fn expand_kdl_includes(content: &str, source_path: &Path) -> Result<String> {
+        // Quick check: if there are no include directives, return as-is
+        let doc: ::kdl::KdlDocument = content.parse().map_err(|e| {
+            anyhow::anyhow!("KDL parse error during include expansion: {}", e)
+        })?;
+
+        let has_includes = doc.nodes().iter().any(|n| n.name().value() == "include");
+        if !has_includes {
+            return Ok(content.to_string());
+        }
+
+        let mut visited = HashSet::new();
+        Self::expand_includes_recursive(content, source_path, &mut visited)
+    }
+
+    /// Fallback when the `runtime` feature is not enabled.
+    #[cfg(not(feature = "runtime"))]
+    fn expand_kdl_includes(content: &str, source_path: &Path) -> Result<String> {
+        // Check if the content has include directives
+        let doc: ::kdl::KdlDocument = content.parse().map_err(|e| {
+            anyhow::anyhow!("KDL parse error during include expansion: {}", e)
+        })?;
+
+        let has_includes = doc.nodes().iter().any(|n| n.name().value() == "include");
+        if has_includes {
+            return Err(anyhow::anyhow!(
+                "The 'include' directive in '{}' requires the 'runtime' feature.\n\
+                 Build with: cargo build --features runtime",
+                source_path.display()
+            ));
+        }
+
+        Ok(content.to_string())
+    }
+
+    /// Recursively expand include directives in a KDL file.
+    ///
+    /// Parses the KDL content, replaces `include` nodes with the contents of
+    /// the referenced files, and returns the merged KDL string. Uses a visited
+    /// set of canonical paths to detect and prevent circular includes.
+    #[cfg(feature = "runtime")]
+    fn expand_includes_recursive(
+        content: &str,
+        source_path: &Path,
+        visited: &mut HashSet<PathBuf>,
+    ) -> Result<String> {
+        let canonical = source_path
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve config path: {}", source_path.display()))?;
+
+        if !visited.insert(canonical.clone()) {
+            return Err(anyhow::anyhow!(
+                "Circular include detected: '{}' has already been included",
+                source_path.display()
+            ));
+        }
+
+        let base_dir = canonical
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory: {}", source_path.display()))?;
+
+        let doc: ::kdl::KdlDocument = content.parse().map_err(|e| {
+            anyhow::anyhow!("KDL parse error in '{}': {}", source_path.display(), e)
+        })?;
+
+        let mut output = String::new();
+
+        for node in doc.nodes() {
+            if node.name().value() == "include" {
+                let pattern = node
+                    .entries()
+                    .iter()
+                    .find_map(|e| {
+                        if e.name().is_none() {
+                            e.value().as_string().map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "The 'include' directive requires a string argument, e.g.: include \"routes/*.kdl\"\n\
+                             Found in: {}",
+                            source_path.display()
+                        )
+                    })?;
+
+                // Resolve pattern relative to source file's directory
+                let full_pattern = base_dir.join(&pattern);
+                let pattern_str = full_pattern.to_str().ok_or_else(|| {
+                    anyhow::anyhow!("Include pattern contains invalid UTF-8: {:?}", full_pattern)
+                })?;
+
+                let mut matched_any = false;
+                let mut paths: Vec<PathBuf> = Vec::new();
+
+                for entry in glob::glob(pattern_str).with_context(|| {
+                    format!("Invalid glob pattern '{}' in {}", pattern, source_path.display())
+                })? {
+                    let path = entry.with_context(|| {
+                        format!("Error reading glob match for '{}' in {}", pattern, source_path.display())
+                    })?;
+                    paths.push(path);
+                }
+
+                // Sort for deterministic include order
+                paths.sort();
+
+                for path in paths {
+                    matched_any = true;
+                    debug!(
+                        include = %path.display(),
+                        from = %source_path.display(),
+                        "Including config file"
+                    );
+
+                    let included_content = std::fs::read_to_string(&path).with_context(|| {
+                        format!(
+                            "Failed to read included config file '{}' (included from '{}')",
+                            path.display(),
+                            source_path.display()
+                        )
+                    })?;
+
+                    let expanded =
+                        Self::expand_includes_recursive(&included_content, &path, visited)?;
+                    output.push_str(&expanded);
+                    output.push('\n');
+                }
+
+                if !matched_any {
+                    warn!(
+                        pattern = %pattern,
+                        source = %source_path.display(),
+                        "Include pattern matched no files"
+                    );
+                }
+            } else {
+                // Serialize the node back to KDL
+                output.push_str(&node.to_string());
+                output.push('\n');
+            }
+        }
+
+        Ok(output)
     }
 
     /// Load the default embedded configuration.
@@ -836,5 +997,148 @@ mod tests {
         "#;
         let config = Config::from_kdl(kdl).unwrap();
         assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_from_kdl_rejects_include_directive() {
+        let kdl = r#"
+            include "routes/*.kdl"
+            system {
+                worker-threads 4
+            }
+            listeners {
+                listener "http" {
+                    address "0.0.0.0:8080"
+                    protocol "http"
+                }
+            }
+        "#;
+        let err = Config::from_kdl(kdl).unwrap_err();
+        assert!(
+            err.to_string().contains("not supported when parsing raw KDL strings"),
+            "Expected helpful include error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_from_file_with_include() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write an included file with routes
+        let routes_dir = dir.path().join("routes");
+        std::fs::create_dir(&routes_dir).unwrap();
+        std::fs::write(
+            routes_dir.join("api.kdl"),
+            r#"
+routes {
+    route "api" {
+        match {
+            path-prefix "/api"
+        }
+        upstream "backend"
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        // Write the main config that includes the routes file
+        let main_config = dir.path().join("zentinel.kdl");
+        std::fs::write(
+            &main_config,
+            r#"
+schema-version "1.0"
+system {
+    worker-threads 4
+}
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+    }
+}
+upstreams {
+    upstream "backend" {
+        target "127.0.0.1:9000"
+    }
+}
+include "routes/*.kdl"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::from_file(&main_config).unwrap();
+        assert_eq!(config.routes.len(), 1);
+        assert_eq!(config.routes[0].id, "api");
+    }
+
+    #[test]
+    fn test_from_file_with_no_includes_still_works() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("zentinel.kdl");
+        std::fs::write(
+            &config_path,
+            r#"
+schema-version "1.0"
+system {
+    worker-threads 4
+}
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::from_file(&config_path).unwrap();
+        assert_eq!(config.listeners.len(), 1);
+    }
+
+    #[test]
+    fn test_include_circular_detection() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let a_path = dir.path().join("a.kdl");
+        let b_path = dir.path().join("b.kdl");
+
+        std::fs::write(&a_path, format!("include \"{}\"", b_path.display())).unwrap();
+        std::fs::write(&b_path, format!("include \"{}\"", a_path.display())).unwrap();
+
+        let err = Config::from_file(&a_path).unwrap_err();
+        assert!(
+            err.to_string().contains("Circular include detected"),
+            "Expected circular include error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_include_no_match_warns_but_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("zentinel.kdl");
+        std::fs::write(
+            &config_path,
+            r#"
+system {
+    worker-threads 4
+}
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+    }
+}
+include "nonexistent/*.kdl"
+"#,
+        )
+        .unwrap();
+
+        // Should succeed even with no matching files
+        let config = Config::from_file(&config_path).unwrap();
+        assert_eq!(config.listeners.len(), 1);
     }
 }

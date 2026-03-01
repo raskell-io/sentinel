@@ -127,6 +127,12 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
                 cache = Some(parse_cache_config(node)?);
                 trace!("Parsed cache configuration");
             }
+            "include" => {
+                return Err(anyhow::anyhow!(
+                    "The 'include' directive is not supported when parsing raw KDL strings.\n\
+                     Use Config::from_file() to load configuration with include support."
+                ));
+            }
             other => {
                 return Err(anyhow::anyhow!(
                     "Unknown top-level configuration block: '{}'\n\
