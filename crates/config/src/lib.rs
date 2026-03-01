@@ -378,9 +378,9 @@ impl Config {
     #[cfg(feature = "runtime")]
     fn expand_kdl_includes(content: &str, source_path: &Path) -> Result<String> {
         // Quick check: if there are no include directives, return as-is
-        let doc: ::kdl::KdlDocument = content.parse().map_err(|e| {
-            anyhow::anyhow!("KDL parse error during include expansion: {}", e)
-        })?;
+        let doc: ::kdl::KdlDocument = content
+            .parse()
+            .map_err(|e| anyhow::anyhow!("KDL parse error during include expansion: {}", e))?;
 
         let has_includes = doc.nodes().iter().any(|n| n.name().value() == "include");
         if !has_includes {
@@ -395,9 +395,9 @@ impl Config {
     #[cfg(not(feature = "runtime"))]
     fn expand_kdl_includes(content: &str, source_path: &Path) -> Result<String> {
         // Check if the content has include directives
-        let doc: ::kdl::KdlDocument = content.parse().map_err(|e| {
-            anyhow::anyhow!("KDL parse error during include expansion: {}", e)
-        })?;
+        let doc: ::kdl::KdlDocument = content
+            .parse()
+            .map_err(|e| anyhow::anyhow!("KDL parse error during include expansion: {}", e))?;
 
         let has_includes = doc.nodes().iter().any(|n| n.name().value() == "include");
         if has_includes {
@@ -433,9 +433,12 @@ impl Config {
             ));
         }
 
-        let base_dir = canonical
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory: {}", source_path.display()))?;
+        let base_dir = canonical.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Config file has no parent directory: {}",
+                source_path.display()
+            )
+        })?;
 
         let doc: ::kdl::KdlDocument = content.parse().map_err(|e| {
             anyhow::anyhow!("KDL parse error in '{}': {}", source_path.display(), e)
@@ -473,10 +476,18 @@ impl Config {
                 let mut paths: Vec<PathBuf> = Vec::new();
 
                 for entry in glob::glob(pattern_str).with_context(|| {
-                    format!("Invalid glob pattern '{}' in {}", pattern, source_path.display())
+                    format!(
+                        "Invalid glob pattern '{}' in {}",
+                        pattern,
+                        source_path.display()
+                    )
                 })? {
                     let path = entry.with_context(|| {
-                        format!("Error reading glob match for '{}' in {}", pattern, source_path.display())
+                        format!(
+                            "Error reading glob match for '{}' in {}",
+                            pattern,
+                            source_path.display()
+                        )
                     })?;
                     paths.push(path);
                 }
@@ -1015,7 +1026,8 @@ mod tests {
         "#;
         let err = Config::from_kdl(kdl).unwrap_err();
         assert!(
-            err.to_string().contains("not supported when parsing raw KDL strings"),
+            err.to_string()
+                .contains("not supported when parsing raw KDL strings"),
             "Expected helpful include error, got: {}",
             err
         );
