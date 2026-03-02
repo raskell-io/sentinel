@@ -395,9 +395,6 @@ pub fn create_component_engine(fuel_enabled: bool) -> Result<Engine, WasmRuntime
         config.consume_fuel(true);
     }
 
-    // Sync execution for now
-    config.async_support(false);
-
     // Cranelift optimizations
     config.cranelift_opt_level(wasmtime::OptLevel::Speed);
 

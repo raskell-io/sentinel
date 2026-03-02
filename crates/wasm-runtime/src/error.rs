@@ -64,7 +64,19 @@ pub enum WasmRuntimeError {
 
 impl From<anyhow::Error> for WasmRuntimeError {
     fn from(err: anyhow::Error) -> Self {
-        // Check for specific error types (wasmtime::Error is anyhow::Error)
+        let msg = err.to_string();
+        if msg.contains("fuel") || msg.contains("out of fuel") {
+            WasmRuntimeError::ResourceLimit("CPU fuel exhausted".to_string())
+        } else if msg.contains("memory") {
+            WasmRuntimeError::ResourceLimit(format!("memory limit: {}", msg))
+        } else {
+            WasmRuntimeError::Internal(msg)
+        }
+    }
+}
+
+impl From<wasmtime::Error> for WasmRuntimeError {
+    fn from(err: wasmtime::Error) -> Self {
         let msg = err.to_string();
         if msg.contains("fuel") || msg.contains("out of fuel") {
             WasmRuntimeError::ResourceLimit("CPU fuel exhausted".to_string())
