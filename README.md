@@ -39,6 +39,10 @@ Zentinel is a high-performance reverse proxy built on [Cloudflare Pingora](https
 
 **Performance:** Lowest p99 latency in [benchmarks](https://zentinelproxy.io/benchmarks/) against Envoy, HAProxy, Nginx, and Caddy. 1M-request soak tests with 99.95% success rate and zero memory leaks. Pure Rust WAF engine processes clean traffic at 912K req/s — 30x faster than the C++ ModSecurity reference.
 
+<p align="center">
+  <img src=".github/static/demo.gif" alt="Zentinel demo — install, configure, run" width="720" />
+</p>
+
 ## Status
 
 Production-ready core (proxy, routing, TLS, caching, load balancing). Agents are individually versioned — WAF, Auth, and AI Gateway are stable; others are beta or alpha. See [zentinelproxy.io/agents](https://zentinelproxy.io/agents/) for per-agent status.
