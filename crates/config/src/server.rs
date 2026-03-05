@@ -93,6 +93,11 @@ pub struct ListenerConfig {
     /// Maximum concurrent streams (HTTP/2)
     #[serde(default = "default_max_concurrent_streams")]
     pub max_concurrent_streams: u32,
+
+    /// Maximum requests per downstream connection before closing.
+    /// Equivalent to nginx's keepalive_requests. None = unlimited.
+    #[serde(default)]
+    pub keepalive_max_requests: Option<u32>,
 }
 
 /// Listener protocol

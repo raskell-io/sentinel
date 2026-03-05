@@ -128,6 +128,8 @@ pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
                     max_concurrent_streams: get_int_entry(child, "max-concurrent-streams")
                         .map(|v| v as u32)
                         .unwrap_or_else(default_max_concurrent_streams),
+                    keepalive_max_requests: get_int_entry(child, "keepalive-max-requests")
+                        .map(|v| v as u32),
                 });
             }
         }

@@ -2735,9 +2735,9 @@ impl ProxyHttp for ZentinelProxy {
             "Generated cache key"
         );
 
-        // Use Pingora's default cache key generator which handles
-        // proper hashing and internal format
-        Ok(CacheKey::default(req_header))
+        // Generate cache key from request URI (namespace empty, user_tag empty)
+        // CacheKey::default() was removed in Pingora 0.8.0
+        Ok(CacheKey::new("", format!("{}", req_header.uri), ""))
     }
 
     /// Called when a cache miss occurs.
@@ -3627,6 +3627,8 @@ impl ProxyHttp for ZentinelProxy {
 
         // Log to tracing at debug level (avoid allocations if debug disabled)
         if tracing::enabled!(tracing::Level::DEBUG) {
+            // Pingora 0.8.0: upstream_write_pending_time for upload diagnostics
+            let write_pending_ms = session.upstream_write_pending_time().as_millis() as u64;
             debug!(
                 trace_id = %ctx.trace_id,
                 method = %ctx.method,
@@ -3635,6 +3637,7 @@ impl ProxyHttp for ZentinelProxy {
                 upstream = ?ctx.upstream,
                 status = status,
                 duration_ms = duration.as_millis() as u64,
+                upstream_write_pending_ms = write_pending_ms,
                 upstream_attempts = ctx.upstream_attempts,
                 error = ?_error.map(|e| e.to_string()),
                 "Request completed"

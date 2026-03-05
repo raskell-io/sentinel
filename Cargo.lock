@@ -4,8 +4,8 @@ version = 4
 
 [[package]]
 name = "TinyUFO"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "ahash 0.8.12",
  "crossbeam-queue",
@@ -1273,6 +1273,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8bfdaacb3c887a54d41bdf48d3af8873b3f5566469f8ba21b92057509f116e"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "daggy"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70def8d72740e44d9f676d8dab2c933a236663d86dd24319b57a2bed4d694774"
+dependencies = [
+ "petgraph 0.7.1",
 ]
 
 [[package]]
@@ -3671,6 +3680,16 @@ dependencies = [
 
 [[package]]
 name = "petgraph"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
+dependencies = [
+ "fixedbitset 0.5.7",
+ "indexmap 2.13.0",
+]
+
+[[package]]
+name = "petgraph"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
@@ -3714,8 +3733,8 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pingora"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "pingora-cache",
  "pingora-core",
@@ -3727,8 +3746,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-cache"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -3763,8 +3782,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-core"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -3774,6 +3793,7 @@ dependencies = [
  "chrono",
  "clap",
  "daemonize",
+ "daggy",
  "derivative",
  "flate2",
  "futures",
@@ -3801,7 +3821,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sfv",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "strum",
  "strum_macros",
  "tokio",
@@ -3815,13 +3835,13 @@ dependencies = [
 
 [[package]]
 name = "pingora-error"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 
 [[package]]
 name = "pingora-header-serde"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "bytes",
  "http 1.4.0",
@@ -3835,8 +3855,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-http"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "bytes",
  "http 1.4.0",
@@ -3845,24 +3865,24 @@ dependencies = [
 
 [[package]]
 name = "pingora-ketama"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "crc32fast",
 ]
 
 [[package]]
 name = "pingora-limits"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "ahash 0.8.12",
 ]
 
 [[package]]
 name = "pingora-load-balancing"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3882,8 +3902,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-lru"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "arrayvec",
  "hashbrown 0.12.3",
@@ -3893,8 +3913,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-memory-cache"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "TinyUFO",
  "ahash 0.8.12",
@@ -3908,8 +3928,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-pool"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "crossbeam-queue",
  "log",
@@ -3922,8 +3942,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-proxy"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3944,8 +3964,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-runtime"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "once_cell",
  "rand 0.8.5",
@@ -3955,8 +3975,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-rustls"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "log",
  "no_debug",
@@ -3971,8 +3991,8 @@ dependencies = [
 
 [[package]]
 name = "pingora-timeout"
-version = "0.7.0"
-source = "git+https://github.com/raskell-io/pingora.git?rev=5847d5e#5847d5e3b8f28d0ef248c36d375abdadddf8c7a1"
+version = "0.8.0"
+source = "git+https://github.com/raskell-io/pingora.git?rev=5c23fe7#5c23fe704ea6abb7842d5d33e537f34ba13b573d"
 dependencies = [
  "once_cell",
  "parking_lot",

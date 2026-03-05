@@ -675,8 +675,20 @@ fn run_server(
     let mut server = Server::new_with_opt_and_conf(Some(pingora_opt), pingora_conf);
     server.bootstrap();
 
-    // Create proxy service
-    let mut proxy_service = http_proxy_service(&server.configuration, proxy);
+    // Determine keepalive request limit from listeners (use the most restrictive)
+    let keepalive_request_limit = config
+        .listeners
+        .iter()
+        .filter_map(|l| l.keepalive_max_requests)
+        .min();
+
+    // Create proxy service with server options (Pingora 0.8.0 builder pattern)
+    let mut server_options = pingora_core::apps::HttpServerOptions::default();
+    server_options.keepalive_request_limit = keepalive_request_limit;
+    let mut proxy_service = pingora_proxy::ProxyServiceBuilder::new(&server.configuration, proxy)
+        .name("Zentinel Proxy")
+        .server_options(server_options)
+        .build();
 
     // Configure listening addresses from config
     for listener in &config.listeners {

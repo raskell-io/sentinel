@@ -254,6 +254,24 @@ impl MetricsManager {
         );
     }
 
+    /// Record upstream write pending time (time waiting to send request body).
+    pub fn observe_upstream_write_pending(&self, upstream: &str, duration_secs: f64) {
+        let mut labels = HashMap::new();
+        labels.insert("upstream".to_string(), upstream.to_string());
+
+        let buckets = vec![
+            0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+        ];
+
+        self.aggregator.observe_histogram(
+            "zentinel_upstream_write_pending_seconds",
+            "Time spent waiting to write request to upstream",
+            labels,
+            &buckets,
+            duration_secs,
+        );
+    }
+
     /// Increment agent requests.
     pub fn inc_agent_requests(&self, agent: &str, decision: &str) {
         let mut labels = HashMap::new();
