@@ -24,7 +24,7 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
 use zentinel_common::errors::{ZentinelError, ZentinelResult};
@@ -147,6 +147,8 @@ pub struct ConfigManager {
     reload_hooks: Arc<RwLock<Vec<Box<dyn ReloadHook>>>>,
     /// Certificate reloader for TLS hot-reload
     cert_reloader: Arc<CertificateReloader>,
+    /// Serializes reload operations so only one runs at a time
+    reload_mutex: Arc<Mutex<()>>,
 }
 
 impl ConfigManager {
@@ -181,6 +183,7 @@ impl ConfigManager {
             validators: Arc::new(RwLock::new(Vec::new())),
             reload_hooks: Arc::new(RwLock::new(Vec::new())),
             cert_reloader: Arc::new(CertificateReloader::new()),
+            reload_mutex: Arc::new(Mutex::new(())),
         })
     }
 
@@ -197,7 +200,8 @@ impl ConfigManager {
     /// Start watching configuration file for changes
     ///
     /// When enabled, the proxy will automatically reload configuration
-    /// when the config file is modified.
+    /// when the config file is modified. Also watches the config file's
+    /// parent directory to catch included files in multi-file configs.
     pub async fn start_watching(&self) -> ZentinelResult<()> {
         // Check if already watching
         if self.watcher.read().await.is_some() {
@@ -207,13 +211,31 @@ impl ConfigManager {
 
         let config_path = self.config_path.clone();
 
-        // Create file watcher
-        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        // Use a notify channel to signal that a relevant file changed.
+        // We use a tokio::sync::Notify instead of an mpsc channel — multiple
+        // rapid events coalesce into a single notification automatically.
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let notify_sender = Arc::clone(&notify);
 
+        let watched_path = config_path.clone();
         let mut watcher =
             notify::recommended_watcher(move |event: Result<Event, notify::Error>| {
-                if let Ok(event) = event {
-                    let _ = tx.blocking_send(event);
+                match event {
+                    Ok(event) => {
+                        if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                            // Check if the event is for a .kdl file or our config file
+                            let dominated = event.paths.iter().any(|p| {
+                                p == &watched_path
+                                    || p.extension().is_some_and(|ext| ext == "kdl")
+                            });
+                            if dominated {
+                                notify_sender.notify_one();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "File watcher error");
+                    }
                 }
             })
             .map_err(|e| ZentinelError::Config {
@@ -221,7 +243,7 @@ impl ConfigManager {
                 source: None,
             })?;
 
-        // Watch config file
+        // Watch the config file itself
         watcher
             .watch(&config_path, RecursiveMode::NonRecursive)
             .map_err(|e| ZentinelError::Config {
@@ -229,36 +251,81 @@ impl ConfigManager {
                 source: None,
             })?;
 
+        // Also watch the config file's parent directory to catch included files.
+        // Multi-file configs use `include "routes/*.kdl"` — those files live
+        // alongside or under the main config directory.
+        if let Some(parent) = config_path.parent() {
+            if let Err(e) = watcher.watch(parent, RecursiveMode::Recursive) {
+                warn!(
+                    path = %parent.display(),
+                    error = %e,
+                    "Could not watch config directory for included files, \
+                     only the main config file will trigger auto-reload"
+                );
+            } else {
+                debug!(
+                    path = %parent.display(),
+                    "Watching config directory recursively for included file changes"
+                );
+            }
+        }
+
         // Store watcher using interior mutability
         *self.watcher.write().await = Some(watcher);
 
-        // Spawn event handler task
+        // Spawn event handler task with proper debounce
         let manager = Arc::new(self.clone_for_task());
+        let config_path_log = self.config_path.clone();
         tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                    info!("Configuration file changed, triggering reload");
+            loop {
+                // Wait for at least one file change notification
+                notify.notified().await;
 
-                    // Debounce rapid changes
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-
-                    if let Err(e) = manager.reload(ReloadTrigger::FileChange).await {
-                        error!("Auto-reload failed: {}", e);
-                        error!("Continuing with current configuration");
+                // Debounce: wait for changes to settle. If more notifications
+                // arrive during this window, we consume them and keep waiting
+                // until no new changes arrive for 200ms.
+                loop {
+                    match tokio::time::timeout(
+                        Duration::from_millis(200),
+                        notify.notified(),
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            // Another change arrived within the window, keep waiting
+                            trace!("Debounce: additional file change, resetting timer");
+                        }
+                        Err(_) => {
+                            // 200ms of quiet — time to reload
+                            break;
+                        }
                     }
+                }
+
+                info!("Configuration file changed, triggering reload");
+
+                if let Err(e) = manager.reload(ReloadTrigger::FileChange).await {
+                    error!(error = %e, "Auto-reload failed, continuing with current configuration");
                 }
             }
         });
 
         info!(
-            "Auto-reload enabled: watching configuration file {:?}",
-            self.config_path
+            config_file = %self.config_path.display(),
+            "Auto-reload enabled: watching for configuration changes"
         );
         Ok(())
     }
 
     /// Reload configuration
+    ///
+    /// Only one reload runs at a time. If a reload is already in progress
+    /// (from file watcher, SIGHUP, or manual trigger), this call waits
+    /// for it to finish before starting.
     pub async fn reload(&self, trigger: ReloadTrigger) -> ZentinelResult<()> {
+        // Serialize reloads — only one at a time
+        let _reload_guard = self.reload_mutex.lock().await;
+
         let start = Instant::now();
         let reload_num = self
             .stats
@@ -573,6 +640,7 @@ impl ConfigManager {
             validators: Arc::clone(&self.validators),
             reload_hooks: Arc::clone(&self.reload_hooks),
             cert_reloader: Arc::clone(&self.cert_reloader),
+            reload_mutex: Arc::clone(&self.reload_mutex),
         }
     }
 }
