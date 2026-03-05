@@ -85,6 +85,21 @@ If a change cannot fail safely, it should not be merged.
 
 ---
 
+## Good first contributions
+
+If this is your first time contributing, look for issues labeled [`good-first-issue`](https://github.com/zentinelproxy/zentinel/labels/good-first-issue). These are scoped, well-defined tasks that don't require deep knowledge of the proxy internals.
+
+Good starting points in general:
+
+- **Documentation** — Improve crate docs (`crates/*/docs/`), add examples, fix typos
+- **Error messages** — Make configuration errors clearer and more actionable
+- **Test coverage** — Add tests for edge cases, especially in `zentinel-config`
+- **Examples** — Add KDL config examples in `config/examples/`
+
+No contribution is too small. A better error message is a real improvement.
+
+---
+
 ## How to propose changes
 
 If you are unsure whether something fits:
