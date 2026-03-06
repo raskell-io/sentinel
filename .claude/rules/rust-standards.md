@@ -1,6 +1,6 @@
 # Rust Coding Standards
 
-> Minimum Rust version: **1.92.0** (Edition 2021)
+> Minimum Rust version: **1.94.0** (Edition 2021)
 > Last updated: 2026-01-13
 
 These standards apply to all Rust code in Zentinel. They enforce the [Manifesto](../../MANIFESTO.md) principles of **explicit behavior**, **bounded resources**, and **production correctness**.
@@ -74,6 +74,33 @@ if value.is_none() || value.as_ref().map_or(false, |v| v.is_empty()) { ... }
 let mut guard = lock.write().unwrap();
 *guard = new_value;
 let read_guard = guard.downgrade(); // Keep read access without releasing lock
+```
+
+### Array Windows (1.94+)
+
+```rust
+// GOOD: Use array_windows() for compile-time window size and destructuring
+let intervals: Vec<Duration> = timestamps
+    .array_windows()
+    .map(|[a, b]| b.duration_since(*a))
+    .collect();
+
+// GOOD: Pattern matching on fixed-size windows
+for [left, op, right] in tokens.array_windows() {
+    if op == "=" && left == right { /* tautology */ }
+}
+
+// BAD: Dynamic windows with manual indexing
+timestamps.windows(2).map(|w| w[1].duration_since(w[0]))
+```
+
+### LazyLock/LazyCell Accessors (1.94+)
+
+```rust
+// AVAILABLE: LazyLock::get() / LazyCell::get() — check if initialized without forcing
+if let Some(patterns) = LazyLock::get(&PATTERNS) {
+    // Use already-initialized value without forcing initialization
+}
 ```
 
 ---
@@ -480,5 +507,6 @@ let handler = async |request: Request| {
 
 | Date | Rust Version | Changes |
 |------|--------------|---------|
+| 2026-03-06 | 1.94.0 | Bumped toolchain; added array_windows, LazyLock::get |
 | 2026-01-13 | 1.92.0 | Integrated with Zentinel rules structure |
 | 2026-01-10 | 1.92.0 | Initial standards, added div_ceil, or_default, RwLock::downgrade |
