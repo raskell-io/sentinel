@@ -529,6 +529,43 @@ impl AgentEntry {
 /// Uses `DashMap` for lock-free reads in the hot path. Agent lookup is O(1)
 /// without contention. Connection selection uses cached health state to avoid
 /// async I/O per request.
+/// Connection pool for managing agent connections with load balancing and health monitoring.
+///
+/// `AgentPool` provides a production-ready connection pool that manages multiple connections
+/// to external processing agents. It handles connection pooling, load balancing, health
+/// tracking, and automatic reconnection for robust agent communication.
+///
+/// # Features
+///
+/// - **Connection pooling**: Maintains multiple connections per agent for better throughput
+/// - **Load balancing**: Routes requests using round-robin, least-connections, or health-based strategies
+/// - **Health monitoring**: Tracks agent health and routes requests to healthy connections
+/// - **Automatic reconnection**: Reconnects failed connections transparently
+/// - **Flow control**: Manages backpressure and request queuing
+/// - **Metrics**: Collects detailed metrics on performance and health
+/// - **Configuration management**: Distributes config updates to agents
+///
+/// # Example
+///
+/// ```rust
+/// use zentinel_agent_protocol::v2::{AgentPool, AgentPoolConfig, LoadBalanceStrategy};
+///
+/// // Create pool with custom config
+/// let config = AgentPoolConfig {
+///     max_connections_per_agent: 4,
+///     load_balance_strategy: LoadBalanceStrategy::LeastConnections,
+///     health_check_interval: Duration::from_secs(30),
+///     ..Default::default()
+/// };
+/// let pool = AgentPool::with_config(config);
+///
+/// // Add agent connections
+/// pool.add_grpc_agent("waf", "127.0.0.1:8080").await?;
+/// pool.add_uds_agent("auth", "/var/run/auth.sock").await?;
+///
+/// // Process requests
+/// let response = pool.process_request("waf", request).await?;
+/// ```
 pub struct AgentPool {
     config: AgentPoolConfig,
     /// Lock-free concurrent map for agent lookup.
