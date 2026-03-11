@@ -1488,7 +1488,10 @@ mod server_config {
         };
 
         let result = SniResolver::from_config(&config);
-        assert!(result.is_err(), "Conflicting priority-hostnames should error");
+        assert!(
+            result.is_err(),
+            "Conflicting priority-hostnames should error"
+        );
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Conflicting priority-hostnames"),
