@@ -519,11 +519,10 @@ impl AgentEntry {
     }
 }
 
-/// Agent connection pool for managing agent connections with load balancing and health monitoring.
+/// Agent connection pool for managing multiple connections to external processing agents.
 ///
-/// `AgentPool` provides a production-ready connection pool that manages multiple connections
-/// to external processing agents. It handles connection pooling, load balancing, health
-/// tracking, automatic reconnection, and metrics collection for robust agent communication.
+/// This pool provides production-ready connection pooling, load balancing, health tracking,
+/// automatic reconnection, and metrics collection for robust agent communication.
 ///
 /// # Performance
 ///
@@ -545,6 +544,7 @@ impl AgentEntry {
 ///
 /// ```rust
 /// use zentinel_agent_protocol::v2::{AgentPool, AgentPoolConfig, LoadBalanceStrategy};
+/// use std::time::Duration;
 ///
 /// // Create pool with custom config
 /// let config = AgentPoolConfig {
@@ -555,7 +555,7 @@ impl AgentEntry {
 /// };
 /// let pool = AgentPool::with_config(config);
 ///
-/// // Add agent connections (generic method for any transport)
+/// // Add agent with Unix domain socket endpoint
 /// pool.add_agent("waf", "unix:/tmp/waf.sock").await?;
 ///
 /// // Send request headers to an agent
