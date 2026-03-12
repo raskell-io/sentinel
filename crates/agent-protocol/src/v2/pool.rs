@@ -521,14 +521,8 @@ impl AgentEntry {
 
 /// Agent connection pool for managing multiple connections to external processing agents.
 ///
-/// This pool provides production-ready connection pooling, load balancing, health tracking,
+/// `AgentPool` provides production-ready connection pooling, load balancing, health tracking,
 /// automatic reconnection, and metrics collection for robust agent communication.
-///
-/// # Performance
-///
-/// Uses `DashMap` for lock-free reads in the hot path. Agent lookup is O(1)
-/// without contention. Connection selection uses cached health state to avoid
-/// async I/O per request.
 ///
 /// # Features
 ///
@@ -540,11 +534,18 @@ impl AgentEntry {
 /// - **Metrics**: Collects detailed metrics on performance and health
 /// - **Configuration management**: Distributes config updates to agents
 ///
+/// # Performance
+///
+/// Uses `DashMap` for lock-free reads in the hot path. Agent lookup is O(1)
+/// without contention. Connection selection uses cached health state to avoid
+/// async I/O per request.
+///
 /// # Example
 ///
 /// ```rust
-/// use zentinel_agent_protocol::v2::{AgentPool, AgentPoolConfig, LoadBalanceStrategy};
 /// use std::time::Duration;
+/// use zentinel_agent_protocol::v2::{AgentPool, AgentPoolConfig, LoadBalanceStrategy};
+/// use zentinel_agent_protocol::{RequestHeadersEvent};
 ///
 /// // Create pool with custom config
 /// let config = AgentPoolConfig {
