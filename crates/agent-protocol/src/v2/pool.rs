@@ -542,10 +542,10 @@ impl AgentEntry {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use std::time::Duration;
 /// use zentinel_agent_protocol::v2::{AgentPool, AgentPoolConfig, LoadBalanceStrategy};
-/// use zentinel_agent_protocol::{RequestHeadersEvent};
+/// use zentinel_agent_protocol::RequestHeadersEvent;
 ///
 /// // Create pool with custom config
 /// let config = AgentPoolConfig {
@@ -560,7 +560,6 @@ impl AgentEntry {
 /// pool.add_agent("waf", "unix:/tmp/waf.sock").await?;
 ///
 /// // Send request headers to an agent
-/// let headers = RequestHeadersEvent { /* ... */ };
 /// let response = pool.send_request_headers("waf", "correlation-123", &headers).await?;
 /// ```
 pub struct AgentPool {

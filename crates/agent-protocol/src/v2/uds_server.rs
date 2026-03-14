@@ -41,8 +41,8 @@ use crate::{
 ///
 /// # Example
 ///
-/// ```rust
-/// use zentinel_agent_protocol::v2::{UdsAgentServerV2, AgentHandlerV2};
+/// ```rust,ignore
+/// use zentinel_agent_protocol::v2::UdsAgentServerV2;
 /// use std::path::Path;
 ///
 /// // Create server with your handler

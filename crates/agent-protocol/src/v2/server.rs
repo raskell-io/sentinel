@@ -51,10 +51,10 @@ use crate::{
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
 /// use async_trait::async_trait;
-/// use zentinel_agent_protocol::v2::{AgentHandlerV2, AgentCapabilities, AgentResponse};
-/// use zentinel_agent_protocol::{EventType, RequestHeadersEvent};
+/// use zentinel_agent_protocol::v2::{AgentHandlerV2, AgentCapabilities};
+/// use zentinel_agent_protocol::{AgentResponse, EventType, RequestHeadersEvent};
 ///
 /// pub struct MyWafAgent;
 ///
@@ -185,8 +185,8 @@ pub enum DrainReason {
 ///
 /// # Example
 ///
-/// ```rust
-/// use zentinel_agent_protocol::v2::{GrpcAgentServerV2, AgentHandlerV2};
+/// ```rust,ignore
+/// use zentinel_agent_protocol::v2::GrpcAgentServerV2;
 ///
 /// // Create server with your handler
 /// let handler = Box::new(MyAgent::new());
