@@ -4,6 +4,7 @@ members = [
     "crates/agent-protocol",
     "crates/config",
     "crates/common",
+    "crates/gateway",
     "crates/stack",
     "crates/wasm-runtime",
     "agents/echo",

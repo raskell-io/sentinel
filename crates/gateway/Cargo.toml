@@ -1,0 +1,45 @@
+[package]
+name = "zentinel-gateway"
+description = "Kubernetes Gateway API controller for Zentinel proxy"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "zentinel-gateway"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+zentinel-config = { path = "../config" }
+zentinel-common = { path = "../common" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+arc-swap.workspace = true
+
+# Kubernetes
+kube = { version = "2.0", features = ["runtime", "derive", "rustls-tls"], default-features = false }
+k8s-openapi = { version = "0.26", features = ["latest"] }
+gateway-api = { version = "0.19", features = ["experimental"] }
+
+# Controller runtime
+futures = "0.3"
+chrono.workspace = true
+parking_lot.workspace = true
+
+# Metrics
+prometheus.workspace = true
+hyper.workspace = true
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
+
+# Memory allocator
+tikv-jemallocator.workspace = true

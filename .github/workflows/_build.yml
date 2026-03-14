@@ -144,6 +144,7 @@ jobs:
           fi
           $STRIP $BUILD_DIR/release/zentinel || true
           $STRIP $BUILD_DIR/release/zentinel-echo-agent || true
+          $STRIP $BUILD_DIR/release/zentinel-gateway || true
 
       - name: Generate SBOM
         if: inputs.upload-artifacts && matrix.config.suffix == 'linux-amd64'
@@ -165,6 +166,7 @@ jobs:
           # Copy binaries
           cp "$SRC_DIR/zentinel" artifacts/ 2>/dev/null || true
           cp "$SRC_DIR/zentinel-echo-agent" artifacts/ 2>/dev/null || true
+          cp "$SRC_DIR/zentinel-gateway" artifacts/ 2>/dev/null || true
 
           # Create version file if version provided
           if [ -n "${{ inputs.version }}" ]; then

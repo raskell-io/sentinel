@@ -71,6 +71,8 @@ pub use defaults::{create_default_config, DEFAULT_CONFIG_KDL};
 
 // Filters
 pub use filters::*;
+// Explicit re-exports for gateway controller
+pub use filters::{Filter, FilterConfig, PathModifier, RedirectFilter, UrlRewriteFilter};
 
 // Multi-file (runtime only - uses glob which requires std::fs)
 #[cfg(feature = "runtime")]

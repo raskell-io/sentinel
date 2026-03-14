@@ -35,6 +35,7 @@ env:
   # Hardcoded to avoid github.repository returning stale pre-transfer name (raskell-io/sentinel)
   IMAGE_NAME: zentinelproxy/zentinel
   ECHO_IMAGE_NAME: zentinelproxy/zentinel-echo
+  GATEWAY_IMAGE_NAME: zentinelproxy/zentinel-gateway
 
 jobs:
   build-and-push:
@@ -87,6 +88,21 @@ jobs:
             cp config/docker/default.kdl artifacts/linux-arm64/config/docker/default.kdl
           else
             echo "arm64=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Gateway controller binaries
+          if [ -f "artifacts/linux-amd64/zentinel-gateway" ]; then
+            echo "gateway-amd64=true" >> $GITHUB_OUTPUT
+            chmod +x artifacts/linux-amd64/zentinel-gateway
+          else
+            echo "gateway-amd64=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -f "artifacts/linux-arm64/zentinel-gateway" ]; then
+            echo "gateway-arm64=true" >> $GITHUB_OUTPUT
+            chmod +x artifacts/linux-arm64/zentinel-gateway
+          else
+            echo "gateway-arm64=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Set up QEMU
@@ -263,4 +279,63 @@ jobs:
             echo "Creating manifest for $IMAGE:latest"
             docker manifest create "$IMAGE:latest" $IMAGES
             docker manifest push "$IMAGE:latest"
+          fi
+
+      # =================================================================
+      # Gateway API Controller image
+      # =================================================================
+
+      - name: Build and push Gateway AMD64 image
+        if: steps.check-artifacts.outputs.gateway-amd64 == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: artifacts/linux-amd64
+          file: ./Dockerfile
+          target: gateway-prebuilt
+          platforms: linux/amd64
+          push: ${{ inputs.push }}
+          tags: ${{ env.REGISTRY }}/${{ env.GATEWAY_IMAGE_NAME }}:${{ inputs.version }}-amd64
+          provenance: false
+
+      - name: Build and push Gateway ARM64 image
+        if: steps.check-artifacts.outputs.gateway-arm64 == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: artifacts/linux-arm64
+          file: ./Dockerfile
+          target: gateway-prebuilt
+          platforms: linux/arm64
+          push: ${{ inputs.push }}
+          tags: ${{ env.REGISTRY }}/${{ env.GATEWAY_IMAGE_NAME }}:${{ inputs.version }}-arm64
+          provenance: false
+
+      - name: Create Gateway multi-arch manifest
+        if: inputs.push && steps.check-artifacts.outputs.gateway-amd64 == 'true'
+        run: |
+          VERSION="${{ inputs.version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.GATEWAY_IMAGE_NAME }}"
+
+          IMAGES="$IMAGE:$VERSION-amd64"
+          if [ "${{ steps.check-artifacts.outputs.gateway-arm64 }}" = "true" ]; then
+            IMAGES="$IMAGES $IMAGE:$VERSION-arm64"
+          fi
+
+          echo "Creating manifest for $IMAGE:$VERSION with: $IMAGES"
+          docker manifest create "$IMAGE:$VERSION" $IMAGES
+          docker manifest push "$IMAGE:$VERSION"
+
+          if [ "${{ inputs.latest }}" = "true" ]; then
+            echo "Creating manifest for $IMAGE:latest"
+            docker manifest create "$IMAGE:latest" $IMAGES
+            docker manifest push "$IMAGE:latest"
+          fi
+
+      - name: Sign Gateway container image
+        if: inputs.push && steps.check-artifacts.outputs.gateway-amd64 == 'true'
+        run: |
+          VERSION="${{ inputs.version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.GATEWAY_IMAGE_NAME }}"
+          cosign sign --yes "$IMAGE:$VERSION"
+          if [ "${{ inputs.latest }}" = "true" ]; then
+            cosign sign --yes "$IMAGE:latest"
           fi

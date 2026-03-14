@@ -122,6 +122,12 @@ pub enum Filter {
 
     /// External agent filter
     Agent(AgentFilter),
+
+    /// Request redirect filter (returns a redirect response)
+    Redirect(RedirectFilter),
+
+    /// URL rewrite filter (modifies request path/host before forwarding)
+    UrlRewrite(UrlRewriteFilter),
 }
 
 impl Filter {
@@ -143,6 +149,8 @@ impl Filter {
             }
             Filter::Geo(_) => FilterPhase::Request,
             Filter::Agent(a) => a.phase.unwrap_or(FilterPhase::Request),
+            Filter::Redirect(_) => FilterPhase::Request,
+            Filter::UrlRewrite(_) => FilterPhase::Request,
         }
     }
 
@@ -157,6 +165,8 @@ impl Filter {
             Filter::Log(_) => "log",
             Filter::Geo(_) => "geo",
             Filter::Agent(_) => "agent",
+            Filter::Redirect(_) => "redirect",
+            Filter::UrlRewrite(_) => "url-rewrite",
         }
     }
 
@@ -1071,4 +1081,79 @@ mod tests {
         assert_eq!(config.filter_type(), "geo");
         assert_eq!(config.phase(), FilterPhase::Request);
     }
+}
+
+// =============================================================================
+// Redirect Filter
+// =============================================================================
+
+/// Responds to the request with an HTTP redirect.
+///
+/// Used to implement Gateway API's `RequestRedirect` filter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedirectFilter {
+    /// Hostname to use in the `Location` header.
+    /// When empty, the hostname from the request is preserved.
+    #[serde(default)]
+    pub hostname: Option<String>,
+
+    /// HTTP status code for the redirect (301 or 302).
+    #[serde(default = "default_redirect_status", rename = "status-code")]
+    pub status_code: u16,
+
+    /// Scheme to use in the `Location` header ("http" or "https").
+    /// When empty, the scheme from the request is preserved.
+    #[serde(default)]
+    pub scheme: Option<String>,
+
+    /// Port to use in the `Location` header.
+    /// When empty, derived from the scheme or the listener port.
+    #[serde(default)]
+    pub port: Option<u16>,
+
+    /// Path modification for the redirect.
+    #[serde(default)]
+    pub path: Option<PathModifier>,
+}
+
+fn default_redirect_status() -> u16 {
+    302
+}
+
+// =============================================================================
+// URL Rewrite Filter
+// =============================================================================
+
+/// Modifies the request URL before forwarding to the backend.
+///
+/// Used to implement Gateway API's `URLRewrite` filter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UrlRewriteFilter {
+    /// Hostname to set on the request's `Host` header before forwarding.
+    #[serde(default)]
+    pub hostname: Option<String>,
+
+    /// Path modification for the rewrite.
+    #[serde(default)]
+    pub path: Option<PathModifier>,
+}
+
+// =============================================================================
+// Path Modifier (shared by Redirect and URL Rewrite)
+// =============================================================================
+
+/// Defines how to modify a request path for redirects or rewrites.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum PathModifier {
+    /// Replace the full request path with the given value.
+    ReplaceFullPath {
+        /// The replacement path.
+        value: String,
+    },
+    /// Replace a matched path prefix with a new prefix.
+    ReplacePrefixMatch {
+        /// The replacement prefix.
+        value: String,
+    },
 }

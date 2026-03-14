@@ -39,6 +39,7 @@ COPY crates/proxy/Cargo.toml crates/proxy/Cargo.toml
 COPY crates/agent-protocol/Cargo.toml crates/agent-protocol/Cargo.toml
 COPY crates/config/Cargo.toml crates/config/Cargo.toml
 COPY crates/common/Cargo.toml crates/common/Cargo.toml
+COPY crates/gateway/Cargo.toml crates/gateway/Cargo.toml
 COPY crates/stack/Cargo.toml crates/stack/Cargo.toml
 COPY agents/echo/Cargo.toml agents/echo/Cargo.toml
 
@@ -50,6 +51,8 @@ RUN mkdir -p crates/proxy/src && \
     mkdir -p crates/agent-protocol/src && echo "" > crates/agent-protocol/src/lib.rs && \
     mkdir -p crates/config/src && echo "" > crates/config/src/lib.rs && \
     mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
+    mkdir -p crates/gateway/src && echo "fn main() {}" > crates/gateway/src/main.rs && \
+    echo "" > crates/gateway/src/lib.rs && \
     mkdir -p crates/stack/src && echo "fn main() {}" > crates/stack/src/main.rs && \
     mkdir -p agents/echo/src && echo "fn main() {}" > agents/echo/src/main.rs
 
@@ -69,7 +72,7 @@ RUN find . -name "main.rs" -exec touch {} \; && \
 
 # Build release binaries with full optimizations
 # Binary is already stripped via Cargo.toml profile.release.strip = true
-RUN cargo build --release --package zentinel-proxy --package zentinel-echo-agent
+RUN cargo build --release --package zentinel-proxy --package zentinel-echo-agent --package zentinel-gateway
 
 ################################################################################
 # Production image: Distroless (smallest, most secure)
@@ -216,3 +219,51 @@ ENV RUST_LOG=info,zentinel_echo_agent=debug \
 USER nonroot:nonroot
 
 ENTRYPOINT ["/zentinel-echo-agent"]
+
+################################################################################
+# Gateway API Controller image
+#
+# Runs the Kubernetes Gateway API controller that watches Gateway, HTTPRoute,
+# GRPCRoute, TLSRoute, and Ingress resources and translates them into
+# Zentinel proxy configuration.
+################################################################################
+FROM gcr.io/distroless/cc-debian12:nonroot AS gateway
+
+COPY --from=builder /app/target/release/zentinel-gateway /zentinel-gateway
+
+LABEL org.opencontainers.image.title="Zentinel Gateway Controller" \
+      org.opencontainers.image.description="Kubernetes Gateway API controller for Zentinel proxy" \
+      org.opencontainers.image.vendor="Raskell" \
+      org.opencontainers.image.source="https://github.com/zentinelproxy/zentinel"
+
+ENV RUST_LOG=info,zentinel_gateway=info,kube=warn \
+    MALLOC_CONF="background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000" \
+    METRICS_PORT=9090
+
+EXPOSE 9090
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/zentinel-gateway"]
+
+################################################################################
+# Gateway API Controller pre-built stage (for CI multi-arch builds)
+################################################################################
+FROM gcr.io/distroless/cc-debian12:nonroot AS gateway-prebuilt
+
+COPY zentinel-gateway /zentinel-gateway
+
+LABEL org.opencontainers.image.title="Zentinel Gateway Controller" \
+      org.opencontainers.image.description="Kubernetes Gateway API controller for Zentinel proxy" \
+      org.opencontainers.image.vendor="Raskell" \
+      org.opencontainers.image.source="https://github.com/zentinelproxy/zentinel"
+
+ENV RUST_LOG=info,zentinel_gateway=info,kube=warn \
+    MALLOC_CONF="background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000" \
+    METRICS_PORT=9090
+
+EXPOSE 9090
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/zentinel-gateway"]
