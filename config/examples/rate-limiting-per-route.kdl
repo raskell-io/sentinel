@@ -1,0 +1,181 @@
+// Example: Rate Limiting Per Route
+//
+// Apply different rate limits to different routes using the filters pattern:
+// - Strict limits for authentication endpoints (10 rps)
+// - Normal limits for API routes (100 rps)
+// - Generous limits for static content (1000 rps)
+// - No limits for health checks
+
+system {
+    worker-threads 0
+    max-connections 10000
+    graceful-shutdown-timeout-secs 30
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 60
+    }
+}
+
+// =============================================================================
+// Filters — rate limit definitions with different thresholds
+// =============================================================================
+filters {
+    // Very strict: protect auth endpoints from brute-force
+    filter "auth-rate-limit" {
+        type "rate-limit"
+
+        max-rps 10
+        burst 15
+        key "client-ip"
+        on-limit "reject"
+
+        backend "local"
+    }
+
+    // Standard: general API rate limiting
+    filter "api-rate-limit" {
+        type "rate-limit"
+
+        max-rps 100
+        burst 200
+        key "client-ip"
+        on-limit "reject"
+
+        backend "local"
+    }
+
+    // Generous: static assets rarely need tight limits
+    filter "static-rate-limit" {
+        type "rate-limit"
+
+        max-rps 1000
+        burst 2000
+        key "client-ip"
+        on-limit "reject"
+
+        backend "local"
+    }
+}
+
+// =============================================================================
+// Routes — each referencing the appropriate rate limit filter
+// =============================================================================
+routes {
+    // Auth routes: strictest rate limiting (10 rps per IP)
+    route "auth" {
+        priority "critical"
+
+        matches {
+            path-prefix "/api/auth"
+        }
+
+        upstream "api"
+
+        filters "auth-rate-limit"
+
+        policies {
+            timeout-secs 30
+            failure-mode "closed"
+        }
+    }
+
+    // General API routes: standard rate limiting (100 rps per IP)
+    route "api" {
+        priority "high"
+
+        matches {
+            path-prefix "/api"
+        }
+
+        upstream "api"
+
+        filters "api-rate-limit"
+
+        policies {
+            timeout-secs 30
+            failure-mode "open"
+        }
+    }
+
+    // Static content: generous rate limiting (1000 rps per IP)
+    route "static" {
+        priority "low"
+
+        matches {
+            path-prefix "/static"
+        }
+
+        upstream "static"
+
+        filters "static-rate-limit"
+
+        policies {
+            timeout-secs 10
+        }
+    }
+
+    // Health check: no rate limiting at all
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+}
+
+// =============================================================================
+// Upstreams
+// =============================================================================
+upstreams {
+    upstream "api" {
+        target "localhost:3000" weight=1
+
+        load-balancing "round-robin"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+            timeout-secs 5
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+    }
+
+    upstream "static" {
+        target "localhost:4000" weight=1
+
+        load-balancing "round-robin"
+    }
+}
+
+// =============================================================================
+// Observability
+// =============================================================================
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+    }
+
+    logging {
+        level "info"
+        format "json"
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-header-count 100
+    max-body-size-bytes 10485760
+}

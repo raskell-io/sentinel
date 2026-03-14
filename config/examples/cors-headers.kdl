@@ -1,0 +1,198 @@
+// Example: CORS Headers Configuration
+//
+// Apply Cross-Origin Resource Sharing (CORS) filters to API routes:
+// - CORS filter for public APIs (permissive)
+// - CORS filter for private APIs (restrictive)
+// - No CORS for internal health/metrics endpoints
+
+system {
+    worker-threads 0
+    max-connections 10000
+    graceful-shutdown-timeout-secs 30
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 60
+    }
+}
+
+// =============================================================================
+// Filters — CORS policies
+// =============================================================================
+filters {
+    // Permissive CORS for public-facing API
+    filter "public-cors" {
+        type "cors"
+    }
+
+    // Auth filter (example: combine CORS with authentication)
+    filter "auth" {
+        type "agent"
+        agent "auth"
+        timeout-ms 100
+        failure-mode "closed"
+    }
+}
+
+// =============================================================================
+// Agents
+// =============================================================================
+agents {
+    agent "auth" {
+        type "auth"
+        grpc address="http://localhost:50051"
+        events "request_headers"
+        timeout-ms 100
+        failure-mode "closed"
+    }
+}
+
+// =============================================================================
+// Routes
+// =============================================================================
+routes {
+    // Public API: CORS enabled, no auth
+    route "public-api" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/public"
+            method "GET" "POST" "PUT" "DELETE" "OPTIONS"
+        }
+
+        upstream "api"
+
+        filters "public-cors"
+
+        policies {
+            timeout-secs 30
+
+            // Set CORS response headers explicitly for fine-grained control
+            response-headers {
+                set {
+                    "Access-Control-Allow-Origin" "*"
+                    "Access-Control-Allow-Methods" "GET, POST, PUT, DELETE, OPTIONS"
+                    "Access-Control-Allow-Headers" "Content-Type, Authorization, X-Requested-With, X-API-Key"
+                    "Access-Control-Expose-Headers" "X-Total-Count, X-Page-Count"
+                    "Access-Control-Max-Age" "3600"
+                }
+            }
+        }
+    }
+
+    // Private API: CORS with strict origin + auth
+    route "private-api" {
+        priority "high"
+
+        matches {
+            path-prefix "/api/private"
+            method "GET" "POST" "PUT" "DELETE" "OPTIONS"
+        }
+
+        upstream "api"
+
+        filters "public-cors" "auth"
+
+        policies {
+            timeout-secs 30
+            failure-mode "closed"
+
+            response-headers {
+                set {
+                    "Access-Control-Allow-Origin" "https://app.example.com"
+                    "Access-Control-Allow-Methods" "GET, POST, PUT, DELETE"
+                    "Access-Control-Allow-Headers" "Content-Type, Authorization"
+                    "Access-Control-Allow-Credentials" "true"
+                    "Access-Control-Max-Age" "3600"
+                }
+            }
+        }
+    }
+
+    // WebSocket route with CORS
+    route "websocket" {
+        priority "high"
+
+        matches {
+            path-prefix "/ws"
+        }
+
+        upstream "api"
+
+        filters "public-cors"
+
+        websocket {
+            enabled #true
+            ping-interval-secs 30
+            ping-timeout-secs 10
+            max-message-size-bytes 65536
+        }
+
+        policies {
+            response-headers {
+                set {
+                    "Access-Control-Allow-Origin" "https://app.example.com"
+                    "Access-Control-Allow-Credentials" "true"
+                }
+            }
+        }
+    }
+
+    // Health check — no CORS needed
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+}
+
+// =============================================================================
+// Upstreams
+// =============================================================================
+upstreams {
+    upstream "api" {
+        target "localhost:3000" weight=1
+
+        load-balancing "round-robin"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+            timeout-secs 5
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+    }
+}
+
+// =============================================================================
+// Observability
+// =============================================================================
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+    }
+
+    logging {
+        level "info"
+        format "json"
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-header-count 100
+    max-body-size-bytes 10485760
+}

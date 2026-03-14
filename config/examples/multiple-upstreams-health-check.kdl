@@ -1,0 +1,172 @@
+// Example: Multiple Upstreams with Health Checks
+//
+// Load balance across multiple backend servers with:
+// - Active health checks (HTTP probes)
+// - Weighted load balancing with automatic failover
+// - Circuit breakers and retry policies
+// - Connection pooling and timeouts
+
+system {
+    worker-threads 0
+    max-connections 10000
+    graceful-shutdown-timeout-secs 30
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+        request-timeout-secs 60
+    }
+}
+
+// =============================================================================
+// Routes
+// =============================================================================
+routes {
+    // Main application — routed to the weighted backend cluster
+    route "app" {
+        priority "high"
+
+        matches {
+            path-prefix "/app"
+        }
+
+        upstream "backend"
+
+        circuit-breaker {
+            failure-threshold 5
+            success-threshold 2
+            timeout-seconds 60
+            half-open-max-requests 3
+        }
+
+        retry-policy {
+            max-attempts 2
+            timeout-ms 10000
+            backoff-base-ms 100
+            retryable-status-codes 502 503 504
+        }
+
+        policies {
+            timeout-secs 30
+            failure-mode "open"
+        }
+    }
+
+    // API — routed to the API cluster with tighter health checks
+    route "api" {
+        priority "high"
+
+        matches {
+            path-prefix "/api"
+        }
+
+        upstream "api"
+
+        retry-policy {
+            max-attempts 3
+            timeout-ms 5000
+            backoff-base-ms 50
+            retryable-status-codes 502 503 504
+        }
+
+        policies {
+            timeout-secs 15
+        }
+    }
+
+    // Health endpoint
+    route "health" {
+        priority "critical"
+
+        matches {
+            path "/health"
+        }
+
+        builtin-handler "health"
+    }
+}
+
+// =============================================================================
+// Upstreams
+// =============================================================================
+upstreams {
+    // Primary backend cluster — weighted round-robin across 3 servers
+    upstream "backend" {
+        target "10.0.1.10:3000" weight=100
+        target "10.0.1.11:3000" weight=100
+        target "10.0.1.12:3000" weight=50   // Lower capacity node
+
+        load-balancing "weighted-round-robin"
+
+        health-check {
+            type "http" {
+                path "/health"
+                expected-status 200
+            }
+            interval-secs 10
+            timeout-secs 5
+            healthy-threshold 2
+            unhealthy-threshold 3
+        }
+
+        connection-pool {
+            max-connections 100
+            max-idle 20
+            idle-timeout-secs 60
+        }
+
+        timeouts {
+            connect-secs 5
+            request-secs 30
+            read-secs 30
+        }
+    }
+
+    // API cluster — least-connections with faster health probes
+    upstream "api" {
+        target "10.0.2.10:4000" weight=1
+        target "10.0.2.11:4000" weight=1
+
+        load-balancing "least-connections"
+
+        health-check {
+            type "http" {
+                path "/api/health"
+                expected-status 200
+            }
+            interval-secs 5
+            timeout-secs 2
+            healthy-threshold 1
+            unhealthy-threshold 2
+        }
+
+        timeouts {
+            connect-secs 3
+            request-secs 15
+        }
+    }
+}
+
+// =============================================================================
+// Observability
+// =============================================================================
+observability {
+    metrics {
+        enabled #true
+        address "0.0.0.0:9090"
+        path "/metrics"
+    }
+
+    logging {
+        level "info"
+        format "json"
+    }
+}
+
+limits {
+    max-header-size-bytes 8192
+    max-header-count 100
+    max-body-size-bytes 10485760
+}
