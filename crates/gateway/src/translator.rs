@@ -18,7 +18,7 @@ use gateway_api::httproutes::{
 };
 use kube::api::ListParams;
 use kube::{Api, Client, ResourceExt};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use zentinel_common::types::{HealthCheckType, LoadBalancingAlgorithm, Priority, TlsVersion};
 use zentinel_config::{
@@ -28,6 +28,7 @@ use zentinel_config::{
     TlsConfig, UpstreamConfig, UpstreamTarget, UpstreamTimeouts, UrlRewriteFilter,
 };
 
+use crate::config_writer::ConfigWriter;
 use crate::error::GatewayError;
 use crate::reconcilers::gateway_class::CONTROLLER_NAME;
 use crate::reconcilers::ingress::translate_ingresses;
@@ -43,6 +44,7 @@ pub struct ConfigTranslator {
     config: Arc<ArcSwap<Config>>,
     reference_grants: Arc<ReferenceGrantIndex>,
     cert_manager: Arc<SecretCertificateManager>,
+    config_writer: Option<ConfigWriter>,
 }
 
 impl ConfigTranslator {
@@ -55,7 +57,18 @@ impl ConfigTranslator {
             config,
             reference_grants,
             cert_manager,
+            config_writer: None,
         }
+    }
+
+    /// Enable writing translated config to a KDL file for the proxy sidecar.
+    ///
+    /// When set, each `rebuild()` call writes the translated config to disk
+    /// in addition to storing it in the ArcSwap. The proxy reads this file
+    /// with `auto-reload: true`.
+    pub fn with_config_writer(mut self, writer: ConfigWriter) -> Self {
+        self.config_writer = Some(writer);
+        self
     }
 
     /// Get the current config (for reading).
@@ -166,10 +179,17 @@ impl ConfigTranslator {
         }
 
         // Translate TLSRoutes → Routes + Upstreams (SNI passthrough)
+        // Non-fatal: TLSRoute is experimental and the CRD may not be installed
         let tls_api: Api<TLSRoute> = Api::all(client.clone());
-        let all_tls_routes = tls_api.list(&ListParams::default()).await?;
+        let all_tls_routes = match tls_api.list(&ListParams::default()).await {
+            Ok(routes) => routes.items,
+            Err(e) => {
+                debug!(error = %e, "TLSRoute listing failed (experimental CRD may not be available)");
+                vec![]
+            }
+        };
 
-        for route in &all_tls_routes.items {
+        for route in &all_tls_routes {
             let parent_refs = route.spec.parent_refs.as_ref();
             let is_ours = parent_refs.is_some_and(|refs: &Vec<gateway_api::experimental::tlsroutes::TLSRouteParentRefs>| {
                 refs.iter().any(|pr: &gateway_api::experimental::tlsroutes::TLSRouteParentRefs| {
@@ -194,8 +214,14 @@ impl ConfigTranslator {
         // Translate legacy Ingress resources (compatibility shim)
         let ingress_api: Api<k8s_openapi::api::networking::v1::Ingress> =
             Api::all(client.clone());
-        let all_ingresses = ingress_api.list(&ListParams::default()).await?;
-        let (ingress_routes, ingress_upstreams) = translate_ingresses(&all_ingresses.items);
+        let ingress_items = match ingress_api.list(&ListParams::default()).await {
+            Ok(list) => list.items,
+            Err(e) => {
+                debug!(error = %e, "Ingress listing failed");
+                vec![]
+            }
+        };
+        let (ingress_routes, ingress_upstreams) = translate_ingresses(&ingress_items);
         routes.extend(ingress_routes);
         upstreams.extend(ingress_upstreams);
 
@@ -239,7 +265,15 @@ impl ConfigTranslator {
             "Config rebuilt from Gateway API resources"
         );
 
-        self.config.store(Arc::new(new_config));
+        self.config.store(Arc::new(new_config.clone()));
+
+        // Write config to disk for the proxy sidecar
+        if let Some(ref writer) = self.config_writer {
+            if let Err(e) = writer.write(&new_config) {
+                error!(error = %e, "Failed to write config to disk");
+            }
+        }
+
         Ok(())
     }
 

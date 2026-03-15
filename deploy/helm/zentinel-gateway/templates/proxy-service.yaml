@@ -1,0 +1,28 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "zentinel-gateway.fullname" . }}-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "zentinel-gateway.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.proxy.serviceType | default "LoadBalancer" }}
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+      {{- if .Values.proxy.httpNodePort }}
+      nodePort: {{ .Values.proxy.httpNodePort }}
+      {{- end }}
+    - port: 443
+      targetPort: https
+      protocol: TCP
+      name: https
+      {{- if .Values.proxy.httpsNodePort }}
+      nodePort: {{ .Values.proxy.httpsNodePort }}
+      {{- end }}
+  selector:
+    {{- include "zentinel-gateway.selectorLabels" . | nindent 4 }}
+{{- end }}

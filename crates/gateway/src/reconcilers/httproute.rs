@@ -1,7 +1,8 @@
 //! HTTPRoute reconciler.
 //!
 //! Watches HTTPRoute resources and triggers config translation when
-//! routes change. Updates HTTPRoute status with parent (Gateway) acceptance.
+//! routes change. Validates parent refs and backend refs, setting
+//! appropriate status conditions.
 
 use gateway_api::gatewayclasses::GatewayClass;
 use gateway_api::gateways::Gateway;
@@ -15,20 +16,29 @@ use tracing::{debug, info, warn};
 
 use super::gateway_class::CONTROLLER_NAME;
 use crate::error::GatewayError;
+use crate::reconcilers::ReferenceGrantIndex;
 use crate::translator::ConfigTranslator;
 
 /// Reconciler for HTTPRoute resources.
 pub struct HttpRouteReconciler {
     client: Client,
     translator: Arc<ConfigTranslator>,
+    reference_grants: Arc<ReferenceGrantIndex>,
 }
 
 impl HttpRouteReconciler {
-    pub fn new(client: Client, translator: Arc<ConfigTranslator>) -> Self {
-        Self { client, translator }
+    pub fn new(
+        client: Client,
+        translator: Arc<ConfigTranslator>,
+        reference_grants: Arc<ReferenceGrantIndex>,
+    ) -> Self {
+        Self {
+            client,
+            translator,
+            reference_grants,
+        }
     }
 
-    /// Reconcile an HTTPRoute resource.
     pub async fn reconcile(
         &self,
         route: Arc<HTTPRoute>,
@@ -43,15 +53,12 @@ impl HttpRouteReconciler {
             "Reconciling HTTPRoute"
         );
 
-        // Find which parent Gateways belong to us
-        let parent_refs = route
-            .spec
-            .parent_refs
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
+        let parent_refs = route.spec.parent_refs.as_ref().cloned().unwrap_or_default();
+        let generation = route.metadata.generation.unwrap_or(0);
+        let now = chrono::Utc::now().to_rfc3339();
 
-        let mut accepted_parents = Vec::new();
+        let mut parent_statuses = Vec::new();
+        let mut any_accepted = false;
 
         for parent_ref in &parent_refs {
             let gw_namespace = parent_ref
@@ -60,187 +67,303 @@ impl HttpRouteReconciler {
                 .unwrap_or(&namespace);
             let gw_name = &parent_ref.name;
 
-            match self.is_our_gateway(gw_name, gw_namespace).await {
-                Ok(true) => {
-                    accepted_parents.push((gw_name.clone(), gw_namespace.to_string()));
-                }
-                Ok(false) => {
-                    debug!(
-                        gateway = %gw_name,
-                        gateway_ns = %gw_namespace,
-                        "Ignoring parent ref to unowned Gateway"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        gateway = %gw_name,
-                        error = %e,
-                        "Error checking Gateway ownership"
-                    );
+            // Check if Gateway belongs to us
+            let gw = match self.get_our_gateway(gw_name, gw_namespace).await? {
+                Some(gw) => gw,
+                None => continue,
+            };
+
+            // Check sectionName matches a listener
+            if let Some(ref section_name) = parent_ref.section_name {
+                let has_listener = gw
+                    .spec
+                    .listeners
+                    .iter()
+                    .any(|l| l.name == *section_name);
+                if !has_listener {
+                    parent_statuses.push(json!({
+                        "parentRef": {
+                            "group": "gateway.networking.k8s.io",
+                            "kind": "Gateway",
+                            "name": gw_name,
+                            "namespace": gw_namespace,
+                            "sectionName": section_name,
+                        },
+                        "controllerName": CONTROLLER_NAME,
+                        "conditions": [{
+                            "type": "Accepted",
+                            "status": "False",
+                            "reason": "NoMatchingParent",
+                            "message": format!("No listener named '{section_name}' found on Gateway"),
+                            "observedGeneration": generation,
+                            "lastTransitionTime": now,
+                        }]
+                    }));
+                    continue;
                 }
             }
+
+            // Check cross-namespace parent ref permission
+            if gw_namespace != namespace {
+                let allowed = self.is_parent_ref_allowed(&gw, &namespace);
+                if !allowed {
+                    parent_statuses.push(json!({
+                        "parentRef": {
+                            "group": "gateway.networking.k8s.io",
+                            "kind": "Gateway",
+                            "name": gw_name,
+                            "namespace": gw_namespace,
+                        },
+                        "controllerName": CONTROLLER_NAME,
+                        "conditions": [{
+                            "type": "Accepted",
+                            "status": "False",
+                            "reason": "NotAllowedByListeners",
+                            "message": "Cross-namespace parent ref not allowed by Gateway",
+                            "observedGeneration": generation,
+                            "lastTransitionTime": now,
+                        }, {
+                            "type": "ResolvedRefs",
+                            "status": "True",
+                            "reason": "ResolvedRefs",
+                            "message": "References resolved (route not accepted)",
+                            "observedGeneration": generation,
+                            "lastTransitionTime": now,
+                        }]
+                    }));
+                    continue;
+                }
+            }
+
+            // Check hostname intersection with Gateway listeners
+            let route_hostnames: Vec<&str> = route
+                .spec
+                .hostnames
+                .as_ref()
+                .map(|h| h.iter().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
+
+            if !route_hostnames.is_empty() {
+                let has_intersection = gw.spec.listeners.iter().any(|l| {
+                    let listener_host = l.hostname.as_deref();
+                    match listener_host {
+                        None => true, // unspecified listener matches all
+                        Some(lh) => route_hostnames.iter().any(|rh| hostnames_intersect(lh, rh)),
+                    }
+                });
+
+                if !has_intersection {
+                    parent_statuses.push(json!({
+                        "parentRef": {
+                            "group": "gateway.networking.k8s.io",
+                            "kind": "Gateway",
+                            "name": gw_name,
+                            "namespace": gw_namespace,
+                        },
+                        "controllerName": CONTROLLER_NAME,
+                        "conditions": [{
+                            "type": "Accepted",
+                            "status": "False",
+                            "reason": "NoMatchingListenerHostname",
+                            "message": "No listener hostname intersects with route hostnames",
+                            "observedGeneration": generation,
+                            "lastTransitionTime": now,
+                        }, {
+                            "type": "ResolvedRefs",
+                            "status": "True",
+                            "reason": "ResolvedRefs",
+                            "message": "References resolved (route not accepted)",
+                            "observedGeneration": generation,
+                            "lastTransitionTime": now,
+                        }]
+                    }));
+                    continue;
+                }
+            }
+
+            // Validate backend refs
+            let (refs_resolved, refs_reason, refs_message) =
+                self.validate_backend_refs(&route, &namespace).await;
+
+            parent_statuses.push(json!({
+                "parentRef": {
+                    "group": "gateway.networking.k8s.io",
+                    "kind": "Gateway",
+                    "name": gw_name,
+                    "namespace": gw_namespace,
+                },
+                "controllerName": CONTROLLER_NAME,
+                "conditions": [{
+                    "type": "Accepted",
+                    "status": "True",
+                    "reason": "Accepted",
+                    "message": "Route accepted by Zentinel",
+                    "observedGeneration": generation,
+                    "lastTransitionTime": now,
+                }, {
+                    "type": "ResolvedRefs",
+                    "status": if refs_resolved { "True" } else { "False" },
+                    "reason": refs_reason,
+                    "message": refs_message,
+                    "observedGeneration": generation,
+                    "lastTransitionTime": now,
+                }]
+            }));
+
+            any_accepted = true;
         }
 
-        if accepted_parents.is_empty() {
+        if parent_statuses.is_empty() {
             debug!(route = %name, "No parent Gateways belong to us, skipping");
             return Ok(Action::await_change());
         }
 
-        // Trigger full config rebuild
-        if let Err(e) = self.translator.rebuild(&self.client).await {
-            warn!(error = %e, "Config translation failed");
-            self.update_status_failed(&route, &namespace, &accepted_parents, &e.to_string())
-                .await?;
-            return Ok(Action::requeue(std::time::Duration::from_secs(15)));
+        // Trigger config rebuild if any parent accepted
+        if any_accepted {
+            if let Err(e) = self.translator.rebuild(&self.client).await {
+                warn!(error = %e, "Config translation failed");
+            }
         }
 
-        // Update status on the HTTPRoute
-        self.update_status_accepted(&route, &namespace, &accepted_parents)
-            .await?;
+        // Update status
+        let status = json!({ "status": { "parents": parent_statuses } });
+        let api: Api<HTTPRoute> = Api::namespaced(self.client.clone(), &namespace);
+        api.patch_status(
+            &name,
+            &PatchParams::apply(CONTROLLER_NAME),
+            &Patch::Merge(&status),
+        )
+        .await?;
 
         Ok(Action::await_change())
     }
 
-    /// Check if a Gateway belongs to a GatewayClass we own.
-    async fn is_our_gateway(
+    /// Get a Gateway if it belongs to our GatewayClass.
+    async fn get_our_gateway(
         &self,
         name: &str,
         namespace: &str,
-    ) -> Result<bool, GatewayError> {
+    ) -> Result<Option<Gateway>, GatewayError> {
         let api: Api<Gateway> = Api::namespaced(self.client.clone(), namespace);
         let gw = match api.get(name).await {
             Ok(gw) => gw,
-            Err(kube::Error::Api(err)) if err.code == 404 => return Ok(false),
+            Err(kube::Error::Api(err)) if err.code == 404 => return Ok(None),
             Err(e) => return Err(e.into()),
         };
 
-        let class_name = &gw.spec.gateway_class_name;
         let class_api: Api<GatewayClass> = Api::all(self.client.clone());
-        match class_api.get(class_name).await {
-            Ok(gc) => Ok(gc.spec.controller_name == CONTROLLER_NAME),
-            Err(kube::Error::Api(err)) if err.code == 404 => Ok(false),
-            Err(e) => Err(e.into()),
+        match class_api.get(&gw.spec.gateway_class_name).await {
+            Ok(gc) if gc.spec.controller_name == CONTROLLER_NAME => Ok(Some(gw)),
+            _ => Ok(None),
         }
     }
 
-    /// Update HTTPRoute status to show accepted by our Gateway parents.
-    async fn update_status_accepted(
-        &self,
-        route: &HTTPRoute,
-        namespace: &str,
-        parents: &[(String, String)],
-    ) -> Result<(), GatewayError> {
-        let name = route.name_any();
-        let generation = route.metadata.generation.unwrap_or(0);
-        let now = chrono::Utc::now().to_rfc3339();
+    /// Check if a Gateway allows routes from the given namespace.
+    fn is_parent_ref_allowed(&self, gw: &Gateway, route_namespace: &str) -> bool {
+        use gateway_api::gateways::GatewayListenersAllowedRoutesNamespacesFrom;
 
-        let parent_statuses: Vec<serde_json::Value> = parents
-            .iter()
-            .map(|(gw_name, gw_ns)| {
-                json!({
-                    "parentRef": {
-                        "group": "gateway.networking.k8s.io",
-                        "kind": "Gateway",
-                        "name": gw_name,
-                        "namespace": gw_ns,
-                    },
-                    "controllerName": CONTROLLER_NAME,
-                    "conditions": [{
-                        "type": "Accepted",
-                        "status": "True",
-                        "reason": "Accepted",
-                        "message": "Route accepted by Zentinel",
-                        "observedGeneration": generation,
-                        "lastTransitionTime": now,
-                    }, {
-                        "type": "ResolvedRefs",
-                        "status": "True",
-                        "reason": "ResolvedRefs",
-                        "message": "All backend references resolved",
-                        "observedGeneration": generation,
-                        "lastTransitionTime": now,
-                    }]
-                })
-            })
-            .collect();
+        let gw_ns = gw.namespace().unwrap_or_default();
 
-        let status = json!({
-            "status": {
-                "parents": parent_statuses,
+        for listener in &gw.spec.listeners {
+            if let Some(ref allowed) = listener.allowed_routes {
+                if let Some(ref namespaces) = allowed.namespaces {
+                    if let Some(ref from) = namespaces.from {
+                        match from {
+                            GatewayListenersAllowedRoutesNamespacesFrom::All => return true,
+                            GatewayListenersAllowedRoutesNamespacesFrom::Same => {
+                                if gw_ns == route_namespace {
+                                    return true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            } else {
+                // No allowedRoutes = Same namespace only (default)
+                if gw_ns == route_namespace {
+                    return true;
+                }
             }
-        });
-
-        let api: Api<HTTPRoute> = Api::namespaced(self.client.clone(), namespace);
-        api.patch_status(
-            &name,
-            &PatchParams::apply(CONTROLLER_NAME),
-            &Patch::Merge(&status),
-        )
-        .await?;
-
-        Ok(())
+        }
+        false
     }
 
-    /// Update HTTPRoute status to show a failure.
-    async fn update_status_failed(
+    /// Validate backend refs for an HTTPRoute.
+    /// Returns (resolved, reason, message).
+    async fn validate_backend_refs(
         &self,
         route: &HTTPRoute,
-        namespace: &str,
-        parents: &[(String, String)],
-        message: &str,
-    ) -> Result<(), GatewayError> {
-        let name = route.name_any();
-        let generation = route.metadata.generation.unwrap_or(0);
-        let now = chrono::Utc::now().to_rfc3339();
+        route_ns: &str,
+    ) -> (bool, &'static str, String) {
+        let rules = route.spec.rules.as_ref();
+        let rules = match rules {
+            Some(r) => r,
+            None => return (true, "ResolvedRefs", "No rules".into()),
+        };
 
-        let parent_statuses: Vec<serde_json::Value> = parents
-            .iter()
-            .map(|(gw_name, gw_ns)| {
-                json!({
-                    "parentRef": {
-                        "group": "gateway.networking.k8s.io",
-                        "kind": "Gateway",
-                        "name": gw_name,
-                        "namespace": gw_ns,
-                    },
-                    "controllerName": CONTROLLER_NAME,
-                    "conditions": [{
-                        "type": "Accepted",
-                        "status": "True",
-                        "reason": "Accepted",
-                        "message": "Route accepted but translation failed",
-                        "observedGeneration": generation,
-                        "lastTransitionTime": now,
-                    }, {
-                        "type": "ResolvedRefs",
-                        "status": "False",
-                        "reason": "BackendNotFound",
-                        "message": message,
-                        "observedGeneration": generation,
-                        "lastTransitionTime": now,
-                    }]
-                })
-            })
-            .collect();
+        for rule in rules {
+            let backends = match &rule.backend_refs {
+                Some(b) => b,
+                None => continue,
+            };
 
-        let status = json!({
-            "status": {
-                "parents": parent_statuses,
+            for backend in backends {
+                // Check kind (must be Service or empty)
+                let kind = backend.kind.as_deref().unwrap_or("Service");
+                let group = backend.group.as_deref().unwrap_or("");
+
+                if kind != "Service" || (!group.is_empty() && group != "core") {
+                    return (
+                        false,
+                        "InvalidKind",
+                        format!("Backend ref has unsupported kind: {group}/{kind}"),
+                    );
+                }
+
+                // Check cross-namespace permission
+                let backend_ns = backend.namespace.as_deref().unwrap_or(route_ns);
+                let backend_name = &backend.name;
+                if backend_ns != route_ns
+                    && !self.reference_grants.is_permitted(
+                        route_ns,
+                        "HTTPRoute",
+                        backend_ns,
+                        "Service",
+                        backend_name,
+                    )
+                {
+                    return (
+                        false,
+                        "RefNotPermitted",
+                        format!(
+                            "Cross-namespace reference to {backend_ns}/{backend_name} not permitted"
+                        ),
+                    );
+                }
+
+                // Check Service exists
+                let svc_api: Api<k8s_openapi::api::core::v1::Service> =
+                    Api::namespaced(self.client.clone(), backend_ns);
+                match svc_api.get(backend_name).await {
+                    Ok(_) => {}
+                    Err(kube::Error::Api(err)) if err.code == 404 => {
+                        return (
+                            false,
+                            "BackendNotFound",
+                            format!("Service {backend_ns}/{backend_name} not found"),
+                        );
+                    }
+                    Err(_) => {
+                        // Non-fatal API error, treat as resolved
+                    }
+                }
             }
-        });
+        }
 
-        let api: Api<HTTPRoute> = Api::namespaced(self.client.clone(), namespace);
-        api.patch_status(
-            &name,
-            &PatchParams::apply(CONTROLLER_NAME),
-            &Patch::Merge(&status),
-        )
-        .await?;
-
-        Ok(())
+        (true, "ResolvedRefs", "All backend references resolved".into())
     }
 
-    /// Handle errors during reconciliation.
     pub fn error_policy(
         _obj: Arc<HTTPRoute>,
         error: &GatewayError,
@@ -249,4 +372,23 @@ impl HttpRouteReconciler {
         warn!(error = %error, "HTTPRoute reconciliation failed");
         Action::requeue(std::time::Duration::from_secs(15))
     }
+}
+
+/// Check if two hostnames intersect (one matches the other, accounting for wildcards).
+fn hostnames_intersect(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    // Wildcard matching: *.example.com matches foo.example.com
+    if let Some(suffix) = a.strip_prefix("*.") {
+        if b.ends_with(suffix) && b.len() > suffix.len() + 1 {
+            return true;
+        }
+    }
+    if let Some(suffix) = b.strip_prefix("*.") {
+        if a.ends_with(suffix) && a.len() > suffix.len() + 1 {
+            return true;
+        }
+    }
+    false
 }
