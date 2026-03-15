@@ -429,21 +429,15 @@ impl ZentinelProxy {
                         scoped_upstream_pools.len().await
                     );
 
-                    // Shutdown old pools after delay
+                    // Track drain lifecycle for old pools instead of blind sleep
                     tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        let tracker = crate::upstream::drain::DrainTracker::default();
 
-                        // Shutdown old global pools
-                        for (name, pool) in old_pools {
-                            info!("Shutting down old global pool: {}", name);
-                            pool.shutdown().await;
-                        }
+                        // Track global pools
+                        tracker.track_pools(old_pools).await;
 
-                        // Shutdown old scoped pools
-                        for (name, pool) in old_scoped_pools {
-                            info!("Shutting down old scoped pool: {}", name);
-                            pool.shutdown().await;
-                        }
+                        // Track scoped pools
+                        tracker.track_pools(old_scoped_pools).await;
                     });
                 }
             }

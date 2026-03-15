@@ -86,6 +86,7 @@ impl UpstreamTarget {
 // Load balancing algorithm implementations
 pub mod adaptive;
 pub mod consistent_hash;
+pub mod drain;
 pub mod health;
 pub mod inference_health;
 pub mod least_tokens;
@@ -271,6 +272,8 @@ pub struct PoolStats {
     pub retries: AtomicU64,
     /// Circuit breaker trips
     pub circuit_breaker_trips: AtomicU64,
+    /// Currently active requests (in-flight)
+    pub active_requests: AtomicU64,
 }
 
 /// Target information for shadow traffic
@@ -1575,6 +1578,26 @@ impl UpstreamPool {
     /// Check if TLS is enabled for this upstream
     pub fn is_tls_enabled(&self) -> bool {
         self.tls_enabled
+    }
+
+    /// Get the number of currently active (in-flight) requests for this pool.
+    ///
+    /// Used by the drain tracker to determine when a pool has been fully
+    /// drained after removal from config.
+    pub fn active_request_count(&self) -> u64 {
+        self.stats.active_requests.load(Ordering::Relaxed)
+    }
+
+    /// Increment the active request counter. Called when a request is assigned
+    /// to this pool.
+    pub fn increment_active(&self) {
+        self.stats.active_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement the active request counter. Called when a request completes
+    /// (success or failure).
+    pub fn decrement_active(&self) {
+        self.stats.active_requests.fetch_sub(1, Ordering::Relaxed);
     }
 
     /// Shutdown the pool

@@ -640,6 +640,8 @@ impl ProxyHttp for ZentinelProxy {
             match pool.select_peer_with_metadata(None).await {
                 Ok((mut peer, metadata)) => {
                     let selection_duration = selection_start.elapsed();
+                    // Track active request for drain lifecycle
+                    pool.increment_active();
                     // Store selected peer address for feedback reporting in logging()
                     let peer_addr = peer.address().to_string();
                     ctx.selected_upstream_address = Some(peer_addr.clone());
@@ -3346,6 +3348,7 @@ impl ProxyHttp for ZentinelProxy {
             if let Some(pool) = self.upstream_pools.get(upstream_id).await {
                 pool.report_result_with_latency(peer_addr, success, Some(duration))
                     .await;
+                pool.decrement_active();
                 trace!(
                     correlation_id = %ctx.trace_id,
                     upstream = %upstream_id,
