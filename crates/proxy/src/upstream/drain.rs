@@ -63,10 +63,7 @@ impl DrainTracker {
     ///
     /// This runs as a spawned task. It polls each pool's active request count
     /// and emits structured events as they transition from Draining to Drained.
-    pub async fn track_pools(
-        &self,
-        pools: HashMap<String, Arc<UpstreamPool>>,
-    ) {
+    pub async fn track_pools(&self, pools: HashMap<String, Arc<UpstreamPool>>) {
         if pools.is_empty() {
             return;
         }
