@@ -998,6 +998,11 @@ pub fn parse_cache_config(node: &kdl::KdlNode) -> Result<CacheStorageConfig> {
         config.status_header = v;
     }
 
+    // Parse custom status-header-name (RFC 9211 cache identifier, defaults to "zentinel")
+    if let Some(name) = get_string_entry(node, "status-header-name") {
+        config.status_header_name = name.to_string();
+    }
+
     // Validate disk backend has a path
     if matches!(config.backend, CacheBackend::Disk | CacheBackend::Hybrid)
         && config.disk_path.is_none()
@@ -1932,6 +1937,37 @@ mod tests {
         let result = parse_cache_config(node);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("disk-path"));
+    }
+
+    #[test]
+    fn test_parse_cache_config_custom_status_header_name() {
+        let kdl = r#"
+            cache {
+                status-header #true
+                status-header-name "my-cdn"
+            }
+        "#;
+        let doc: kdl::KdlDocument = kdl.parse().unwrap();
+        let node = doc.nodes().first().unwrap();
+
+        let config = parse_cache_config(node).unwrap();
+        assert!(config.status_header);
+        assert_eq!(config.status_header_name, "my-cdn");
+    }
+
+    #[test]
+    fn test_parse_cache_config_default_status_header_name() {
+        let kdl = r#"
+            cache {
+                status-header #true
+            }
+        "#;
+        let doc: kdl::KdlDocument = kdl.parse().unwrap();
+        let node = doc.nodes().first().unwrap();
+
+        let config = parse_cache_config(node).unwrap();
+        assert!(config.status_header);
+        assert_eq!(config.status_header_name, "zentinel");
     }
 
     #[test]

@@ -363,6 +363,15 @@ pub struct CacheStorageConfig {
     /// Add Cache-Status response header (RFC 9211) for cache observability
     #[serde(default)]
     pub status_header: bool,
+
+    /// Custom name for the Cache-Status header value (RFC 9211 cache identifier)
+    /// Defaults to "zentinel" if not set
+    #[serde(default = "default_status_header_name")]
+    pub status_header_name: String,
+}
+
+fn default_status_header_name() -> String {
+    "zentinel".to_string()
 }
 
 impl Default for CacheStorageConfig {
@@ -377,6 +386,7 @@ impl Default for CacheStorageConfig {
             disk_shards: default_disk_shards(),
             disk_max_size_bytes: None,
             status_header: false,
+            status_header_name: default_status_header_name(),
         }
     }
 }

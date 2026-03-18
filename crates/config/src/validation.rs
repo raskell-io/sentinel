@@ -1776,6 +1776,7 @@ mod tests {
             disk_shards: 16,
             disk_max_size_bytes: None,
             status_header: false,
+            status_header_name: "zentinel".to_string(),
         };
 
         // --- GlobalRateLimitConfig ---

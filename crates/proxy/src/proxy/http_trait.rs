@@ -1816,24 +1816,31 @@ impl ProxyHttp for ZentinelProxy {
                 .unwrap_or(false);
 
             if status_header_enabled {
+                let cache_name = ctx
+                    .config
+                    .as_ref()
+                    .and_then(|c| c.cache.as_ref())
+                    .map(|c| c.status_header_name.as_str())
+                    .unwrap_or("zentinel");
+
                 let value = match cache_status {
-                    super::context::CacheStatus::HitMemory => "zentinel; hit; detail=memory",
-                    super::context::CacheStatus::HitDisk => "zentinel; hit; detail=disk",
-                    super::context::CacheStatus::Hit => "zentinel; hit",
-                    super::context::CacheStatus::HitStale => "zentinel; fwd=stale",
-                    super::context::CacheStatus::Miss => "zentinel; fwd=miss",
-                    super::context::CacheStatus::Bypass(reason) => {
-                        // Leak a static string for the formatted bypass value
-                        // This is fine since there are only a few fixed reason strings
-                        match *reason {
-                            "method" => "zentinel; fwd=bypass; detail=method",
-                            "disabled" => "zentinel; fwd=bypass; detail=disabled",
-                            "no-route" => "zentinel; fwd=bypass; detail=no-route",
-                            _ => "zentinel; fwd=bypass",
-                        }
+                    super::context::CacheStatus::HitMemory => {
+                        format!("{cache_name}; hit; detail=memory")
                     }
+                    super::context::CacheStatus::HitDisk => {
+                        format!("{cache_name}; hit; detail=disk")
+                    }
+                    super::context::CacheStatus::Hit => format!("{cache_name}; hit"),
+                    super::context::CacheStatus::HitStale => format!("{cache_name}; fwd=stale"),
+                    super::context::CacheStatus::Miss => format!("{cache_name}; fwd=miss"),
+                    super::context::CacheStatus::Bypass(reason) => match *reason {
+                        "method" => format!("{cache_name}; fwd=bypass; detail=method"),
+                        "disabled" => format!("{cache_name}; fwd=bypass; detail=disabled"),
+                        "no-route" => format!("{cache_name}; fwd=bypass; detail=no-route"),
+                        _ => format!("{cache_name}; fwd=bypass"),
+                    },
                 };
-                upstream_response.insert_header("Cache-Status", value).ok();
+                upstream_response.insert_header("Cache-Status", &value).ok();
             }
         }
 
