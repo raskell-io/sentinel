@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.03_4](#26034---2026-03-18) | 0.6.2 | 2026-03-18 | Configurable Cache-Status header name |
 | [26.02_18](#260218---2026-02-26) | 0.5.10 | 2026-02-26 | Remove v1 agent protocol |
 | [26.02_16](#260216---2026-02-24) | 0.5.7 | 2026-02-24 | Fix KDL parser missing agent event aliases |
 | [26.02_14](#260214---2026-02-24) | 0.5.5 | 2026-02-24 | Bundle command with agent registry, API-first bundle fetch |
@@ -32,6 +33,15 @@ for details.
 | [26.01_0](#26010---2026-01-01) | 0.2.0 | 2026-01-01 | First CalVer release |
 | [25.12](#2512) | 0.1.x | 2025-12 | Initial public releases |
 | [24.12](#2412) | 0.1.0 | 2024-12 | Initial development |
+
+---
+
+## [26.03_4] - 2026-03-18
+
+**Crate version:** 0.6.2
+
+### Added
+- **Configurable `Cache-Status` header name** — New `status-header-name` option in the global cache config block allows operators to customize the RFC 9211 cache identifier. Defaults to `"zentinel"` for backwards compatibility.
 
 ---
 
