@@ -44,5 +44,8 @@ hyper.workspace = true
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
 
+# TLS bootstrap cert generation
+rcgen = "0.13"
+
 # Memory allocator
 tikv-jemallocator.workspace = true

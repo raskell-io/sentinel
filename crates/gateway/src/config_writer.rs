@@ -9,7 +9,7 @@
 //! the proxy (data plane) in the two-container deployment model.
 
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, warn};
 
 use zentinel_config::{Config, Filter, HeaderModifications, PathModifier};
 
@@ -372,34 +372,129 @@ fn render_path_modifier(out: &mut String, path: &PathModifier, indent: usize) {
 
 /// Write a minimal bootstrap config for the proxy to start with before
 /// the controller has reconciled any Gateway API resources.
+///
+/// The HTTPS listener starts with a self-signed certificate so Pingora
+/// can bind the TLS listener. The real certificate from the Gateway's
+/// Secret will replace it when the controller reconciles.
 pub fn write_bootstrap_config(path: &Path) -> Result<(), std::io::Error> {
-    let kdl = r#"// Bootstrap config for Zentinel Gateway API controller
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Generate a self-signed bootstrap certificate for the HTTPS listener
+    let cert_dir = std::path::Path::new("/tmp/zentinel-gateway-certs");
+    std::fs::create_dir_all(cert_dir)?;
+    let cert_path = cert_dir.join("bootstrap.crt");
+    let key_path = cert_dir.join("bootstrap.key");
+
+    generate_self_signed_cert(&cert_path, &key_path)?;
+
+    let kdl = format!(
+        r#"// Bootstrap config for Zentinel Gateway API controller
 // Will be overwritten once the controller reconciles Gateway resources
 
 schema-version "1.0"
 
-system {
+system {{
     worker-threads 0
     auto-reload #true
-}
+}}
 
-listeners {
-    listener "http" {
+listeners {{
+    listener "http" {{
         address "0.0.0.0:8080"
         protocol "http"
-    }
-    listener "https" {
+    }}
+    listener "https" {{
         address "0.0.0.0:8443"
-        protocol "http"
+        protocol "https"
+        tls {{
+            cert-file "{cert}"
+            key-file "{key}"
+        }}
+    }}
+}}
+"#,
+        cert = cert_path.display(),
+        key = key_path.display()
+    );
+
+    std::fs::write(path, kdl)?;
+    info!(path = %path.display(), "Bootstrap config written with self-signed TLS cert");
+    Ok(())
+}
+
+/// Generate a self-signed certificate for bootstrap TLS.
+fn generate_self_signed_cert(
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    use std::process::Command;
+
+    // Use openssl to generate a self-signed cert (available in most containers)
+    let status = Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:prime256v1",
+            "-keyout",
+        ])
+        .arg(key_path)
+        .args(["-out"])
+        .arg(cert_path)
+        .args([
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=zentinel-bootstrap",
+            "-batch",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            info!(
+                cert = %cert_path.display(),
+                key = %key_path.display(),
+                "Generated self-signed bootstrap TLS certificate"
+            );
+            Ok(())
+        }
+        _ => {
+            // Fallback: write minimal PEM files that Pingora can parse
+            // (they won't validate but allow the listener to start)
+            warn!("openssl not available, writing placeholder TLS cert");
+            // Generate using rcgen if available, or write a static self-signed cert
+            write_fallback_self_signed_cert(cert_path, key_path)
+        }
     }
 }
-"#;
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+/// Write a static self-signed PEM cert as fallback when openssl is unavailable.
+fn write_fallback_self_signed_cert(
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    // Use rcgen to generate a self-signed certificate
+    let subject_alt_names = vec!["localhost".to_string()];
+    let cert = rcgen::generate_simple_self_signed(subject_alt_names)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+    std::fs::write(cert_path, cert.cert.pem())?;
+    std::fs::write(key_path, cert.key_pair.serialize_pem())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600));
     }
-    std::fs::write(path, kdl)?;
-    info!(path = %path.display(), "Bootstrap config written");
+
     Ok(())
 }
 

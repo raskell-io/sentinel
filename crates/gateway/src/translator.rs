@@ -193,7 +193,7 @@ impl ConfigTranslator {
             }
 
             let (route_configs, upstream_configs, filter_configs) =
-                self.translate_httproute(route, &listener_hostnames)?;
+                self.translate_httproute(route, &listener_hostnames, &client).await?;
             routes.extend(route_configs);
             upstreams.extend(upstream_configs);
             filters.extend(filter_configs);
@@ -471,10 +471,11 @@ impl ConfigTranslator {
 
     /// Translate an HTTPRoute into Zentinel route, upstream, and filter configs.
     #[allow(clippy::type_complexity)]
-    fn translate_httproute(
+    async fn translate_httproute(
         &self,
         route: &HTTPRoute,
         listener_hostnames: &[String],
+        client: &Client,
     ) -> Result<
         (
             Vec<RouteConfig>,
@@ -511,7 +512,7 @@ impl ConfigTranslator {
 
             // Build upstream from backend refs (shared across all match entries)
             let (upstream_id, upstream) =
-                self.translate_backends(&rule_id, &rule.backend_refs, &route_ns)?;
+                self.translate_backends(&rule_id, &rule.backend_refs, &route_ns, client).await?;
 
             let has_upstream = upstream.is_some();
             if let Some(upstream) = upstream {
@@ -687,11 +688,12 @@ impl ConfigTranslator {
     }
 
     /// Translate HTTPRoute backend references into a Zentinel upstream.
-    fn translate_backends(
+    async fn translate_backends(
         &self,
         rule_id: &str,
         backend_refs: &Option<Vec<HTTPBackendReference>>,
         route_ns: &str,
+        client: &Client,
     ) -> Result<(String, Option<UpstreamConfig>), GatewayError> {
         let upstream_id = format!("{rule_id}-upstream");
 
@@ -747,19 +749,80 @@ impl ConfigTranslator {
                 continue;
             }
 
-            // Use Kubernetes DNS for service discovery:
-            // <service>.<namespace>.svc.cluster.local:<port>
-            let address = format!("{svc_name}.{svc_ns}.svc.cluster.local:{svc_port}");
+            // Check if service is headless (clusterIP: None).
+            // For headless services, we resolve EndpointSlices to get pod IPs
+            // since there's no ClusterIP for kube-proxy to route through.
+            let svc_api: Api<k8s_openapi::api::core::v1::Service> =
+                Api::namespaced(client.clone(), svc_ns);
+            let is_headless = svc_api
+                .get(svc_name)
+                .await
+                .ok()
+                .and_then(|svc| svc.spec)
+                .and_then(|spec| spec.cluster_ip)
+                .is_some_and(|ip| ip == "None" || ip.is_empty());
 
-            targets.push(UpstreamTarget {
-                address,
-                weight: weight as u32,
-                max_requests: None,
-                metadata: HashMap::from([
-                    ("k8s-service".to_string(), svc_name.clone()),
-                    ("k8s-namespace".to_string(), svc_ns.to_string()),
-                ]),
-            });
+            if is_headless {
+                // For headless services, look up EndpointSlices to get pod IPs
+                let ep_api: Api<k8s_openapi::api::discovery::v1::EndpointSlice> =
+                    Api::namespaced(client.clone(), svc_ns);
+                let label_selector = format!("kubernetes.io/service-name={svc_name}");
+                let eps = ep_api
+                    .list(&ListParams::default().labels(&label_selector))
+                    .await
+                    .map(|list| list.items)
+                    .unwrap_or_default();
+
+                for ep_slice in &eps {
+                    // Only use IPv4 endpoints
+                    if ep_slice.address_type != "IPv4" {
+                        continue;
+                    }
+
+                    // Find the target port from the EndpointSlice ports
+                    let target_port = ep_slice
+                        .ports
+                        .as_ref()
+                        .and_then(|ports| ports.first())
+                        .and_then(|p| p.port)
+                        .unwrap_or(svc_port as i32) as u16;
+
+                    for endpoint in &ep_slice.endpoints {
+                        // Only use ready endpoints
+                        if !endpoint.conditions.as_ref()
+                            .and_then(|c| c.ready)
+                            .unwrap_or(true)
+                        {
+                            continue;
+                        }
+                        for addr in &endpoint.addresses {
+                            targets.push(UpstreamTarget {
+                                address: format!("{addr}:{target_port}"),
+                                weight: weight as u32,
+                                max_requests: None,
+                                metadata: HashMap::from([
+                                    ("k8s-service".to_string(), svc_name.clone()),
+                                    ("k8s-namespace".to_string(), svc_ns.to_string()),
+                                ]),
+                            });
+                        }
+                    }
+                }
+            } else {
+                // Regular service: use Kubernetes DNS
+                // <service>.<namespace>.svc.cluster.local:<port>
+                let address = format!("{svc_name}.{svc_ns}.svc.cluster.local:{svc_port}");
+
+                targets.push(UpstreamTarget {
+                    address,
+                    weight: weight as u32,
+                    max_requests: None,
+                    metadata: HashMap::from([
+                        ("k8s-service".to_string(), svc_name.clone()),
+                        ("k8s-namespace".to_string(), svc_ns.to_string()),
+                    ]),
+                });
+            }
         }
 
         // Remove targets with weight=0 (Gateway API spec: weight 0 = no traffic)
