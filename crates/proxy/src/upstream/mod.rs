@@ -626,7 +626,7 @@ impl LoadBalancer for WeightedBalancer {
         );
 
         let health = self.health_status.read().await;
-        let healthy_indices: Vec<_> = self
+        let healthy: Vec<_> = self
             .targets
             .iter()
             .enumerate()
@@ -634,7 +634,7 @@ impl LoadBalancer for WeightedBalancer {
             .map(|(i, _)| i)
             .collect();
 
-        if healthy_indices.is_empty() {
+        if healthy.is_empty() {
             warn!(
                 total_targets = self.targets.len(),
                 algorithm = "weighted",
@@ -643,15 +643,36 @@ impl LoadBalancer for WeightedBalancer {
             return Err(ZentinelError::NoHealthyUpstream);
         }
 
-        let idx = self.current_index.fetch_add(1, Ordering::Relaxed) % healthy_indices.len();
-        let target_idx = healthy_indices[idx];
+        // Weighted round-robin: map request counter to a weighted slot.
+        // E.g. weights [70, 30] → total 100 → slots [0..70) → target 0, [70..100) → target 1
+        let total_weight: u32 = healthy
+            .iter()
+            .map(|&i| self.weights.get(i).copied().unwrap_or(1))
+            .sum();
+
+        if total_weight == 0 {
+            return Err(ZentinelError::NoHealthyUpstream);
+        }
+
+        let slot = (self.current_index.fetch_add(1, Ordering::Relaxed) as u32) % total_weight;
+        let mut cumulative = 0u32;
+        let mut target_idx = healthy[0];
+        for &i in &healthy {
+            let w = self.weights.get(i).copied().unwrap_or(1);
+            cumulative += w;
+            if slot < cumulative {
+                target_idx = i;
+                break;
+            }
+        }
+
         let target = &self.targets[target_idx];
         let weight = self.weights.get(target_idx).copied().unwrap_or(1);
 
         trace!(
             selected_target = %target.full_address(),
             weight = weight,
-            healthy_count = healthy_indices.len(),
+            healthy_count = healthy.len(),
             algorithm = "weighted",
             "Selected target via weighted round robin"
         );

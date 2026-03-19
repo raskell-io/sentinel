@@ -353,8 +353,10 @@ impl HttpRouteReconciler {
                 if backend_ns != route_ns
                     && !self.reference_grants.is_permitted(
                         route_ns,
+                        "gateway.networking.k8s.io",
                         "HTTPRoute",
                         backend_ns,
+                        "",
                         "Service",
                         backend_name,
                     )

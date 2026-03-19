@@ -16,8 +16,12 @@ pub struct PermittedReference {
     pub target_namespace: String,
     /// Source namespace that is granted permission.
     pub source_namespace: String,
+    /// Source group (e.g., "gateway.networking.k8s.io").
+    pub source_group: String,
     /// Source kind (e.g., "HTTPRoute", "Gateway").
     pub source_kind: String,
+    /// Target group (e.g., "" for core, "gateway.networking.k8s.io").
+    pub target_group: String,
     /// Target kind (e.g., "Service", "Secret").
     pub target_kind: String,
     /// Target name, if restricted. Empty means all resources of that kind.
@@ -48,16 +52,20 @@ impl ReferenceGrantIndex {
 
             for from in &grant.spec.from {
                 let source_ns = from.namespace.clone();
+                let source_group = from.group.clone();
                 let source_kind = from.kind.clone();
 
                 for to in &grant.spec.to {
+                    let target_group = to.group.clone();
                     let target_kind = to.kind.clone();
                     let target_name: String = to.name.clone().unwrap_or_default();
 
                     permitted.insert(PermittedReference {
                         target_namespace: target_ns.clone(),
                         source_namespace: source_ns.clone(),
+                        source_group: source_group.clone(),
                         source_kind: source_kind.clone(),
+                        target_group,
                         target_kind,
                         target_name,
                     });
@@ -73,12 +81,14 @@ impl ReferenceGrantIndex {
     ///
     /// Returns `true` if either:
     /// - The source and target are in the same namespace (no grant needed)
-    /// - A matching ReferenceGrant exists
+    /// - A matching ReferenceGrant exists (all fields must match)
     pub fn is_permitted(
         &self,
         source_namespace: &str,
+        source_group: &str,
         source_kind: &str,
         target_namespace: &str,
+        target_group: &str,
         target_kind: &str,
         target_name: &str,
     ) -> bool {
@@ -93,7 +103,9 @@ impl ReferenceGrantIndex {
         let exact = PermittedReference {
             target_namespace: target_namespace.to_string(),
             source_namespace: source_namespace.to_string(),
+            source_group: source_group.to_string(),
             source_kind: source_kind.to_string(),
+            target_group: target_group.to_string(),
             target_kind: target_kind.to_string(),
             target_name: target_name.to_string(),
         };
@@ -112,7 +124,9 @@ impl ReferenceGrantIndex {
         let wildcard = PermittedReference {
             target_namespace: target_namespace.to_string(),
             source_namespace: source_namespace.to_string(),
+            source_group: source_group.to_string(),
             source_kind: source_kind.to_string(),
+            target_group: target_group.to_string(),
             target_kind: target_kind.to_string(),
             target_name: String::new(),
         };
@@ -144,12 +158,28 @@ mod tests {
     #[test]
     fn same_namespace_always_permitted() {
         let index = ReferenceGrantIndex::new();
-        assert!(index.is_permitted("default", "HTTPRoute", "default", "Service", "my-svc"));
+        assert!(index.is_permitted(
+            "default",
+            "gateway.networking.k8s.io",
+            "HTTPRoute",
+            "default",
+            "",
+            "Service",
+            "my-svc"
+        ));
     }
 
     #[test]
     fn cross_namespace_denied_without_grant() {
         let index = ReferenceGrantIndex::new();
-        assert!(!index.is_permitted("web", "HTTPRoute", "backend", "Service", "api"));
+        assert!(!index.is_permitted(
+            "web",
+            "gateway.networking.k8s.io",
+            "HTTPRoute",
+            "backend",
+            "",
+            "Service",
+            "api"
+        ));
     }
 }

@@ -124,6 +124,18 @@ impl ConfigWriter {
                     out.push('\n');
                 }
 
+                // Emit load balancing algorithm (omit if default RoundRobin)
+                if upstream.load_balancing != zentinel_common::types::LoadBalancingAlgorithm::RoundRobin {
+                    let algo_str = match upstream.load_balancing {
+                        zentinel_common::types::LoadBalancingAlgorithm::Weighted => "weighted",
+                        zentinel_common::types::LoadBalancingAlgorithm::LeastConnections => "least-connections",
+                        zentinel_common::types::LoadBalancingAlgorithm::Random => "random",
+                        zentinel_common::types::LoadBalancingAlgorithm::IpHash => "ip-hash",
+                        _ => "round-robin",
+                    };
+                    out.push_str(&format!("        load-balancing \"{algo_str}\"\n"));
+                }
+
                 if let Some(ref hc) = upstream.health_check {
                     out.push_str("        health-check {\n");
                     match &hc.check_type {

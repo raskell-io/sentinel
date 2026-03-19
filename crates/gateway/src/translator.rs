@@ -730,8 +730,10 @@ impl ConfigTranslator {
             if svc_ns != route_ns
                 && !self.reference_grants.is_permitted(
                     route_ns,
+                    "gateway.networking.k8s.io",
                     "HTTPRoute",
                     svc_ns,
+                    "",
                     "Service",
                     svc_name,
                 )
@@ -760,6 +762,9 @@ impl ConfigTranslator {
             });
         }
 
+        // Remove targets with weight=0 (Gateway API spec: weight 0 = no traffic)
+        targets.retain(|t| t.weight > 0);
+
         // When all backends are invalid (wrong kind, denied cross-namespace, etc.),
         // return None so the route gets no upstream. The proxy will return 500
         // for requests matching this route.
@@ -767,10 +772,18 @@ impl ConfigTranslator {
             return Ok((upstream_id, None));
         }
 
+        // Use weighted load balancing when backends have different weights
+        let has_varying_weights = targets.windows(2).any(|w| w[0].weight != w[1].weight);
+        let load_balancing = if has_varying_weights {
+            LoadBalancingAlgorithm::Weighted
+        } else {
+            LoadBalancingAlgorithm::RoundRobin
+        };
+
         let upstream = UpstreamConfig {
             id: upstream_id.clone(),
             targets,
-            load_balancing: LoadBalancingAlgorithm::RoundRobin,
+            load_balancing,
             sticky_session: None,
             health_check: Some(HealthCheck {
                 check_type: HealthCheckType::Http {
@@ -1145,8 +1158,10 @@ impl ConfigTranslator {
             if svc_ns != route_ns
                 && !self.reference_grants.is_permitted(
                     route_ns,
+                    "gateway.networking.k8s.io",
                     "GRPCRoute",
                     svc_ns,
+                    "",
                     "Service",
                     svc_name,
                 )
@@ -1298,7 +1313,7 @@ impl ConfigTranslator {
             if svc_ns != route_ns
                 && !self
                     .reference_grants
-                    .is_permitted(route_ns, "TLSRoute", svc_ns, "Service", svc_name)
+                    .is_permitted(route_ns, "gateway.networking.k8s.io", "TLSRoute", svc_ns, "", "Service", svc_name)
             {
                 warn!(
                     route_ns = route_ns,

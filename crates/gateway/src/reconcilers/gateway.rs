@@ -72,9 +72,12 @@ impl GatewayReconciler {
     /// Count attached HTTPRoutes per listener section name.
     async fn count_attached_routes(
         &self,
+        gateway: &Gateway,
         gw_name: &str,
         gw_namespace: &str,
     ) -> Result<HashMap<String, i32>, GatewayError> {
+        use gateway_api::gateways::GatewayListenersAllowedRoutesNamespacesFrom;
+
         let route_api: Api<HTTPRoute> = Api::all(self.client.clone());
         let routes = route_api.list(&ListParams::default()).await?;
 
@@ -85,12 +88,65 @@ impl GatewayReconciler {
                 for pr in refs {
                     let route_ns = route.namespace().unwrap_or_default();
                     let pr_ns = pr.namespace.as_deref().unwrap_or(&route_ns);
-                    if pr.name == gw_name && pr_ns == gw_namespace {
-                        if let Some(ref section) = pr.section_name {
-                            *counts.entry(section.clone()).or_insert(0) += 1;
-                        } else {
-                            *counts.entry(String::new()).or_insert(0) += 1;
+                    if pr.name != gw_name || pr_ns != gw_namespace {
+                        continue;
+                    }
+
+                    // Check if the route namespace is actually allowed by this Gateway.
+                    // Routes from disallowed namespaces should NOT be counted.
+                    let allowed = if route_ns == gw_namespace {
+                        true // Same namespace is always allowed
+                    } else {
+                        // Check listener allowedRoutes
+                        let mut any_listener_allows = false;
+                        for listener in &gateway.spec.listeners {
+                            // If sectionName specified, only check that listener
+                            if let Some(ref section) = pr.section_name {
+                                if listener.name != *section {
+                                    continue;
+                                }
+                            }
+                            if let Some(ref allowed_routes) = listener.allowed_routes {
+                                if let Some(ref ns_config) = allowed_routes.namespaces {
+                                    if let Some(ref from) = ns_config.from {
+                                        match from {
+                                            GatewayListenersAllowedRoutesNamespacesFrom::All => {
+                                                any_listener_allows = true;
+                                            }
+                                            GatewayListenersAllowedRoutesNamespacesFrom::Selector => {
+                                                // Check namespace labels
+                                                if let Some(ref selector) = ns_config.selector {
+                                                    if let Some(ref labels) = selector.match_labels {
+                                                        let ns_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(self.client.clone());
+                                                        if let Ok(ns) = ns_api.get(&route_ns).await {
+                                                            let ns_labels = ns.metadata.labels.unwrap_or_default();
+                                                            if labels.iter().all(|(k, v)| ns_labels.get(k) == Some(v)) {
+                                                                any_listener_allows = true;
+                                                            }
+                                                        }
+                                                    } else {
+                                                        any_listener_allows = true;
+                                                    }
+                                                }
+                                            }
+                                            _ => {} // Same = not allowed for cross-namespace
+                                        }
+                                    }
+                                }
+                            }
+                            // No allowedRoutes = Same only (default), cross-ns not allowed
                         }
+                        any_listener_allows
+                    };
+
+                    if !allowed {
+                        continue;
+                    }
+
+                    if let Some(ref section) = pr.section_name {
+                        *counts.entry(section.clone()).or_insert(0) += 1;
+                    } else {
+                        *counts.entry(String::new()).or_insert(0) += 1;
                     }
                 }
             }
@@ -216,8 +272,10 @@ impl GatewayReconciler {
             if secret_ns != gw_namespace
                 && !self.reference_grants.is_permitted(
                     gw_namespace,
+                    "gateway.networking.k8s.io",
                     "Gateway",
                     secret_ns,
+                    "",
                     "Secret",
                     &cert_ref.name,
                 )
@@ -298,7 +356,7 @@ impl GatewayReconciler {
         let generation = gateway.metadata.generation.unwrap_or(0);
         let now = chrono::Utc::now().to_rfc3339();
 
-        let attached_counts = self.count_attached_routes(&name, namespace).await?;
+        let attached_counts = self.count_attached_routes(gateway, &name, namespace).await?;
         let wildcard_count = attached_counts.get("").copied().unwrap_or(0);
         let addresses = self.get_gateway_addresses(namespace).await;
 
