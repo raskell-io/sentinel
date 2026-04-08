@@ -64,15 +64,28 @@ jobs:
           docker build -t $GATEWAY_IMAGE --target gateway .
           docker build -t $PROXY_IMAGE --target proxy .
 
+      # helm/kind-action's `config` parameter passes its value straight to
+      # `kind create cluster --config`, which expects a file path. Older
+      # releases of the action did not write inline YAML to a temp file
+      # first, so passing the config inline produced
+      #   `failed to create cluster: error reading file: open kind: Cluster ...`
+      # because the YAML body itself was being treated as a filename.
+      # Write the config to a real file and reference it by path so this
+      # works regardless of which action version the @v1 tag resolves to.
+      - name: Write kind cluster config
+        run: |
+          cat > /tmp/kind-config.yaml <<'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+          EOF
+
       - name: Create kind cluster
         uses: helm/kind-action@v1
         with:
           cluster_name: ${{ env.CLUSTER_NAME }}
-          config: |
-            kind: Cluster
-            apiVersion: kind.x-k8s.io/v1alpha4
-            nodes:
-              - role: control-plane
+          config: /tmp/kind-config.yaml
 
       - name: Load images into kind
         run: |
@@ -84,16 +97,23 @@ jobs:
           kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
           kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/experimental-install.yaml
 
+      # The Helm chart renders the image as
+      #   "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      # so passing the full `name:tag` as repository + an empty tag yields
+      # `zentinel-gateway:ci:<chart-version>`, which kind rejects with
+      # `InvalidImageName`. Split the `IMAGE_NAME:TAG` env vars into
+      # repository and tag using bash parameter expansion so the chart
+      # template renders the correct reference.
       - name: Deploy zentinel-gateway
         run: |
           kubectl create namespace zentinel-system
           helm install zentinel-gateway deploy/helm/zentinel-gateway \
             --namespace zentinel-system \
-            --set image.repository=$GATEWAY_IMAGE \
-            --set image.tag="" \
+            --set image.repository="${GATEWAY_IMAGE%:*}" \
+            --set image.tag="${GATEWAY_IMAGE##*:}" \
             --set image.pullPolicy=Never \
-            --set proxy.image.repository=$PROXY_IMAGE \
-            --set proxy.image.tag="" \
+            --set proxy.image.repository="${PROXY_IMAGE%:*}" \
+            --set proxy.image.tag="${PROXY_IMAGE##*:}" \
             --set proxy.image.pullPolicy=Never \
             --wait \
             --timeout 120s
