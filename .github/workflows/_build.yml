@@ -77,11 +77,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-build-${{ inputs.profile }}-
 
+      # Install protoc from official releases instead of the system package.
+      # ubuntu-22.04's apt protoc (3.12) doesn't support proto3 optional
+      # fields used in agent_v2.proto. Official releases v21+ do.
       - name: Install protoc (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          PROTOC_VERSION=28.3
+          case "$(uname -m)" in
+            x86_64)  PROTOC_ARCH="x86_64" ;;
+            aarch64) PROTOC_ARCH="aarch_64" ;;
+            *)       echo "Unsupported arch: $(uname -m)"; exit 1 ;;
+          esac
+          curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${PROTOC_ARCH}.zip"
+          sudo unzip -o "protoc-${PROTOC_VERSION}-linux-${PROTOC_ARCH}.zip" -d /usr/local
+          rm "protoc-${PROTOC_VERSION}-linux-${PROTOC_ARCH}.zip"
+          protoc --version
 
       - name: Install zigbuild for ARM64 cross-compilation
         if: runner.os == 'Linux' && matrix.config.target == 'aarch64-unknown-linux-gnu'
