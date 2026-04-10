@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.04_2](#26042---2026-04-10) | 0.6.5 | 2026-04-10 | Security: wasmtime 43.0.1 (critical sandbox escape fix) |
 | [26.04_1](#26041---2026-04-09) | 0.6.4 | 2026-04-09 | Numeric route priorities, host extraction fix, Docker glibc fix, conformance CI restored |
 | [26.03_4](#26034---2026-03-18) | 0.6.2 | 2026-03-18 | Configurable Cache-Status header name |
 | [26.02_18](#260218---2026-02-26) | 0.5.10 | 2026-02-26 | Remove v1 agent protocol |
@@ -34,6 +35,15 @@ for details.
 | [26.01_0](#26010---2026-01-01) | 0.2.0 | 2026-01-01 | First CalVer release |
 | [25.12](#2512) | 0.1.x | 2025-12 | Initial public releases |
 | [24.12](#2412) | 0.1.0 | 2024-12 | Initial development |
+
+---
+
+## [26.04_2] - 2026-04-10
+
+**Crate version:** 0.6.5
+
+### Security
+- **Bump wasmtime 43.0.0 → 43.0.1** — Resolves 10 Dependabot advisories including CVE-2026-34971 (critical: sandbox escape on aarch64 via miscompiled guest heap access in Cranelift), 6 medium-severity issues (OOB memory access, host panics/crashes), and 3 low-severity issues (data leakage, use-after-free). (#183)
 
 ---
 
