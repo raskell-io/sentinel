@@ -121,56 +121,54 @@ impl RenewalScheduler {
     async fn check_renewals(&self) -> Result<(), AcmeError> {
         let domains = self.client.config().domains.clone();
 
-        info!(
-            domain_count = domains.len(),
-            "Checking certificates for renewal"
-        );
+        if domains.is_empty() {
+            return Ok(());
+        }
 
-        for domain in &domains {
-            match self.client.needs_renewal(domain) {
-                Ok(true) => {
-                    info!(domain = %domain, "Certificate needs renewal");
+        // We only check the primary domain for renewal as all domains in this
+        // config block are part of the same certificate and stored under the primary domain.
+        let domain = &domains[0];
 
-                    match self.renew_certificate().await {
-                        Ok(()) => {
-                            info!(domain = %domain, "Certificate renewed successfully");
+        match self.client.needs_renewal(domain) {
+            Ok(true) => {
+                info!(domain = %domain, "Certificate needs renewal");
 
-                            // Trigger TLS hot-reload
-                            if let Some(ref resolver) = self.sni_resolver {
-                                if let Err(e) = resolver.reload() {
-                                    error!(
-                                        domain = %domain,
-                                        error = %e,
-                                        "Failed to reload TLS configuration"
-                                    );
-                                } else {
-                                    info!("TLS configuration reloaded with new certificate");
-                                }
+                match self.renew_certificate().await {
+                    Ok(()) => {
+                        info!(domain = %domain, "Certificate renewed successfully");
+
+                        // Trigger TLS hot-reload
+                        if let Some(ref resolver) = self.sni_resolver {
+                            if let Err(e) = resolver.reload() {
+                                error!(
+                                    domain = %domain,
+                                    error = %e,
+                                    "Failed to reload TLS configuration"
+                                );
+                            } else {
+                                info!("TLS configuration reloaded with new certificate");
                             }
                         }
-                        Err(e) => {
-                            error!(
-                                domain = %domain,
-                                error = %e,
-                                "Certificate renewal failed"
-                            );
-                            // Continue with other domains
-                        }
                     }
-
-                    // Only renew once per check - all domains are in the same cert
-                    break;
+                    Err(e) => {
+                        error!(
+                            domain = %domain,
+                            error = %e,
+                            "Certificate renewal failed"
+                        );
+                        return Err(e);
+                    }
                 }
-                Ok(false) => {
-                    debug!(domain = %domain, "Certificate is still valid");
-                }
-                Err(e) => {
-                    warn!(
-                        domain = %domain,
-                        error = %e,
-                        "Failed to check certificate renewal status"
-                    );
-                }
+            }
+            Ok(false) => {
+                debug!(domain = %domain, "Certificate is still valid");
+            }
+            Err(e) => {
+                warn!(
+                    domain = %domain,
+                    error = %e,
+                    "Failed to check certificate renewal status"
+                );
             }
         }
 
