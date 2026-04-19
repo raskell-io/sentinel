@@ -235,8 +235,43 @@ pub struct AcmeConfig {
     #[serde(default)]
     pub challenge_type: AcmeChallengeType,
 
+    /// Key type to use for the certificate and account
+    /// Defaults to ECDSA P-256
+    #[serde(default)]
+    pub key_type: AcmeKeyType,
+
     /// DNS provider configuration (required for DNS-01 challenges)
     pub dns_provider: Option<DnsProviderConfig>,
+}
+
+/// ACME key type
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AcmeKeyType {
+    /// ECDSA P-256 (default)
+    #[default]
+    EcdsaP256,
+    /// ECDSA P-384
+    EcdsaP384,
+}
+
+impl AcmeKeyType {
+    /// Parse from a string with loose matching
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "ecdsa-p256" | "p256" | "ecdsa" => Some(Self::EcdsaP256),
+            "ecdsa-p384" | "p384" => Some(Self::EcdsaP384),
+            _ => None,
+        }
+    }
+
+    /// Convert to string for KDL/display
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::EcdsaP256 => "ecdsa-p256",
+            Self::EcdsaP384 => "ecdsa-p384",
+        }
+    }
 }
 
 /// External Account Binding (EAB) credentials for ACME

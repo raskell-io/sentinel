@@ -1,0 +1,43 @@
+// ACME High Security Example (ECDSA P-384)
+//
+// This example demonstrates how to specify a custom key type for ACME certificates.
+// Using ECDSA P-384 provides higher security strength than the default P-256.
+
+system {
+    worker-threads 4
+}
+
+listeners {
+    listener "https" {
+        address "0.0.0.0:443"
+        tls {
+            acme {
+                email "admin@example.com"
+                domains "example.com" "*.example.com"
+
+                // Specify the key type
+                // Supported values: ecdsa-p256 (default), ecdsa-p384
+                key-type "ecdsa-p384"
+
+                challenge-type "dns-01"
+                dns-provider {
+                    type "cloudflare"
+                    credentials-file "/etc/zentinel/secrets/cloudflare-token.txt"
+                }
+            }
+        }
+    }
+}
+
+upstreams {
+    upstream "backend" {
+        server address="127.0.0.1:8080"
+    }
+}
+
+routes {
+    route "default" {
+        match path="/"
+        back-to upstream="backend"
+    }
+}
