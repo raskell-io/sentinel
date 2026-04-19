@@ -16,6 +16,7 @@ Example configurations demonstrating Zentinel features and patterns.
 | [api-schema-validation.kdl](api-schema-validation.kdl) | JSON Schema and OpenAPI validation for API routes |
 | [acme-cloudflare.kdl](acme-cloudflare.kdl) | Automatic TLS via Cloudflare DNS-01 challenges |
 | [acme-zerossl.kdl](acme-zerossl.kdl) | ACME with custom URL and EAB (e.g., ZeroSSL) |
+| [acme-p384.kdl](acme-p384.kdl) | ACME with custom key type (ECDSA P-384) |
 | [acme-san.kdl](acme-san.kdl) | Multi-domain (SAN) certificate management |
 
 ## AI/Inference

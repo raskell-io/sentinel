@@ -9,7 +9,7 @@ use zentinel_common::types::{TlsVersion, TraceIdFormat};
 use crate::server::{
     default_acme_storage, default_graceful_shutdown_timeout, default_keepalive_timeout,
     default_max_concurrent_streams, default_max_connections, default_renewal_days,
-    default_request_timeout, default_worker_threads, AcmeChallengeType, AcmeConfig,
+    default_request_timeout, default_worker_threads, AcmeChallengeType, AcmeConfig, AcmeKeyType,
     DnsProviderConfig, DnsProviderType, ExternalAccountBinding, ListenerConfig, ListenerProtocol,
     PropagationCheckConfig, ServerConfig, SniCertificate, TlsConfig,
 };
@@ -355,6 +355,19 @@ fn parse_acme_config(node: &kdl::KdlNode, listener_id: &str) -> Result<AcmeConfi
         .map(|s| parse_challenge_type(&s))
         .unwrap_or_default();
 
+    // Parse key type
+    let key_type = if let Some(s) = get_string_entry(node, "key-type") {
+        AcmeKeyType::from_str_loose(&s).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invalid key-type '{}' for listener '{}'. Valid types: ecdsa-p256, ecdsa-p384",
+                s,
+                listener_id
+            )
+        })?
+    } else {
+        AcmeKeyType::default()
+    };
+
     // Parse DNS provider configuration if present
     let dns_provider = if let Some(children) = node.children() {
         children
@@ -406,6 +419,7 @@ fn parse_acme_config(node: &kdl::KdlNode, listener_id: &str) -> Result<AcmeConfi
         storage,
         renew_before_days,
         challenge_type,
+        key_type,
         dns_provider,
     })
 }

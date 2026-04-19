@@ -617,17 +617,20 @@ mod sni_auto_extraction {
 mod acme_resolver {
     use super::*;
     use std::path::PathBuf;
-    use zentinel_config::server::{AcmeChallengeType, AcmeConfig};
+    use zentinel_config::server::{AcmeChallengeType, AcmeConfig, AcmeKeyType};
 
     /// Build an AcmeConfig pointing at the given storage directory
     fn acme_config(storage: PathBuf) -> AcmeConfig {
         AcmeConfig {
             email: "test@example.com".to_string(),
             domains: vec!["example.com".to_string()],
+            server_url: None,
             staging: true,
+            eab: None,
             storage,
             renew_before_days: 30,
             challenge_type: AcmeChallengeType::Http01,
+            key_type: AcmeKeyType::EcdsaP256,
             dns_provider: None,
         }
     }

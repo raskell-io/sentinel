@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use zentinel_config::server::{AcmeChallengeType, AcmeConfig};
+use zentinel_config::server::{AcmeChallengeType, AcmeConfig, AcmeKeyType};
 use zentinel_config::TlsConfig;
 use zentinel_proxy::acme::{CertificateStorage, ChallengeManager};
 
@@ -33,6 +33,7 @@ fn acme_config(storage: PathBuf) -> AcmeConfig {
         storage,
         renew_before_days: 30,
         challenge_type: AcmeChallengeType::Http01,
+        key_type: AcmeKeyType::EcdsaP256,
         dns_provider: None,
     }
 }
@@ -395,6 +396,7 @@ mod acme_client_logic {
                             email "test@example.com"
                             domains "example.com"
                             server-url "https://acme.zerossl.com/v2/DV90"
+                            key-type "ecdsa-p384"
                             eab {
                                 kid "my-kid"
                                 hmac-key "my-hmac-key"
@@ -418,6 +420,7 @@ mod acme_client_logic {
             acme.server_url.as_ref().unwrap(),
             "https://acme.zerossl.com/v2/DV90"
         );
+        assert_eq!(acme.key_type.as_str(), "ecdsa-p384");
         let eab = acme.eab.as_ref().expect("EAB should exist");
         assert_eq!(eab.kid, "my-kid");
         assert_eq!(eab.hmac_key, "my-hmac-key");

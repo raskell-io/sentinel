@@ -119,6 +119,7 @@ impl AcmeClient {
         info!(
             email = %self.config.email,
             server_url = %self.directory_url(),
+            key_type = ?self.config.key_type,
             "Creating new ACME account"
         );
 
@@ -402,8 +403,15 @@ impl AcmeClient {
     ) -> Result<(String, String, DateTime<Utc>), AcmeError> {
         info!("Finalizing certificate order");
 
+        // Map config key type to rcgen signature algorithm
+        use zentinel_config::server::AcmeKeyType;
+        let algo = match self.config.key_type {
+            AcmeKeyType::EcdsaP256 => &rcgen::PKCS_ECDSA_P256_SHA256,
+            AcmeKeyType::EcdsaP384 => &rcgen::PKCS_ECDSA_P384_SHA384,
+        };
+
         // Generate a new private key for the certificate
-        let cert_key = rcgen::KeyPair::generate()
+        let cert_key = rcgen::KeyPair::generate_for(algo)
             .map_err(|e| AcmeError::Finalization(format!("Failed to generate key: {}", e)))?;
 
         // Create CSR with all domains
