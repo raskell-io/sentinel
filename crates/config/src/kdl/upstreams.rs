@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use zentinel_common::{CircuitBreakerConfig, types::{HealthCheckType, LoadBalancingAlgorithm}};
 
@@ -300,15 +300,30 @@ fn parse_circuit_breaker(node: &kdl::KdlNode) -> Option<CircuitBreakerConfig> {
 
     if let Some(v) = get_int_entry(node, "failure-threshold") {
         config.failure_threshold = v as u32;
+    }else{
+        warn!("While parsing circuit-breaker clause in upstream, did not find failure-threshold. Default failure-threshold of {} will be used."
+        , config.failure_threshold);
     }
+
     if let Some(v) = get_int_entry(node, "success-threshold") {
         config.success_threshold = v as u32;
+    }else{
+        warn!("While parsing circuit-breaker clause in upstream, did not find success-threshold. Default success-threshold of {} will be used."
+        , config.success_threshold);
     }
+
     if let Some(v) = get_int_entry(node, "timeout-seconds") {
         config.timeout_seconds = v as u64;
+    }else{
+        warn!("While parsing circuit-breaker clause in upstream, did not find timeout-seconds. Default timeout-seconds of {} will be used."
+        , config.timeout_seconds);
     }
+
     if let Some(v) = get_int_entry(node, "half-open-max-requests") {
         config.half_open_max_requests = v as u32;
+    }else{
+        warn!("While parsing circuit-breaker clause in upstream, did not find half-open-max-requests. Default half-open-max-requests of {} will be used."
+        , config.half_open_max_requests);
     }
 
     Some(config)
