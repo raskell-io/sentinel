@@ -865,6 +865,7 @@ impl ConfigTranslator {
                 healthy_threshold: 2,
                 unhealthy_threshold: 3,
             }),
+            circuit_breaker: None,
             connection_pool: ConnectionPoolConfig::default(),
             timeouts: UpstreamTimeouts::default(),
             tls: None,
@@ -1278,6 +1279,7 @@ impl ConfigTranslator {
                 healthy_threshold: 2,
                 unhealthy_threshold: 3,
             }),
+            circuit_breaker: None,
             connection_pool: ConnectionPoolConfig::default(),
             timeouts: UpstreamTimeouts::default(),
             tls: None,
@@ -1431,6 +1433,7 @@ impl ConfigTranslator {
                 healthy_threshold: 2,
                 unhealthy_threshold: 3,
             }),
+            circuit_breaker: None,
             connection_pool: ConnectionPoolConfig::default(),
             timeouts: UpstreamTimeouts::default(),
             tls: None, // Passthrough — no TLS termination at proxy

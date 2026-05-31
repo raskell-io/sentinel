@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use validator::Validate;
 
-use zentinel_common::types::{HealthCheckType, LoadBalancingAlgorithm};
+use zentinel_common::{CircuitBreakerConfig, types::{HealthCheckType, LoadBalancingAlgorithm}};
 
 // ============================================================================
 // Sticky Session Configuration
@@ -101,6 +101,9 @@ pub struct UpstreamConfig {
 
     /// Health check configuration
     pub health_check: Option<HealthCheck>,
+
+    /// Optional circuit breaker configuration
+    pub circuit_breaker: Option<CircuitBreakerConfig>,
 
     /// Connection pool settings
     #[serde(default)]

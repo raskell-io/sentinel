@@ -241,7 +241,7 @@ impl Default for RetryPolicy {
 }
 
 /// Circuit breaker configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Copy)]
 pub struct CircuitBreakerConfig {
     pub failure_threshold: u32,
     pub success_threshold: u32,

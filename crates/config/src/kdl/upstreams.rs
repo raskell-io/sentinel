@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::trace;
 
-use zentinel_common::types::{HealthCheckType, LoadBalancingAlgorithm};
+use zentinel_common::{CircuitBreakerConfig, types::{HealthCheckType, LoadBalancingAlgorithm}};
 
 use crate::upstreams::*;
 
@@ -162,6 +162,16 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                     );
                 }
 
+                let circuit_breaker = child
+                    .children()
+                    .and_then(|c| {
+                        c.nodes()
+                            .iter()
+                            .find(|n| n.name().value() == "circuit-breaker")
+                    })
+                    .map(parse_circuit_breaker)
+                    .unwrap_or(None);
+
                 trace!(
                     upstream_id = %id,
                     target_count = targets.len(),
@@ -182,6 +192,7 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
                         load_balancing,
                         sticky_session,
                         health_check,
+                        circuit_breaker,
                         connection_pool,
                         timeouts,
                         tls,
@@ -310,6 +321,27 @@ fn parse_duration_string(s: &str) -> Option<u64> {
 
     Some((value * multiplier as f64) as u64)
 }
+
+/// Parse circuit breaker configuration
+fn parse_circuit_breaker(node: &kdl::KdlNode) -> Option<CircuitBreakerConfig> {
+    let mut config = CircuitBreakerConfig::default();
+
+    if let Some(v) = get_int_entry(node, "failure-threshold") {
+        config.failure_threshold = v as u32;
+    }
+    if let Some(v) = get_int_entry(node, "success-threshold") {
+        config.success_threshold = v as u32;
+    }
+    if let Some(v) = get_int_entry(node, "timeout-seconds") {
+        config.timeout_seconds = v as u64;
+    }
+    if let Some(v) = get_int_entry(node, "half-open-max-requests") {
+        config.half_open_max_requests = v as u32;
+    }
+
+    Some(config)
+}
+
 
 /// Parse HTTP version configuration
 ///
