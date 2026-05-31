@@ -1038,16 +1038,6 @@ fn validate_implementation_status(
         }
     }
 
-    // Metrics: address requires a dedicated HTTP server (not yet wired)
-    let metrics = &config.observability.metrics;
-    if metrics.address != "0.0.0.0:9090" {
-        warnings.push(format!(
-            "Metrics endpoint address='{}' is configured but a dedicated metrics HTTP server \
-             is not yet implemented. Use RUST_LOG and external scraping as a workaround.",
-            metrics.address
-        ));
-    }
-
     // Logging: level/format are controlled by RUST_LOG env var and --verbose flag,
     // not yet by the config file. File output also not yet wired.
     let logging = &config.observability.logging;
@@ -1879,9 +1869,6 @@ mod tests {
         // max_concurrent_streams (unwired — Pingora H2 per-listener config)
         config.listeners[0].max_concurrent_streams = 200; // non-default → produces warning
 
-        // Metrics address (unwired — no dedicated HTTP server yet)
-        config.observability.metrics.address = "0.0.0.0:9191".to_string(); // non-default → warning
-
         // Logging file (unwired — goes to stdout/stderr)
         config.observability.logging.file = Some("/var/log/zentinel/app.log".into());
 
@@ -1904,7 +1891,6 @@ mod tests {
             "min_version",
             "max_version",
             "max_concurrent_streams",
-            "Metrics endpoint address",
             "logging.file",
             "Logging level",
         ];
