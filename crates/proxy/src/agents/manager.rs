@@ -69,7 +69,6 @@ impl AgentManager {
             let circuit_breaker = Arc::new(CircuitBreaker::new(
                 config
                     .circuit_breaker
-                    .clone()
                     .unwrap_or_else(CircuitBreakerConfig::default),
             ));
 

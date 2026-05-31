@@ -900,10 +900,7 @@ impl UpstreamPool {
             );
             
             // Assigns (hopefully-sane) default CB config if not configured
-            let cb_config = match config.circuit_breaker {
-                Some(cb) => cb,
-                None => CircuitBreakerConfig::default(),
-            };
+            let cb_config = config.circuit_breaker.unwrap_or_default();
 
             circuit_breakers.insert(
                 target.full_address(),
