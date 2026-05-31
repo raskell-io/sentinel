@@ -47,6 +47,18 @@ for details.
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Standalone Prometheus metrics server.** When `observability.metrics.enabled` is set, the proxy binds a dedicated HTTP listener on `observability.metrics.address` (default `0.0.0.0:9090`) and serves the Prometheus exposition format at `observability.metrics.path` (default `/metrics`), logging a `Metrics server listening` line at startup. Previously `address` was parsed but never consumed, so nothing bound the port — a silent failure that violated the "fail loudly" principle. (#256)
+- **Per-listener route sets.** A listener may now serve a distinct set of routes via a `namespace "<id>"` field. Requests arriving on that listener are matched **only** against the named namespace's routes — no fallback to the global set — so you can expose, e.g., an internal admin/metrics surface on a separate port. Listeners without a `namespace` field serve the global `routes` exactly as before. Modeled on Envoy's listener→route-configuration binding; the referenced namespace must exist or validation fails.
+
+### Fixed
+- **Default Docker image starts cleanly as a non-root user.** The distroless `proxy` and `proxy-prebuilt` images now ship `/var/log/zentinel` and `/var/lib/zentinel` owned by uid/gid 65532, and the bundled container config logs to stdout/stderr rather than a file. Previously the default config failed to initialize file logging under `/var/log/zentinel` (not writable by the non-root user), and a `tmpfs` mount did not resolve it. (#255)
+- **Upstream `target` syntax is now identical across single-file and multi-file configs.** The two KDL parsers previously accepted *disjoint* target syntaxes — the single-file parser only took the `target "host:port"` shorthand while the multi-file parser only took the `targets { target { address … } }` block form — so a config copied between layouts (or from the docs) could fail with "requires at least one target". A single shared parser now accepts the shorthand, block form, property form, the `targets { … }` wrapper, and the top-level `address` shorthand in both. This was the root cause behind #254. (#254)
+
+---
+
 ## [26.05_4] - 2026-05-12
 
 **Crate version:** 0.6.14

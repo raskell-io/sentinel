@@ -196,8 +196,51 @@ listeners {
         protocol "h2"
         max-concurrent-streams 100
     }
+
+    // Internal listener that serves a *separate* route set: requests here are
+    // matched only against the "ops" namespace's routes, never the global ones.
+    listener "admin" {
+        address "127.0.0.1:9000"
+        protocol "http"
+        namespace "ops"
+    }
 }
 ```
+
+#### Per-listener route sets
+
+By default every listener serves the global top-level `routes`. Set `namespace`
+on a listener to make it serve **only** that namespace's routes in isolation
+(no fallback to the global set) — useful for exposing an admin/metrics surface
+on a separate, internal port:
+
+```kdl
+listeners {
+    // Serves the global routes (default)
+    listener "public" {
+        address "0.0.0.0:8080"
+    }
+    // Serves only the "ops" namespace's routes
+    listener "admin" {
+        address "127.0.0.1:9000"
+        namespace "ops"
+    }
+}
+
+namespace "ops" {
+    routes {
+        route "metrics" {
+            matches { path "/metrics" }
+            service-type "builtin"
+            builtin-handler "metrics"
+        }
+    }
+}
+```
+
+A request on `127.0.0.1:9000` matches only `ops` routes; a request on `:8080`
+matches only the global `routes`. The referenced namespace must exist or
+configuration validation fails.
 
 ### Routes Block
 
@@ -345,6 +388,38 @@ upstreams {
     }
 }
 ```
+
+#### Target syntax
+
+Targets accept several equivalent forms — use whichever reads best. The
+shorthand (`target "host:port"`) is recommended:
+
+```kdl
+upstream "backend" {
+    // Shorthand: address as the first argument (recommended)
+    target "127.0.0.1:8081"
+    target "127.0.0.1:8082" weight=2
+
+    // Block form: address (and weight) as child nodes
+    target { address "127.0.0.1:8083"; weight 3 }
+
+    // Property form
+    target address="127.0.0.1:8084" weight=4
+
+    // Optional `targets { ... }` wrapper around any of the above
+    targets {
+        target "127.0.0.1:8085"
+    }
+}
+
+// Single-target shorthand on the upstream itself
+upstream "single" {
+    address "127.0.0.1:8086"
+}
+```
+
+All forms are accepted identically whether the config is a single file or
+split across multiple files.
 
 ### Filters Block
 
