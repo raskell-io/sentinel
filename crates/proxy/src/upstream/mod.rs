@@ -891,17 +891,19 @@ impl UpstreamPool {
         }
 
         // Initialize circuit breakers for each target
+
+        // Assigns (hopefully-sane) default CB config if not configured
+        let cb_config = config.circuit_breaker.unwrap_or_default();
+
         let mut circuit_breakers = HashMap::new();
         for target in &targets {
             trace!(
                 upstream_id = %config.id,
                 target = %target.full_address(),
-                "Initializing circuit breaker for target"
+                "Initializing circuit breaker for target, configuration {:?}",
+                cb_config
             );
             
-            // Assigns (hopefully-sane) default CB config if not configured
-            let cb_config = config.circuit_breaker.unwrap_or_default();
-
             circuit_breakers.insert(
                 target.full_address(),
                 CircuitBreaker::new(cb_config),
