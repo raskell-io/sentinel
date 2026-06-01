@@ -1031,7 +1031,7 @@ mod tests {
         assert_eq!(cbconfig.half_open_max_requests, 8);
     }
 
-    /// circuit-breaker stanza present, one key unrecognized, expect to Err and crash
+    /// circuit-breaker stanza present, one key unrecognized, expect to Err and panic out
     #[test]
     fn test_parse_circuit_breaker_badkey() {
         let kdl = r#"
@@ -1054,7 +1054,7 @@ mod tests {
         assert_eq!(format!("{}", err_msg), "Got unknown key timeout-sekonds");
     }
 
-    /// circuit-breaker stanza present, new key unrecognized, expect to Err and crash
+    /// circuit-breaker stanza present, new key unrecognized, expect to Err and panic out
     #[test]
     fn test_parse_circuit_breaker_badnewkey() {
         let kdl = r#"
@@ -1078,7 +1078,7 @@ mod tests {
         assert_eq!(format!("{}", err_msg), "Got unknown key reticulate");
     }
 
-    /// circuit-breaker stanza present, one value unrecognized, expect to Err and crash
+    /// circuit-breaker stanza present, one value unrecognized, expect to Err and panic out
     #[test]
     fn test_parse_circuit_breaker_badval() {
         let kdl = r#"
@@ -1101,6 +1101,58 @@ mod tests {
         assert_eq!(
             format!("{}", err_msg),
             "Tried to convert value in half-open-max-requests to u32, but failed"
+        );
+    }
+
+    /// circuit-breaker stanza present, one value out-of-bounds(0), expect to Err and crash
+    #[test]
+    fn test_parse_circuit_breaker_bounds_check() {
+        let kdl = r#"
+        upstreams {
+            upstream "test-cb" {
+                target "10.0.0.1:80"
+                circuit-breaker {
+                    failure-threshold 1
+                    success-threshold 2
+                    timeout-seconds 0
+                    half-open-max-requests 8
+                }
+            }
+        } 
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl);
+        let err_msg = upstreams.unwrap_err();
+
+        assert_eq!(
+            format!("{}", err_msg),
+            "Implausible value for timeout-seconds"
+        );
+    }
+
+    /// circuit-breaker stanza present, one value parse-error (negative), expect to Err from TryFromIntError
+    #[test]
+    fn test_parse_circuit_breaker_parseerr_check() {
+        let kdl = r#"
+        upstreams {
+            upstream "test-cb" {
+                target "10.0.0.1:80"
+                circuit-breaker {
+                    failure-threshold 1
+                    success-threshold 2
+                    timeout-seconds -42
+                    half-open-max-requests 8
+                }
+            }
+        } 
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl);
+        let err_msg = upstreams.unwrap_err();
+
+        assert_eq!(
+            format!("{}", err_msg),
+            "out of range integral type conversion attempted"
         );
     }
 
@@ -1133,7 +1185,7 @@ mod tests {
         );
     }
 
-    /// circuit-breaker stanza present, some values missing, defaults should be used fpr missing
+    /// circuit-breaker stanza present, some values missing, defaults should be used for missing
     #[test]
     fn test_parse_circuit_breaker_some_fields_missing() {
         let kdl = r#"
