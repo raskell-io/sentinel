@@ -1106,7 +1106,85 @@ mod tests {
 
     /// circuit-breaker stanza present, one value out-of-bounds(0), expect to Err and crash
     #[test]
-    fn test_parse_circuit_breaker_bounds_check() {
+    fn test_parse_circuit_breaker_bounds_u32_check() {
+        let kdl = r#"
+        upstreams {
+            upstream "test-cb" {
+                target "10.0.0.1:80"
+                circuit-breaker {
+                    failure-threshold 1
+                    success-threshold 0
+                    timeout-seconds 4
+                    half-open-max-requests 8
+                }
+            }
+        } 
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl);
+        let err_msg = upstreams.unwrap_err();
+
+        assert_eq!(
+            format!("{}", err_msg),
+            "Implausible value for success-threshold"
+        );
+    }
+
+    /// circuit-breaker stanza present, one value overflows u32, expect to Err from TryFromIntError
+    #[test]
+    fn test_parse_circuit_breaker_overflow_u32_check() {
+        let kdl = r#"
+        upstreams {
+            upstream "test-cb" {
+                target "10.0.0.1:80"
+                circuit-breaker {
+                    failure-threshold 1
+                    success-threshold 4294967296
+                    timeout-seconds 4
+                    half-open-max-requests 8
+                }
+            }
+        } 
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl);
+        let err_msg = upstreams.unwrap_err();
+
+        assert_eq!(
+            format!("{}", err_msg),
+            "out of range integral type conversion attempted"
+        );
+    }
+
+    /// circuit-breaker stanza present, one value parse-error (negative), expect to Err from TryFromIntError
+    #[test]
+    fn test_parse_circuit_breaker_parseerr_u32_check() {
+        let kdl = r#"
+        upstreams {
+            upstream "test-cb" {
+                target "10.0.0.1:80"
+                circuit-breaker {
+                    failure-threshold 1
+                    success-threshold -42
+                    timeout-seconds 4
+                    half-open-max-requests 8
+                }
+            }
+        } 
+        "#;
+
+        let upstreams = parse_kdl_upstreams(kdl);
+        let err_msg = upstreams.unwrap_err();
+
+        assert_eq!(
+            format!("{}", err_msg),
+            "out of range integral type conversion attempted"
+        );
+    }
+
+    /// circuit-breaker stanza present, one value out-of-bounds(0), expect to Err and crash
+    #[test]
+    fn test_parse_circuit_breaker_bounds_u64_check() {
         let kdl = r#"
         upstreams {
             upstream "test-cb" {
@@ -1132,7 +1210,7 @@ mod tests {
 
     /// circuit-breaker stanza present, one value parse-error (negative), expect to Err from TryFromIntError
     #[test]
-    fn test_parse_circuit_breaker_parseerr_check() {
+    fn test_parse_circuit_breaker_parseerr_u64_check() {
         let kdl = r#"
         upstreams {
             upstream "test-cb" {
