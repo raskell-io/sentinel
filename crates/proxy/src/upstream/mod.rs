@@ -892,7 +892,8 @@ impl UpstreamPool {
 
         // Initialize circuit breakers for each target
 
-        // Assigns (hopefully-sane) default CB config if not configured
+        // Assigns default CB config if not configured, such as when the stanza is missing
+        // (and None is set for CircuitBreakerConfig)
         let cb_config = config.circuit_breaker.unwrap_or_default();
 
         let mut circuit_breakers = HashMap::new();
