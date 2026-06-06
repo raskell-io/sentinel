@@ -2862,6 +2862,7 @@ mod tests {
         assert!(matches!(agent.circuit_breaker, None));
     }
 
+    //Check if we get None when no CB stanza is specified
     #[test]
     fn test_parse_single_agent_config_default() {
         let kdl = r#"
@@ -2906,6 +2907,7 @@ mod tests {
         );
     }
 
+    ///Check if we have a CBconfig when one is specified
     #[test]
     fn test_parse_single_agent_config_circuit_breaker() {
         let kdl = r#"
