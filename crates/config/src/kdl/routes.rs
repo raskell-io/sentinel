@@ -34,6 +34,7 @@ const RECOGNIZED_ROUTE_CHILDREN: &[&str] = &[
     "fallback",
     "policies",
     "service-type",
+    "retry-policy",
 ];
 
 /// Parse routes configuration block
