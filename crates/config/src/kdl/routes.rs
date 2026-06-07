@@ -9,12 +9,7 @@ use zentinel_common::budget::{
     BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig,
 };
 
-use crate::{
-    kdl::{
-        retrypolicy_helper::parse_retry_policy,
-    },
-    routes::*,
-};
+use crate::{kdl::retrypolicy_helper::parse_retry_policy, routes::*};
 
 use super::helpers::{
     get_bool_entry, get_first_arg_string, get_float_entry, get_int_entry, get_string_entry,
@@ -75,20 +70,6 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
 
                 // Parse filters
                 let filters = parse_route_filter_refs(child)?;
-
-                // Parse circuit breaker
-                let cb_node = child.children().and_then(|c| {
-                    c.nodes()
-                        .iter()
-                        .find(|n| n.name().value() == "circuit-breaker")
-                });
-
-                let circuit_breaker = match cb_node {
-                    Some(cb) => {
-                        Some(parse_circuit_breaker_faildefault(cb)?) //Parse failure dropout handled by the ? and anyhow crate
-                    }
-                    None => None, //No config present
-                };
 
                 let rp_node = child.children().and_then(|c| {
                     c.nodes()
@@ -183,7 +164,7 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     filters,
                     builtin_handler,
                     waf_enabled: get_bool_entry(child, "waf-enabled").unwrap_or(false),
-                    circuit_breaker,
+                    circuit_breaker: None,
                     retry_policy,
                     static_files,
                     api_schema,
@@ -1690,7 +1671,6 @@ fn parse_pii_detection_config(node: &kdl::KdlNode) -> Result<PiiDetectionConfig>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zentinel_common::types::Priority;
     use zentinel_common::types::Priority;
 
     /// Parse a KDL fragment like `route "test" { priority ... }` and return
