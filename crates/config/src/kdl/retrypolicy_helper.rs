@@ -302,6 +302,7 @@ mod tests {
         let err_msg = rp.unwrap_err();
         assert_eq!(format!("{}", err_msg), "Implausible value for timeout-ms");
     }
+
     /// retry-policy stanza present, one value parse-error (negative), expect to Err from TryFromIntError
     #[test]
     fn test_parse_retry_policy_parseerr_u64_check() {
