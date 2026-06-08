@@ -1794,7 +1794,7 @@ mod tests {
 
         let routes = parse_routes(routes_node).unwrap();
 
-        let rp = routes.get(0).unwrap().retry_policy.as_ref().unwrap();
+        let rp = routes.first().unwrap().retry_policy.as_ref().unwrap();
 
         assert_eq!(rp.max_attempts, 10);
         assert_eq!(rp.timeout_ms, 20);
@@ -1818,7 +1818,7 @@ mod tests {
         let routes_node = doc.get("routes").unwrap();
         let routes = parse_routes(routes_node).unwrap();
 
-        let rp = routes.get(0).unwrap().retry_policy.as_ref();
+        let rp = routes.first().unwrap().retry_policy.as_ref();
 
         assert!(rp.is_none());
     }

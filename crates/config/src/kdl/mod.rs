@@ -2860,7 +2860,7 @@ mod tests {
             [AgentEvent::RequestHeaders, AgentEvent::RequestBody]
         );
         assert_eq!(agent.failure_mode, FailureMode::Open);
-        assert!(matches!(agent.circuit_breaker, None));
+        assert!(agent.circuit_breaker.is_none());
     }
 
     //Check if we get None when no CB stanza is specified
@@ -2887,7 +2887,7 @@ mod tests {
         ));
         assert_eq!(agent.events, [AgentEvent::RequestHeaders]);
         assert_eq!(agent.failure_mode, FailureMode::Open);
-        assert!(matches!(agent.circuit_breaker, None));
+        assert!(agent.circuit_breaker.is_none());
     }
 
     #[test]
