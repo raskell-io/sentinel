@@ -19,6 +19,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use dashmap::DashMap;
 use pingora_cache::eviction::EvictionManager;
 use pingora_cache::key::{CacheHashKey, CacheKey, CompactCacheKey};
 use pingora_cache::meta::CacheMeta;
@@ -28,7 +29,6 @@ use pingora_cache::storage::{
 use pingora_cache::trace::SpanHandle;
 use pingora_core::{Error, ErrorType, Result};
 use std::any::Any;
-use dashmap::DashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -311,8 +311,7 @@ impl DiskMissHandler {
             set.remove(&self.temp_id);
             if set.is_empty() {
                 drop(set);
-                self.inflight
-                    .remove_if(&self.combined, |_, s| s.is_empty());
+                self.inflight.remove_if(&self.combined, |_, s| s.is_empty());
             }
         }
     }

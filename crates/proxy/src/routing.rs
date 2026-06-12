@@ -806,6 +806,19 @@ mod tests {
     use zentinel_common::types::Priority;
     use zentinel_config::{MatchCondition, RouteConfig};
 
+    #[test]
+    fn route_cache_never_exceeds_max_size() {
+        let cache = RouteCache::new(10);
+        for i in 0..100 {
+            cache.insert(format!("key-{i}"), RouteId::new(format!("route-{i}")));
+            assert!(
+                cache.len() <= 10,
+                "route cache grew past max_size: {}",
+                cache.len()
+            );
+        }
+    }
+
     fn create_test_route(id: &str, matches: Vec<MatchCondition>) -> RouteConfig {
         RouteConfig {
             id: id.to_string(),

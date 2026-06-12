@@ -1263,6 +1263,58 @@ mod tests {
     }
 
     #[test]
+    fn max_series_drops_new_series_but_updates_existing() {
+        let collector = MetricsCollector::with_config(MetricsCollectorConfig {
+            max_age: Duration::from_secs(300),
+            max_series: 2,
+            include_agent_id_label: true,
+        });
+
+        let mut report = MetricsReport::new("agent-1", 10_000);
+        report.counters.push(CounterMetric::new("a_total", 1));
+        report.counters.push(CounterMetric::new("b_total", 1));
+        report.counters.push(CounterMetric::new("c_total", 1)); // over limit
+        collector.record(&report);
+
+        assert_eq!(collector.series_count(), 2);
+        assert_eq!(collector.dropped_series(), 1);
+
+        // Existing series still update at capacity
+        let mut update = MetricsReport::new("agent-1", 10_000);
+        update.counters.push(CounterMetric::new("a_total", 42));
+        collector.record(&update);
+
+        assert_eq!(collector.series_count(), 2);
+        assert_eq!(collector.dropped_series(), 1);
+        let prometheus = collector.export_prometheus();
+        assert!(prometheus.contains("42"));
+    }
+
+    #[test]
+    fn expired_series_free_capacity_for_new_ones() {
+        let collector = MetricsCollector::with_config(MetricsCollectorConfig {
+            max_age: Duration::ZERO,
+            max_series: 1,
+            include_agent_id_label: false,
+        });
+
+        let mut report = MetricsReport::new("agent-1", 10_000);
+        report.counters.push(CounterMetric::new("a_total", 1));
+        collector.record(&report);
+        assert_eq!(collector.series_count(), 1);
+
+        // max_age == 0 expires everything
+        collector.expire_old_metrics();
+        assert_eq!(collector.series_count(), 0);
+
+        let mut report2 = MetricsReport::new("agent-1", 10_000);
+        report2.counters.push(CounterMetric::new("b_total", 1));
+        collector.record(&report2);
+        assert_eq!(collector.series_count(), 1);
+        assert_eq!(collector.dropped_series(), 0);
+    }
+
+    #[test]
     fn test_metrics_collector_with_labels() {
         let collector = MetricsCollector::new();
 

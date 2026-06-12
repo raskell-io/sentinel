@@ -626,6 +626,15 @@ impl LoadBalancer for ConsistentHashBalancer {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn lookup_cache_never_exceeds_bound() {
+        let cache = RwLock::new(HashMap::new());
+        for i in 0..(LOOKUP_CACHE_MAX as u64 + 500) {
+            bounded_cache_insert(&cache, i, 0).await;
+            assert!(cache.read().await.len() <= LOOKUP_CACHE_MAX);
+        }
+    }
+
     fn create_test_targets(count: usize) -> Vec<UpstreamTarget> {
         (0..count)
             .map(|i| UpstreamTarget {
