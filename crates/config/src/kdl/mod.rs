@@ -25,20 +25,19 @@ use tracing::{debug, trace, warn};
 // Re-export commonly used items
 pub use helpers::{
     get_bool_entry, get_first_arg_string, get_int_entry, get_string_entry, offset_to_line_col,
-    parse_upstream_targets,
 };
 
 pub use filters::parse_filter_definitions;
 pub use routes::parse_routes;
 pub use server::{parse_listeners, parse_server_config};
-pub use upstreams::parse_upstreams;
+pub use upstreams::{parse_upstream, parse_upstreams};
 
 use anyhow::Result;
 use std::collections::HashMap;
 
 use zentinel_common::limits::Limits;
 
-use crate::kdl::circuitbreaker_helper::parse_circuit_breaker_faildefault;
+pub use crate::kdl::circuitbreaker_helper::parse_circuit_breaker_faildefault;
 use crate::observability::ObservabilityConfig;
 use crate::waf::WafConfig;
 use crate::{AgentConfig, Config, CURRENT_SCHEMA_VERSION};
