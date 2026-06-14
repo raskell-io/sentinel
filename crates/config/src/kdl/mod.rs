@@ -38,6 +38,7 @@ use std::collections::HashMap;
 
 use zentinel_common::limits::Limits;
 
+use crate::kdl::circuitbreaker_helper::parse_circuit_breaker_faildefault;
 use crate::observability::ObservabilityConfig;
 use crate::waf::WafConfig;
 use crate::{AgentConfig, Config, CURRENT_SCHEMA_VERSION};
@@ -209,7 +210,6 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
 use crate::agents::{AgentEvent, AgentTlsConfig, AgentTransport, AgentType, BodyStreamingMode};
 use crate::routes::FailureMode;
 use std::path::PathBuf;
-use zentinel_common::types::CircuitBreakerConfig;
 
 /// Parse agents configuration block
 ///
@@ -440,7 +440,7 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
                 }
             }
             "circuit-breaker" => {
-                circuit_breaker = Some(parse_circuit_breaker(child)?);
+                circuit_breaker = Some(parse_circuit_breaker_faildefault(child)?);
             }
             "max-request-body-bytes" => {
                 if let Some(entry) = child.entries().first() {
@@ -611,27 +611,6 @@ fn parse_agent_tls(node: &kdl::KdlNode) -> Result<Option<AgentTlsConfig>> {
     } else {
         Ok(None)
     }
-}
-
-/// Parse circuit breaker configuration
-/// TODO: migrate to parse_circuit_breaker_faildefault when possible
-fn parse_circuit_breaker(node: &kdl::KdlNode) -> Result<CircuitBreakerConfig> {
-    let mut config = CircuitBreakerConfig::default();
-
-    if let Some(v) = get_int_entry(node, "failure-threshold") {
-        config.failure_threshold = v as u32;
-    }
-    if let Some(v) = get_int_entry(node, "success-threshold") {
-        config.success_threshold = v as u32;
-    }
-    if let Some(v) = get_int_entry(node, "timeout-seconds") {
-        config.timeout_seconds = v as u64;
-    }
-    if let Some(v) = get_int_entry(node, "half-open-max-requests") {
-        config.half_open_max_requests = v as u32;
-    }
-
-    Ok(config)
 }
 
 // ============================================================================
@@ -1373,6 +1352,8 @@ fn parse_tracing_backend(node: &kdl::KdlNode) -> Result<crate::observability::Tr
 
 #[cfg(test)]
 mod tests {
+    use zentinel_common::CircuitBreakerConfig;
+
     use super::*;
     use crate::filters::RateLimitKey;
 
