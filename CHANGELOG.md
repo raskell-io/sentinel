@@ -12,7 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
-| [26.06_2](#26062---2026-06-09) | 0.6.16 | 2026-06-09 | Security: Pingora 0.8.0 → 0.8.1 (HTTP/2 memory-exhaustion bound, rustls-webpki advisory fixes) |
+| [26.06_2](#26062---2026-06-16) | 0.6.16 | 2026-06-16 | Manifesto hardening (agent body limits, bounded limiter/pool state, pool maintenance), route-level retry-policy parsing, Pingora 0.8.1 security bump, dependency maintenance |
 | [26.06_1](#26061---2026-06-07) | 0.6.15 | 2026-06-07 | Standalone Prometheus metrics server, per-listener route sets, quickstart fixes, dep maintenance (tikv-jemallocator 0.7, openssl 0.10.80, rust-minor batches) |
 | [26.05_4](#26054---2026-05-12) | 0.6.14 | 2026-05-12 | Dependency maintenance: OpenTelemetry 0.32, sysinfo 0.39, Rust toolchain 1.95 |
 | [26.05_3](#26053---2026-05-05) | 0.6.13 | 2026-05-05 | Embedded and bundled KDL configs use `system` block; ACME hickory-resolver 0.26 fix |
@@ -121,12 +121,23 @@ for details.
 
 ---
 
-## [26.06_2] - 2026-06-09
+## [26.06_2] - 2026-06-16
 
 **Crate version:** 0.6.16
 
+### Added
+- **Enforce agent request/response body limits and bound per-key limiter state.** Agent body inspection now enforces the configured `max-request-body-bytes` / `max-response-body-bytes`, and per-key rate-limiter state is bounded so it can no longer grow without limit — closing latent unbounded-growth paths and bringing runtime behavior in line with the Manifesto's "bounded by design" principle. (#273)
+- **Route-level `retry-policy` parsing.** The `retry-policy` block inside a `route` is now parsed instead of being silently dropped by the KDL parser. `max-attempts` is honored (it bounds upstream peer-selection attempts); `timeout-ms`, `backoff-base-ms`, `backoff-max-ms`, and `retryable-status-codes` are parsed but not yet applied at runtime (each logs "parsed, but not implemented"). Resolves the docs↔parser mismatch in #262; the remaining retry behavior is tracked in #279. (#267)
+
+### Fixed
+- **Bound hidden unbounded state and run pool maintenance.** Fixes several latent bugs surfaced during the hardening audit: the agent-pool maintenance loop was never spawned, per-request correlation affinity could leak, and `max_series` was not enforced. Runtime behavior now matches the documented bounds. (#274)
+
 ### Security
 - **Bump Pingora 0.8.0 → 0.8.1** ([cloudflare/pingora release](https://github.com/cloudflare/pingora/releases/tag/0.8.1)). Brings in two security-relevant changes: bounded default HTTP/2 server limits to mitigate memory exhaustion, and the upstream dev-dep bumps that resolve `RUSTSEC-2026-0098` / `RUSTSEC-2026-0099` (`rustls-webpki`). Fork rev bumped to `b8d0c00` via [zentinelproxy/pingora#4](https://github.com/zentinelproxy/pingora/pull/4). (#270)
+
+### Changed
+- **Bump rust-minor group (9 updates).** (#276)
+- **Bump `alpine` Docker base 3.23 → 3.24.** (#275)
 
 ---
 
