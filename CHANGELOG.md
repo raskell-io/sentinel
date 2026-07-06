@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.07_2](#26072---2026-07-06) | 0.6.20 | 2026-07-06 | Dependency maintenance: quick-xml 0.41, rust-minor batch (4 updates), cmov 0.5.4, conformance golang.org/x/net 0.55 |
 | [26.07_1](#26071---2026-07-01) | 0.6.19 | 2026-07-01 | Dependency maintenance: maxminddb 0.29, wasmtime 46, rust-minor batch (12 updates), actions/cache 6 |
 | [26.06_3](#26063---2026-06-23) | 0.6.17 | 2026-06-23 | Multi-file KDL block merging, upstream circuit-breaker recovery fix, counter underflow guard, dependency maintenance |
 | [26.06_2](#26062---2026-06-16) | 0.6.16 | 2026-06-16 | Manifesto hardening (agent body limits, bounded limiter/pool state, pool maintenance), route-level retry-policy parsing, Pingora 0.8.1 security bump, dependency maintenance |
@@ -52,6 +53,18 @@ for details.
 ---
 
 ## [Unreleased]
+
+---
+
+## [26.07_2] - 2026-07-06
+
+**Crate version:** 0.6.20
+
+### Changed
+- Bump `quick-xml` 0.40 → 0.41. (#300)
+- Bump the rust-minor group (`html-escape`, `jsonschema`, `rand`, `xxhash-rust`). (#299)
+- Bump `cmov` 0.5.3 → 0.5.4. (#298)
+- CI: bump `golang.org/x/net` 0.52 → 0.55 in `/conformance`. (#297)
 
 ---
 
