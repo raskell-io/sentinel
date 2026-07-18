@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.07_3](#26073---2026-07-18) | 0.6.21 | 2026-07-18 | Security: serde_with 3.21 (GHSA-7gcf-g7xr-8hxj); dependency maintenance: tokio-tungstenite 0.30, jsonschema 0.48, rust-minor batches (13 updates) |
 | [26.07_2](#26072---2026-07-06) | 0.6.20 | 2026-07-06 | Dependency maintenance: quick-xml 0.41, rust-minor batch (4 updates), cmov 0.5.4, conformance golang.org/x/net 0.55 |
 | [26.07_1](#26071---2026-07-01) | 0.6.19 | 2026-07-01 | Dependency maintenance: maxminddb 0.29, wasmtime 46, rust-minor batch (12 updates), actions/cache 6 |
 | [26.06_3](#26063---2026-06-23) | 0.6.17 | 2026-06-23 | Multi-file KDL block merging, upstream circuit-breaker recovery fix, counter underflow guard, dependency maintenance |
@@ -53,6 +54,25 @@ for details.
 ---
 
 ## [Unreleased]
+
+---
+
+## [26.07_3] - 2026-07-18
+
+**Crate version:** 0.6.21
+
+### Security
+- Bump `serde_with` 3.18.0 → 3.21.0 — fixes GHSA-7gcf-g7xr-8hxj, a serialization
+  panic (DoS) in `KeyValueMap`. Zentinel's exposure was low (transitive via
+  `ip2location`, no `KeyValueMap` usage), resolved regardless. (#307)
+
+### Changed
+- Bump `tokio-tungstenite` 0.29.0 → 0.30.0. (#306)
+- Bump `jsonschema` 0.46.10 → 0.48.1. (#305)
+- Bump the rust-minor group (`bytes` 1.12.1, `uuid`, `regex`, `sysinfo` 0.39.6). (#309)
+- Bump the rust-minor group (`tokio` 1.53, `rustls` 0.23.42, `uuid` 1.24,
+  `regex` 1.13.1, `http-body-util`, `toml`, `clap`, `redis` 1.4.1,
+  `xxhash-rust`). (#310)
 
 ---
 
