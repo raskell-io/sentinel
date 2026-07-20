@@ -52,7 +52,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           # conformance/go.mod requires Go >= 1.25.0. Must stay in sync with
           # the `go` directive in that file.
