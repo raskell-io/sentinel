@@ -235,26 +235,48 @@ publishes all workspace crates to crates.io, and creates the GitHub Release.
 
 ### Cutting a release
 
-1. **Bump PR**: open `chore/bump-X.Y.Z` against `main` containing:
-   - Workspace version bump in root `Cargo.toml` (`[workspace.package].version`).
-   - `cargo update --workspace` so `Cargo.lock` reflects the bump.
-   - New entry in `CHANGELOG.md` (both the overview table and the dated section).
-   - Commit message: `chore: bump version to X.Y.Z for release YY.MM_PATCH`.
-2. **Merge** the PR to `main` once CI is green.
-3. **Tag immediately** on the merge commit. The tag must be the **CalVer** form, not
-   SemVer. SemVer-form tags do not trigger the workflow.
+> **The workflow publishes `tag_version + 1`, not the tagged version.** It reads the
+> current `Cargo.toml` version, increments the patch, and publishes *that*. Between
+> releases `main` already sits at the **last published** crate version, so **do not bump
+> `Cargo.toml` when preparing a release** — bumping it makes the workflow publish `+2`
+> and silently skips a version on crates.io (this is why `0.6.19` was skipped on 26.07_1).
+
+1. **Prepare PR (CHANGELOG only):** open a branch (e.g.
+   `chore/prepare-release-YY.MM_PATCH`) against `main` that edits **only `CHANGELOG.md`**:
+   - Add the overview-table row and the dated `## [YY.MM_PATCH] - DATE` section.
+   - The section's `**Crate version:**` is the **current** `Cargo.toml` version — i.e.
+     the *tag* version, which is what gets published **minus 1**. Leave `Cargo.toml` and
+     `Cargo.lock` untouched.
+   - Commit message: `chore: prepare release YY.MM_PATCH`.
+2. **Merge** to `main` once CI is green. The base-branch policy blocks the merge while
+   **any** check is still pending — even non-required ones (Unit Tests) — so `gh pr merge`
+   fails until every check finishes.
+3. **Tag** the merge commit with the **CalVer** form (annotated). SemVer-form tags do not
+   trigger the workflow.
    ```bash
    git fetch origin main
+   # X.Y.Z below = the current Cargo.toml version (= what will be published − 1)
    git tag -a YY.MM_PATCH origin/main -m "Release YY.MM_PATCH (semver X.Y.Z)"
    git push origin YY.MM_PATCH
    ```
-4. **Verify** the Release workflow at `gh run list --workflow Release --limit 1` —
-   it builds 4 platform targets, signs with cosign, publishes crates.io, creates the
-   GitHub Release, and pushes a follow-up "bump to X.Y.Z+1" commit to `main`.
+4. **Verify** the run: `gh run list --workflow Release --limit 1`. It builds 4 platform
+   targets, signs with cosign, publishes all workspace crates as **`X.Y.Z + 1`**, and
+   creates the GitHub Release (whose notes show the *published* version, so the Release
+   says `X.Y.Z + 1` while the CHANGELOG says `X.Y.Z` — by design). All builds run
+   **before** any publish, so a build failure publishes nothing.
+5. **Post-release bump (manual, every release):** the workflow force-pushes a
+   `chore/bump-<published>` branch but its `gh pr create` reliably fails, leaving an
+   **orphan branch that only edits `Cargo.toml`**. Open the PR yourself, add a
+   `cargo update --workspace` commit so `Cargo.lock` reflects the new version, and merge.
+   This moves `main` up to the just-published version.
 
-> **Important:** if you skip step 3, the bump merges silently and no release is cut.
-> This is what happened to `26.04_6` (PR #207) before it was tagged retroactively.
-> Always tag immediately after merging the bump PR.
+> **Don't skip step 3.** If you merge the prepare PR without tagging, no release is cut
+> (this happened to `26.04_6`, PR #207, tagged retroactively).
+>
+> **Flaky linux-arm64 build?** The `zigbuild` toolchain-setup step occasionally fails with
+> a rustup `clippy-preview` / `cargo-clippy` conflict (runner-state, not our code). Nothing
+> publishes on a build failure — just `gh run rerun <run-id> --failed`, which re-runs the
+> failed build plus the gated publish/release jobs while the 3 good builds carry over.
 
 ### Crates.io publishing
 
