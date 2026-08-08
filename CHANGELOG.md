@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_1](#26081---2026-08-08) | 0.6.24 | 2026-08-08 | Security: rustls 0.23.43 (ticket-age and binder arithmetic hardening); dependency maintenance: pem 4.0, base64 0.23, jsonschema 0.49, validator 0.21, async-memcached 0.7, http 1.5, redis 1.5 |
 | [26.07_4](#26074---2026-07-30) | 0.6.22 | 2026-07-30 | Dependency maintenance: wasmtime 47, quinn-proto 0.11.16, maxminddb 0.30, rust-minor batch (17 updates), actions/setup-go 7 |
 | [26.07_3](#26073---2026-07-18) | 0.6.21 | 2026-07-18 | Security: serde_with 3.21 (GHSA-7gcf-g7xr-8hxj); dependency maintenance: tokio-tungstenite 0.30, jsonschema 0.48, rust-minor batches (13 updates) |
 | [26.07_2](#26072---2026-07-06) | 0.6.20 | 2026-07-06 | Dependency maintenance: quick-xml 0.41, rust-minor batch (4 updates), cmov 0.5.4, conformance golang.org/x/net 0.55 |
@@ -55,6 +56,36 @@ for details.
 ---
 
 ## [Unreleased]
+
+---
+
+## [26.08_1] - 2026-08-08
+
+**Crate version:** 0.6.24
+
+Dependency-only release. No proxy behavior, configuration schema, or agent
+protocol changes.
+
+### Security
+- Bump `rustls` 0.23.42 → 0.23.43, part of the rust-minor group. Upstream
+  hardens session-ticket age arithmetic and the PSK binder suffix calculation
+  (`checked_sub` in `Rfc5077Ticketer::decrypt`), and tightens QUIC cipher-suite
+  and TLS-version checks. No CVE assigned and no Zentinel-specific exposure
+  identified; taken as defense in depth for the TLS listener path. (#326)
+
+### Changed
+- Bump the rust-minor group (4 updates): `rustls` 0.23.42 → 0.23.43,
+  `http` 1.4.2 → 1.5.0, `redis` 1.4.1 → 1.5.0, and
+  `toml` 1.1.3+spec-1.1.0 → 1.1.4+spec-1.1.0. (#326)
+- Bump `pem` 3.0.6 → 4.0.0. (#327)
+- Bump `jsonschema` 0.48.1 → 0.49.5. (#328)
+- Bump `base64` 0.22.1 → 0.23.1. (#329)
+- Bump `validator` 0.20.0 → 0.21.0. (#330)
+- Bump `async-memcached` 0.6.0 → 0.7.0. (#332)
+
+### Documentation
+- Correct the documented release process to match the Release workflow's
+  actual tag+1 versioning behavior. (#325)
 
 ---
 
