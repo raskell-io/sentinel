@@ -13,8 +13,8 @@ for details.
 > **Crate Version** is the version actually **published to crates.io** for that
 > release — the version you can depend on. It is *not* the version present in
 > `Cargo.toml` at the tagged commit: the Release workflow reads that value and
-> publishes it **plus one**. Rows from 26.05_1 onward were reconciled against
-> crates.io on 2026-08-08; earlier rows have not been verified.
+> publishes it **plus one**. Rows from 26.04_1 onward were reconciled against
+> crates.io on 2026-08-08; rows before 26.04_1 have not been verified.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
@@ -31,12 +31,12 @@ for details.
 | [26.05_3](#26053---2026-05-05) | — (not released) | 2026-05-05 | Embedded and bundled KDL configs use `system` block; ACME hickory-resolver 0.26 fix |
 | [26.05_2](#26052---2026-05-03) | 0.6.13 | 2026-05-03 | Install script provisions systemd unit, system user, and starter config |
 | [26.05_1](#26051---2026-05-01) | 0.6.12 | 2026-05-01 | Per-SNI ACME certificates for multi-tenant TLS, dependency updates |
-| [26.04_7](#26047---2026-04-28) | 0.6.10 | 2026-04-28 | Security: rand fix in `zentinel-sim` |
-| [26.04_6](#26046---2026-04-25) | 0.6.9 | 2026-04-25 | Security: openssl & rand fixes, ACME schema docs, CI update |
-| [26.04_5](#26045---2026-04-20) | 0.6.8 | 2026-04-20 | Configurable ACME certificate key type (ECDSA P-256/P-384) |
-| [26.04_4](#26044---2026-04-19) | 0.6.7 | 2026-04-19 | Cloudflare DNS-01, custom ACME servers, EAB, SAN renewal fix |
-| [26.04_3](#26043---2026-04-16) | 0.6.6 | 2026-04-16 | Security: rand unsoundness fix, dependency updates |
-| [26.04_2](#26042---2026-04-10) | 0.6.5 | 2026-04-10 | Security: wasmtime 43.0.1 (critical sandbox escape fix) |
+| [26.04_7](#26047---2026-04-28) | 0.6.11 | 2026-04-28 | Security: rand fix in `zentinel-sim` |
+| [26.04_6](#26046---2026-04-25) | 0.6.10 | 2026-04-25 | Security: openssl & rand fixes, ACME schema docs, CI update |
+| [26.04_5](#26045---2026-04-20) | 0.6.9 | 2026-04-20 | Configurable ACME certificate key type (ECDSA P-256/P-384) |
+| [26.04_4](#26044---2026-04-19) | 0.6.8 | 2026-04-19 | Cloudflare DNS-01, custom ACME servers, EAB, SAN renewal fix |
+| [26.04_3](#26043---2026-04-16) | 0.6.7 | 2026-04-16 | Security: rand unsoundness fix, dependency updates |
+| [26.04_2](#26042---2026-04-10) | 0.6.6 | 2026-04-10 | Security: wasmtime 43.0.1 (critical sandbox escape fix) |
 | [26.04_1](#26041---2026-04-09) | 0.6.4 | 2026-04-09 | Numeric route priorities, host extraction fix, Docker glibc fix, conformance CI restored |
 | [26.03_4](#26034---2026-03-18) | 0.6.2 | 2026-03-18 | Configurable Cache-Status header name |
 | [26.02_18](#260218---2026-02-26) | 0.5.10 | 2026-02-26 | Remove v1 agent protocol |
@@ -304,7 +304,7 @@ published a crate.
 
 ## [26.04_7] - 2026-04-28
 
-**Crate version:** 0.6.10
+**Crate version:** 0.6.11
 
 ### Security
 - **Bump `rand` 0.9.2 → 0.9.4 in `zentinel-sim`** — closes Dependabot alert for [GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc) (rand unsoundness with custom logger using `rand::rng()`). Also re-syncs `zentinel-sim`'s stale path-dep version pins to the workspace so its lockfile is regenerable. (#214)
@@ -313,7 +313,7 @@ published a crate.
 
 ## [26.04_6] - 2026-04-25
 
-**Crate version:** 0.6.9
+**Crate version:** 0.6.10
 
 ### Security
 - **Bump `openssl` 0.10.77 → 0.10.78** — fixes 4 high-severity vulnerabilities: buffer overflows in `Deriver::derive`, `MdCtxRef::digest_final`, AES key wrap bounds, and unchecked PSK/cookie callback lengths leaking memory to peers. (#205)
@@ -329,7 +329,7 @@ published a crate.
 
 ## [26.04_5] - 2026-04-20
 
-**Crate version:** 0.6.8
+**Crate version:** 0.6.9
 
 ### Added
 - **Configurable ACME certificate key type** via `key-type` config option. Supports `ecdsa-p256` (default) and `ecdsa-p384` for higher security strength. Invalid values produce a clear config parse error. (#199)
@@ -338,7 +338,7 @@ published a crate.
 
 ## [26.04_4] - 2026-04-19
 
-**Crate version:** 0.6.7
+**Crate version:** 0.6.8
 
 ### Added
 - **Cloudflare DNS-01 provider** for ACME challenges, enabling wildcard certificate issuance via Cloudflare DNS API v4. Includes zone ID caching and full test coverage. (#197)
@@ -355,7 +355,7 @@ published a crate.
 
 ## [26.04_3] - 2026-04-16
 
-**Crate version:** 0.6.6
+**Crate version:** 0.6.7
 
 ### Security
 - **Bump rand to fix unsoundness advisory** — Updates pingora fork to bump `rand` 0.8→0.9 across all pingora crates, and bumps direct `rand` 0.10.0→0.10.1 and transitive `rand` 0.9.2→0.9.4. Resolves Dependabot alerts #43, #44, #45 (RUSTSEC unsoundness with custom loggers). (#192)
@@ -372,7 +372,7 @@ published a crate.
 
 ## [26.04_2] - 2026-04-10
 
-**Crate version:** 0.6.5
+**Crate version:** 0.6.6
 
 ### Security
 - **Bump wasmtime 43.0.0 → 43.0.1** — Resolves 10 Dependabot advisories including CVE-2026-34971 (critical: sandbox escape on aarch64 via miscompiled guest heap access in Cranelift), 6 medium-severity issues (OOB memory access, host panics/crashes), and 3 low-severity issues (data leakage, use-after-free). (#183)
