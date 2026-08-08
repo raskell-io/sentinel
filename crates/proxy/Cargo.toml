@@ -87,7 +87,7 @@ maxminddb = "0.30"
 ip2location = "0.6"
 
 # Schema validation
-jsonschema = "0.48"
+jsonschema = "0.49"
 serde_yaml = "0.9"
 
 # Static file serving
