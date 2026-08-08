@@ -12,6 +12,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.07_4](#26074---2026-07-30) | 0.6.22 | 2026-07-30 | Dependency maintenance: wasmtime 47, quinn-proto 0.11.16, maxminddb 0.30, rust-minor batch (17 updates), actions/setup-go 7 |
 | [26.07_3](#26073---2026-07-18) | 0.6.21 | 2026-07-18 | Security: serde_with 3.21 (GHSA-7gcf-g7xr-8hxj); dependency maintenance: tokio-tungstenite 0.30, jsonschema 0.48, rust-minor batches (13 updates) |
 | [26.07_2](#26072---2026-07-06) | 0.6.20 | 2026-07-06 | Dependency maintenance: quick-xml 0.41, rust-minor batch (4 updates), cmov 0.5.4, conformance golang.org/x/net 0.55 |
 | [26.07_1](#26071---2026-07-01) | 0.6.19 | 2026-07-01 | Dependency maintenance: maxminddb 0.29, wasmtime 46, rust-minor batch (12 updates), actions/cache 6 |
@@ -91,6 +92,21 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
     - "TLS_AES_256_GCM_SHA384"
 }
 ```
+
+---
+
+## [26.07_4] - 2026-07-30
+
+**Crate version:** 0.6.22
+
+### Changed
+- Bump the `wasmtime` group (`wasmtime`, `wasmtime-wasi`) 46.0 → 47.0. (#319)
+- Bump `quinn-proto` 0.11.14 → 0.11.16. (#321)
+- Bump `maxminddb` 0.29 → 0.30. (#317)
+- Bump the rust-minor group (17 updates), including `tokio` 1.53.1, `hyper` 1.11.0,
+  `serde` 1.0.229, `libc` 0.2.189, and `clap` 4.6.4. (#322)
+- CI: bump `actions/setup-go` 6 → 7. (#315)
+- CI: bump `google.golang.org/grpc` in `/conformance`. (#318)
 
 ---
 
