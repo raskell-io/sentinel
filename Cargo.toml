@@ -98,7 +98,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6.2"
 parking_lot = "0.12"
 arc-swap = "1.9"
-base64 = "0.22"
+base64 = "0.23"
 
 # Memory allocator (better performance for allocation-heavy workloads)
 tikv-jemallocator = "0.7"
