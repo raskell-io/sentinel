@@ -180,68 +180,145 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
     Ok(routes)
 }
 
+/// Match condition node names recognized inside a `matches` block, paired
+/// with a usage example for error messages.
+const VALID_MATCH_CONDITIONS: &[(&str, &str)] = &[
+    ("path", "path \"/api/v1/users\""),
+    ("path-prefix", "path-prefix \"/api\""),
+    ("path-regex", "path-regex \"^/api/v[0-9]+/\""),
+    ("host", "host \"example.com\" (or \"*.example.com\")"),
+    (
+        "header",
+        "header \"x-version\" (or header \"x-version\" \"2\")",
+    ),
+    ("method", "method \"GET\""),
+    (
+        "query-param",
+        "query-param \"debug\" (or query-param \"debug\" \"true\")",
+    ),
+];
+
+/// Build the error for a match condition whose first argument is missing or
+/// not a string (e.g. `path-prefix` with no value, or `method 42`).
+fn match_condition_value_error(route_id: &str, match_node: &kdl::KdlNode) -> anyhow::Error {
+    let name = match_node.name().value();
+    let example = VALID_MATCH_CONDITIONS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, ex)| *ex)
+        .unwrap_or("path-prefix \"/api\"");
+    match match_node.entries().first() {
+        Some(entry) => anyhow::anyhow!(
+            "Route '{}': match condition '{}' has a non-string value {}.\n\
+             Expected a quoted string, e.g., {}",
+            route_id,
+            name,
+            entry.value(),
+            example
+        ),
+        None => anyhow::anyhow!(
+            "Route '{}': match condition '{}' is missing its value.\n\
+             Expected a quoted string, e.g., {}",
+            route_id,
+            name,
+            example
+        ),
+    }
+}
+
 fn parse_match_conditions(node: &kdl::KdlNode) -> Result<Vec<MatchCondition>> {
     let mut matches = Vec::new();
+    // Route ID for error context; parse_routes has already required it.
+    let route_id = get_first_arg_string(node).unwrap_or_else(|| "<unnamed>".to_string());
 
     if let Some(route_children) = node.children() {
         if let Some(matches_node) = route_children.get("matches") {
             if let Some(match_children) = matches_node.children() {
                 for match_node in match_children.nodes() {
-                    match match_node.name().value() {
+                    let name = match_node.name().value();
+                    match name {
                         "path-prefix" => {
-                            if let Some(prefix) = get_first_arg_string(match_node) {
-                                matches.push(MatchCondition::PathPrefix(prefix));
-                            }
+                            let prefix = get_first_arg_string(match_node).ok_or_else(|| {
+                                match_condition_value_error(&route_id, match_node)
+                            })?;
+                            matches.push(MatchCondition::PathPrefix(prefix));
                         }
                         "path" => {
-                            if let Some(path) = get_first_arg_string(match_node) {
-                                matches.push(MatchCondition::Path(path));
-                            }
+                            let path = get_first_arg_string(match_node).ok_or_else(|| {
+                                match_condition_value_error(&route_id, match_node)
+                            })?;
+                            matches.push(MatchCondition::Path(path));
                         }
                         "path-regex" => {
-                            if let Some(regex) = get_first_arg_string(match_node) {
-                                matches.push(MatchCondition::PathRegex(regex));
-                            }
+                            let regex = get_first_arg_string(match_node).ok_or_else(|| {
+                                match_condition_value_error(&route_id, match_node)
+                            })?;
+                            matches.push(MatchCondition::PathRegex(regex));
                         }
                         "host" => {
-                            if let Some(host) = get_first_arg_string(match_node) {
-                                matches.push(MatchCondition::Host(host));
-                            }
+                            let host = get_first_arg_string(match_node).ok_or_else(|| {
+                                match_condition_value_error(&route_id, match_node)
+                            })?;
+                            matches.push(MatchCondition::Host(host));
                         }
                         "header" => {
                             let entries: Vec<_> = match_node.entries().iter().collect();
-                            if let Some(name) = entries.first().and_then(|e| e.value().as_string())
-                            {
-                                let value = entries
-                                    .get(1)
-                                    .and_then(|e| e.value().as_string())
-                                    .map(|s| s.to_string());
-                                matches.push(MatchCondition::Header {
-                                    name: name.to_string(),
-                                    value,
-                                });
-                            }
+                            let name = entries
+                                .first()
+                                .and_then(|e| e.value().as_string())
+                                .ok_or_else(|| {
+                                    match_condition_value_error(&route_id, match_node)
+                                })?;
+                            let value = entries
+                                .get(1)
+                                .and_then(|e| e.value().as_string())
+                                .map(|s| s.to_string());
+                            matches.push(MatchCondition::Header {
+                                name: name.to_string(),
+                                value,
+                            });
                         }
                         "method" => {
-                            if let Some(method) = get_first_arg_string(match_node) {
-                                matches.push(MatchCondition::Method(vec![method]));
-                            }
+                            let method = get_first_arg_string(match_node).ok_or_else(|| {
+                                match_condition_value_error(&route_id, match_node)
+                            })?;
+                            matches.push(MatchCondition::Method(vec![method]));
                         }
                         "query-param" => {
                             let entries: Vec<_> = match_node.entries().iter().collect();
-                            if let Some(name) = entries.first().and_then(|e| e.value().as_string())
-                            {
-                                let value = entries
-                                    .get(1)
-                                    .and_then(|e| e.value().as_string())
-                                    .map(|s| s.to_string());
-                                matches.push(MatchCondition::QueryParam {
-                                    name: name.to_string(),
-                                    value,
-                                });
-                            }
+                            let name = entries
+                                .first()
+                                .and_then(|e| e.value().as_string())
+                                .ok_or_else(|| {
+                                    match_condition_value_error(&route_id, match_node)
+                                })?;
+                            let value = entries
+                                .get(1)
+                                .and_then(|e| e.value().as_string())
+                                .map(|s| s.to_string());
+                            matches.push(MatchCondition::QueryParam {
+                                name: name.to_string(),
+                                value,
+                            });
                         }
-                        _ => {}
+                        other => {
+                            // A silently dropped match condition would make the
+                            // route match MORE requests than intended, so a typo
+                            // here must be a hard error, not a warning.
+                            let valid_names: Vec<&str> =
+                                VALID_MATCH_CONDITIONS.iter().map(|(n, _)| *n).collect();
+                            let suggestion = super::helpers::did_you_mean(other, &valid_names)
+                                .map(|s| format!(" Did you mean '{}'?", s))
+                                .unwrap_or_default();
+                            return Err(anyhow::anyhow!(
+                                "Route '{}': unknown match condition '{}'.{}\n\
+                                 Valid match conditions are: {}",
+                                route_id,
+                                other,
+                                suggestion,
+                                valid_names.join(", ")
+                            ));
+                        }
                     }
                 }
             }
@@ -744,13 +821,27 @@ fn parse_shadow_config(node: &kdl::KdlNode) -> Result<ShadowConfig> {
         )
     })?;
 
+    // Percentage: accepts a number (`percentage 50` / `percentage 12.5`) or a
+    // numeric string (`percentage "50"`). Invalid values are hard errors —
+    // silently falling back to the 100% default would mirror far more traffic
+    // than intended.
     let percentage = if let Some(pct_str) = get_string_entry(node, "percentage") {
-        pct_str.parse::<f64>().unwrap_or(100.0)
+        pct_str.parse::<f64>().map_err(|_| {
+            anyhow::anyhow!(
+                "Shadow 'percentage' has invalid value \"{}\". \
+                 Expected a number between 0 and 100, e.g., percentage 50",
+                pct_str
+            )
+        })?
     } else {
-        get_int_entry(node, "percentage")
-            .map(|v| v as f64)
-            .unwrap_or(100.0)
+        get_float_entry(node, "percentage").unwrap_or(100.0)
     };
+    if !(0.0..=100.0).contains(&percentage) {
+        return Err(anyhow::anyhow!(
+            "Shadow 'percentage' is {} but must be between 0 and 100.",
+            percentage
+        ));
+    }
 
     let timeout_ms = get_int_entry(node, "timeout-ms").unwrap_or(5000) as u64;
     let buffer_body = get_bool_entry(node, "buffer-body").unwrap_or(false);
@@ -1813,5 +1904,250 @@ mod tests {
         let rp = routes.first().unwrap().retry_policy.as_ref();
 
         assert!(rp.is_none());
+    }
+
+    /// Parse a `routes { ... }` KDL fragment through `parse_routes`.
+    fn parse_routes_from(kdl: &str) -> Result<Vec<RouteConfig>> {
+        let doc: kdl::KdlDocument = kdl.parse().expect("KDL parses");
+        let routes_node = doc.get("routes").expect("routes node present");
+        parse_routes(routes_node)
+    }
+
+    #[test]
+    fn match_condition_unknown_name_is_an_error_with_suggestion() {
+        // `path_prefix` (underscore) is the classic typo for `path-prefix`.
+        // Silently dropping it would make the route match everything.
+        let err = parse_routes_from(
+            r#"
+            routes {
+                route "assets" {
+                    matches { path_prefix "/assets" }
+                    upstream "backend"
+                }
+            }
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("Route 'assets'"), "missing route id: {err}");
+        assert!(
+            err.contains("unknown match condition 'path_prefix'"),
+            "missing offending name: {err}"
+        );
+        assert!(
+            err.contains("Did you mean 'path-prefix'?"),
+            "missing suggestion: {err}"
+        );
+        assert!(
+            err.contains("path, path-prefix, path-regex, host, header, method, query-param"),
+            "missing valid condition list: {err}"
+        );
+    }
+
+    #[test]
+    fn match_condition_unknown_name_without_close_candidate_lists_valid_names() {
+        let err = parse_routes_from(
+            r#"
+            routes {
+                route "api" {
+                    matches { banana "/api" }
+                    upstream "backend"
+                }
+            }
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("unknown match condition 'banana'"), "{err}");
+        assert!(!err.contains("Did you mean"), "{err}");
+        assert!(err.contains("Valid match conditions are:"), "{err}");
+    }
+
+    #[test]
+    fn match_condition_missing_value_is_an_error() {
+        let err = parse_routes_from(
+            r#"
+            routes {
+                route "api" {
+                    matches { path-prefix }
+                    upstream "backend"
+                }
+            }
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("Route 'api'"), "{err}");
+        assert!(
+            err.contains("match condition 'path-prefix' is missing its value"),
+            "{err}"
+        );
+        assert!(
+            err.contains("path-prefix \"/api\""),
+            "missing example: {err}"
+        );
+    }
+
+    #[test]
+    fn match_condition_non_string_value_is_an_error() {
+        let err = parse_routes_from(
+            r#"
+            routes {
+                route "api" {
+                    matches { method 42 }
+                    upstream "backend"
+                }
+            }
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("match condition 'method' has a non-string value 42"),
+            "{err}"
+        );
+        assert!(err.contains("method \"GET\""), "missing example: {err}");
+    }
+
+    #[test]
+    fn match_condition_valid_forms_still_parse() {
+        let routes = parse_routes_from(
+            r#"
+            routes {
+                route "kitchen-sink" {
+                    matches {
+                        path "/exact"
+                        path-prefix "/api"
+                        path-regex "^/v[0-9]+/"
+                        host "*.example.com"
+                        header "x-version" "2"
+                        header "x-flag"
+                        method "GET"
+                        query-param "debug" "true"
+                        query-param "trace"
+                    }
+                    upstream "backend"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].matches.len(), 9);
+        assert!(matches!(
+            routes[0].matches[4],
+            MatchCondition::Header { ref name, ref value } if name == "x-version" && value.as_deref() == Some("2")
+        ));
+        assert!(matches!(
+            routes[0].matches[5],
+            MatchCondition::Header { ref name, ref value } if name == "x-flag" && value.is_none()
+        ));
+        assert!(matches!(
+            routes[0].matches[8],
+            MatchCondition::QueryParam { ref name, ref value } if name == "trace" && value.is_none()
+        ));
+    }
+
+    #[test]
+    fn shadow_percentage_rejects_non_numeric_string() {
+        // Previously `percentage "lots"` silently became 100% mirroring.
+        let err = parse_routes_from(
+            r#"
+            routes {
+                route "api" {
+                    matches { path-prefix "/" }
+                    upstream "backend"
+                    shadow {
+                        upstream "canary"
+                        percentage "lots"
+                    }
+                }
+            }
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("Shadow 'percentage' has invalid value \"lots\""),
+            "{err}"
+        );
+        assert!(err.contains("between 0 and 100"), "{err}");
+    }
+
+    #[test]
+    fn shadow_percentage_rejects_out_of_range_values() {
+        let err = parse_routes_from(
+            r#"
+            routes {
+                route "api" {
+                    matches { path-prefix "/" }
+                    upstream "backend"
+                    shadow {
+                        upstream "canary"
+                        percentage 150
+                    }
+                }
+            }
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("Shadow 'percentage' is 150 but must be between 0 and 100"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn shadow_percentage_accepts_numeric_forms() {
+        let routes = parse_routes_from(
+            r#"
+            routes {
+                route "int-pct" {
+                    matches { path-prefix "/" }
+                    upstream "backend"
+                    shadow { upstream "canary"; percentage 50 }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(routes[0].shadow.as_ref().unwrap().percentage, 50.0);
+
+        // Float form was previously (silently) ignored and became 100.0.
+        let routes = parse_routes_from(
+            r#"
+            routes {
+                route "float-pct" {
+                    matches { path-prefix "/" }
+                    upstream "backend"
+                    shadow { upstream "canary"; percentage 12.5 }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(routes[0].shadow.as_ref().unwrap().percentage, 12.5);
+
+        let routes = parse_routes_from(
+            r#"
+            routes {
+                route "string-pct" {
+                    matches { path-prefix "/" }
+                    upstream "backend"
+                    shadow { upstream "canary"; percentage "75" }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(routes[0].shadow.as_ref().unwrap().percentage, 75.0);
     }
 }
