@@ -178,6 +178,8 @@ pub fn parse_listeners(node: &kdl::KdlNode) -> Result<Vec<ListenerConfig>> {
 pub fn parse_tls_config(node: &kdl::KdlNode, listener_id: &str) -> Result<TlsConfig> {
     debug!(listener_id = %listener_id, "Parsing TLS configuration");
 
+    reject_unknown_nodes(node, KNOWN_TLS_NODES, "tls", listener_id)?;
+
     // Parse ACME configuration if present
     let acme = if let Some(children) = node.children() {
         children
@@ -266,6 +268,75 @@ pub fn parse_tls_config(node: &kdl::KdlNode, listener_id: &str) -> Result<TlsCon
         session_resumption,
         acme,
     })
+}
+
+/// Child nodes recognized inside a listener `tls` block.
+const KNOWN_TLS_NODES: &[&str] = &[
+    "cert-file",
+    "key-file",
+    "ca-file",
+    "min-version",
+    "max-version",
+    "client-auth",
+    "ocsp-stapling",
+    "session-resumption",
+    "cipher-suite",
+    "sni",
+    "acme",
+];
+
+/// Child nodes recognized inside an `sni` block.
+const KNOWN_SNI_NODES: &[&str] = &[
+    "hostnames",
+    "priority-hostnames",
+    "cert-file",
+    "key-file",
+    "acme",
+];
+
+/// Reject child nodes the parser does not understand.
+///
+/// Unknown nodes in security-relevant blocks previously parsed as nothing,
+/// letting a config imply protections that were never active (issue #303).
+fn reject_unknown_nodes(
+    node: &kdl::KdlNode,
+    known: &[&str],
+    block: &str,
+    listener_id: &str,
+) -> Result<()> {
+    let Some(children) = node.children() else {
+        return Ok(());
+    };
+    for child in children.nodes() {
+        let name = child.name().value();
+        if known.contains(&name) {
+            continue;
+        }
+        let hint = match name {
+            "additional-certs" | "sni-cert" => {
+                "SNI certificates are configured with `sni { ... }` blocks placed directly \
+                 inside `tls { }`; the `additional-certs`/`sni-cert` syntax from older \
+                 documentation was never supported. "
+            }
+            "cipher-suites" => {
+                "Cipher suites are configured as repeated `cipher-suite \"NAME\"` nodes. "
+            }
+            "certificates" => {
+                "Certificates are configured with `cert-file`/`key-file` plus optional \
+                 `sni { ... }` blocks. "
+            }
+            _ => "",
+        };
+        return Err(anyhow::anyhow!(
+            "Unknown node '{}' in `{}` block of listener '{}'. {}Supported nodes: {}",
+            name,
+            block,
+            listener_id,
+            hint,
+            known.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 /// Parse ACME configuration block
@@ -603,6 +674,8 @@ fn parse_propagation_config(node: &kdl::KdlNode) -> PropagationCheckConfig {
 /// }
 /// ```
 fn parse_sni_certificate(node: &kdl::KdlNode, listener_id: &str) -> Result<SniCertificate> {
+    reject_unknown_nodes(node, KNOWN_SNI_NODES, "sni", listener_id)?;
+
     let children = node.children();
 
     // Parse hostnames - explicit override, disables SAN auto-extraction.
@@ -762,5 +835,115 @@ mod tests {
         assert_eq!(public.namespace, None);
         assert_eq!(admin.namespace, Some("ops".to_string()));
         assert_eq!(admin.address, "127.0.0.1:9000");
+    }
+
+    fn parse_tls(input: &str) -> Result<TlsConfig> {
+        let doc: kdl::KdlDocument = input.parse().unwrap();
+        let node = doc.nodes().first().unwrap();
+        parse_tls_config(node, "test-listener")
+    }
+
+    #[test]
+    fn tls_block_parses_sni_certificates() {
+        let tls = parse_tls(
+            r#"
+            tls {
+                cert-file "/certs/default.crt"
+                key-file "/certs/default.key"
+                sni {
+                    hostnames "example.com"
+                    cert-file "/certs/example.crt"
+                    key-file "/certs/example.key"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(tls.additional_certs.len(), 1);
+        assert_eq!(tls.additional_certs[0].hostnames, vec!["example.com"]);
+    }
+
+    #[test]
+    fn tls_block_rejects_unknown_node_with_documented_legacy_syntax_hint() {
+        let err = parse_tls(
+            r#"
+            tls {
+                cert-file "/certs/default.crt"
+                key-file "/certs/default.key"
+                additional-certs {
+                    sni-cert {
+                        hostname "example.com"
+                    }
+                }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("Unknown node 'additional-certs'"));
+        assert!(message.contains("test-listener"));
+        assert!(message.contains("`sni { ... }`"));
+    }
+
+    #[test]
+    fn tls_block_rejects_plural_cipher_suites_node() {
+        let err = parse_tls(
+            r#"
+            tls {
+                cert-file "/certs/default.crt"
+                key-file "/certs/default.key"
+                cipher-suites {
+                    - "TLS_AES_128_GCM_SHA256"
+                }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("Unknown node 'cipher-suites'"));
+        assert!(message.contains("repeated `cipher-suite \"NAME\"` nodes"));
+    }
+
+    #[test]
+    fn tls_block_rejects_arbitrary_unknown_node() {
+        let err = parse_tls(
+            r#"
+            tls {
+                cert-file "/certs/default.crt"
+                key-file "/certs/default.key"
+                tls13-cipher-suites "TLS_AES_128_GCM_SHA256"
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("Unknown node 'tls13-cipher-suites'"));
+        assert!(message.contains("Supported nodes:"));
+    }
+
+    #[test]
+    fn sni_block_rejects_unknown_node() {
+        let err = parse_tls(
+            r#"
+            tls {
+                cert-file "/certs/default.crt"
+                key-file "/certs/default.key"
+                sni {
+                    hostname "example.com"
+                    cert-file "/certs/example.crt"
+                    key-file "/certs/example.key"
+                }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("Unknown node 'hostname'"));
+        assert!(message.contains("`sni` block"));
     }
 }

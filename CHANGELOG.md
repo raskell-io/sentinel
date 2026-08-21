@@ -64,6 +64,43 @@ for details.
 
 ## [Unreleased]
 
+> **Breaking release.** Includes a breaking listener TLS config-schema change
+> (below). The next release should bump the crate SemVer minor (0.6.x → 0.7.0).
+
+### Changed
+- **BREAKING — listener TLS config schema.** SNI certificates now use repeated
+  `sni { ... }` blocks instead of `additional-certs { cert ... }`, and cipher suites
+  use repeated `cipher-suite "NAME"` nodes instead of a `cipher-suites { ... }` list.
+  Unknown nodes inside `tls` and `sni` blocks are now **rejected at parse time**
+  (previously silently ignored) with descriptive errors and legacy-syntax hints, so
+  a config can no longer imply TLS behavior the proxy never applies. (#311)
+
+### Added
+- Loud startup warnings when TLS hardening settings — per-SNI certificate serving,
+  client-auth/mTLS, min/max TLS version, cipher suites, and session resumption — are
+  configured but not yet applied by the listener (issue #303); the listener uses
+  Pingora's built-in intermediate profile and serves the primary certificate to all
+  clients until #303 lands. Unenforced mTLS emits a `SECURITY:` warning. (#311)
+
+### Migration
+
+Update listener `tls` blocks to the new schema:
+
+```kdl
+// before                                  // after
+additional-certs {                         sni {
+    cert hostnames=["a.com"] {                 hostnames "a.com"
+        cert-file "a.crt"                      cert-file "a.crt"
+        key-file  "a.key"                      key-file  "a.key"
+    }                                      }
+}
+
+cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
+    - "TLS_AES_128_GCM_SHA256"             cipher-suite "TLS_AES_256_GCM_SHA384"
+    - "TLS_AES_256_GCM_SHA384"
+}
+```
+
 ---
 
 ## [26.08_1] - 2026-08-08
