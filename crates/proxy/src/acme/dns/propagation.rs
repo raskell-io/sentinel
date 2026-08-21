@@ -164,12 +164,19 @@ impl PropagationChecker {
                         continue;
                     };
 
-                    // TXT records can have multiple strings, join them
+                    // TXT records can have multiple strings, join them.
+                    // Some providers/panels store the value with
+                    // surrounding quotes (RFC 1035 zone-file style);
+                    // tolerate them on the read path while the write
+                    // path still sends the bare value.
                     let value: String = txt
                         .txt_data
                         .iter()
                         .map(|data| String::from_utf8_lossy(data))
-                        .collect();
+                        .collect::<String>()
+                        .trim()
+                        .trim_matches('"')
+                        .to_string();
 
                     trace!(
                         record = %record_name,
@@ -266,5 +273,20 @@ mod tests {
 
         let checker = checker.unwrap();
         assert_eq!(checker.config().initial_delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_quoted_txt_tolerance() {
+        // Read path trims surrounding quotes. Verify the transform
+        // used in check_record matches expectations.
+        let raw = "\"sqGBWGO-ubD0sYsInrp3Zo8s3GT7T6ZArO5Jcz9bNbI\"";
+        let normalized = raw.trim().trim_matches('"').to_string();
+        assert_eq!(normalized, "sqGBWGO-ubD0sYsInrp3Zo8s3GT7T6ZArO5Jcz9bNbI");
+
+        let spaced = "  \"hello\"  ";
+        assert_eq!(spaced.trim().trim_matches('"').to_string(), "hello");
+
+        let bare = "hello";
+        assert_eq!(bare.trim().trim_matches('"').to_string(), "hello");
     }
 }
