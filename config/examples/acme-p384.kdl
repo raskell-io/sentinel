@@ -31,13 +31,16 @@ listeners {
 
 upstreams {
     upstream "backend" {
-        server address="127.0.0.1:8080"
+        target "127.0.0.1:8080"
     }
 }
 
 routes {
     route "default" {
-        match path="/"
-        back-to upstream="backend"
+        priority "low"
+        matches {
+            path-prefix "/"
+        }
+        upstream "backend"
     }
 }

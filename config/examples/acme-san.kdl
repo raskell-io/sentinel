@@ -4,8 +4,15 @@
 // Zentinel's scheduler handles this by only checking the primary domain
 // to avoid redundant renewal loops.
 
+system {
+    worker-threads 0
+    max-connections 10000
+    graceful-shutdown-timeout-secs 30
+}
+
 listeners {
-    listener "https" address="0.0.0.0:443" {
+    listener "https" {
+        address "0.0.0.0:443"
         tls {
             acme {
                 email "admin@example.com"
@@ -15,7 +22,7 @@ listeners {
                 domains "example.com" "api.example.com" "static.example.com"
 
                 challenge-type "http-01"
-                staging true
+                staging #true
             }
         }
     }
@@ -23,24 +30,30 @@ listeners {
 
 upstreams {
     upstream "api" {
-        server address="127.0.0.1:8081"
+        target "127.0.0.1:8081"
     }
     upstream "static" {
-        server address="127.0.0.1:8082"
+        target "127.0.0.1:8082"
     }
 }
 
 routes {
     route "api" {
-        match host="api.example.com"
-        back-to upstream="api"
+        matches {
+            host "api.example.com"
+        }
+        upstream "api"
     }
     route "static" {
-        match host="static.example.com"
-        back-to upstream="static"
+        matches {
+            host "static.example.com"
+        }
+        upstream "static"
     }
     route "home" {
-        match host="example.com"
-        back-to upstream="api"
+        matches {
+            host "example.com"
+        }
+        upstream "api"
     }
 }
