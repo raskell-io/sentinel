@@ -20,7 +20,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.23"
+version = "0.6.24"
 edition = "2021"
 authors = ["Zentinel Contributors"]
 license = "MIT OR Apache-2.0"
@@ -76,7 +76,7 @@ bytes = "1.9"
 
 # Configuration and validation
 config = "0.14"
-validator = { version = "0.20", features = ["derive"] }
+validator = { version = "0.21", features = ["derive"] }
 
 # Testing
 proptest = "1.11"
@@ -98,7 +98,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6.2"
 parking_lot = "0.12"
 arc-swap = "1.9"
-base64 = "0.22"
+base64 = "0.23"
 
 # Memory allocator (better performance for allocation-heavy workloads)
 tikv-jemallocator = "0.7"

@@ -10,25 +10,33 @@ for details.
 
 ## Release Overview
 
+> **Crate Version** is the version actually **published to crates.io** for that
+> release — the version you can depend on. It is *not* the version present in
+> `Cargo.toml` at the tagged commit: the Release workflow reads that value and
+> publishes it **plus one**. Rows from 26.04_1 onward were reconciled against
+> crates.io on 2026-08-08; rows before 26.04_1 have not been verified.
+
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
-| [26.07_4](#26074---2026-07-30) | 0.6.22 | 2026-07-30 | Dependency maintenance: wasmtime 47, quinn-proto 0.11.16, maxminddb 0.30, rust-minor batch (17 updates), actions/setup-go 7 |
-| [26.07_3](#26073---2026-07-18) | 0.6.21 | 2026-07-18 | Security: serde_with 3.21 (GHSA-7gcf-g7xr-8hxj); dependency maintenance: tokio-tungstenite 0.30, jsonschema 0.48, rust-minor batches (13 updates) |
-| [26.07_2](#26072---2026-07-06) | 0.6.20 | 2026-07-06 | Dependency maintenance: quick-xml 0.41, rust-minor batch (4 updates), cmov 0.5.4, conformance golang.org/x/net 0.55 |
-| [26.07_1](#26071---2026-07-01) | 0.6.19 | 2026-07-01 | Dependency maintenance: maxminddb 0.29, wasmtime 46, rust-minor batch (12 updates), actions/cache 6 |
-| [26.06_3](#26063---2026-06-23) | 0.6.17 | 2026-06-23 | Multi-file KDL block merging, upstream circuit-breaker recovery fix, counter underflow guard, dependency maintenance |
-| [26.06_2](#26062---2026-06-16) | 0.6.16 | 2026-06-16 | Manifesto hardening (agent body limits, bounded limiter/pool state, pool maintenance), route-level retry-policy parsing, Pingora 0.8.1 security bump, dependency maintenance |
-| [26.06_1](#26061---2026-06-07) | 0.6.15 | 2026-06-07 | Standalone Prometheus metrics server, per-listener route sets, quickstart fixes, dep maintenance (tikv-jemallocator 0.7, openssl 0.10.80, rust-minor batches) |
-| [26.05_4](#26054---2026-05-12) | 0.6.14 | 2026-05-12 | Dependency maintenance: OpenTelemetry 0.32, sysinfo 0.39, Rust toolchain 1.95 |
-| [26.05_3](#26053---2026-05-05) | 0.6.13 | 2026-05-05 | Embedded and bundled KDL configs use `system` block; ACME hickory-resolver 0.26 fix |
-| [26.05_2](#26052---2026-05-03) | 0.6.12 | 2026-05-03 | Install script provisions systemd unit, system user, and starter config |
-| [26.05_1](#26051---2026-05-01) | 0.6.11 | 2026-05-01 | Per-SNI ACME certificates for multi-tenant TLS, dependency updates |
-| [26.04_7](#26047---2026-04-28) | 0.6.10 | 2026-04-28 | Security: rand fix in `zentinel-sim` |
-| [26.04_6](#26046---2026-04-25) | 0.6.9 | 2026-04-25 | Security: openssl & rand fixes, ACME schema docs, CI update |
-| [26.04_5](#26045---2026-04-20) | 0.6.8 | 2026-04-20 | Configurable ACME certificate key type (ECDSA P-256/P-384) |
-| [26.04_4](#26044---2026-04-19) | 0.6.7 | 2026-04-19 | Cloudflare DNS-01, custom ACME servers, EAB, SAN renewal fix |
-| [26.04_3](#26043---2026-04-16) | 0.6.6 | 2026-04-16 | Security: rand unsoundness fix, dependency updates |
-| [26.04_2](#26042---2026-04-10) | 0.6.5 | 2026-04-10 | Security: wasmtime 43.0.1 (critical sandbox escape fix) |
+| [26.08_1](#26081---2026-08-08) | 0.6.24 | 2026-08-08 | Security: rustls 0.23.43 (ticket-age and binder arithmetic hardening); dependency maintenance: pem 4.0, base64 0.23, jsonschema 0.49, validator 0.21, async-memcached 0.7, http 1.5, redis 1.5 |
+| [26.07_4](#26074---2026-07-30) | 0.6.23 | 2026-07-30 | Dependency maintenance: wasmtime 47, quinn-proto 0.11.16, maxminddb 0.30, rust-minor batch (17 updates), actions/setup-go 7 |
+| [26.07_3](#26073---2026-07-18) | 0.6.22 | 2026-07-18 | Security: serde_with 3.21 (GHSA-7gcf-g7xr-8hxj); dependency maintenance: tokio-tungstenite 0.30, jsonschema 0.48, rust-minor batches (13 updates) |
+| [26.07_2](#26072---2026-07-06) | 0.6.21 | 2026-07-06 | Dependency maintenance: quick-xml 0.41, rust-minor batch (4 updates), cmov 0.5.4, conformance golang.org/x/net 0.55 |
+| [26.07_1](#26071---2026-07-01) | 0.6.20 | 2026-07-01 | Dependency maintenance: maxminddb 0.29, wasmtime 46, rust-minor batch (12 updates), actions/cache 6 |
+| [26.06_3](#26063---2026-06-23) | 0.6.18 | 2026-06-23 | Multi-file KDL block merging, upstream circuit-breaker recovery fix, counter underflow guard, dependency maintenance |
+| [26.06_2](#26062---2026-06-16) | 0.6.17 | 2026-06-16 | Manifesto hardening (agent body limits, bounded limiter/pool state, pool maintenance), route-level retry-policy parsing, Pingora 0.8.1 security bump, dependency maintenance |
+| [26.06_1](#26061---2026-06-07) | 0.6.16 | 2026-06-07 | Standalone Prometheus metrics server, per-listener route sets, quickstart fixes, dep maintenance (tikv-jemallocator 0.7, openssl 0.10.80, rust-minor batches) |
+| [26.05_5](#26055---2026-05-25) | — (no crate published) | 2026-05-25 | Tagged release; crates.io publish collided with an already-published version. Changes are documented under 26.06_1. |
+| [26.05_4](#26054---2026-05-12) | 0.6.15 | 2026-05-12 | Dependency maintenance: OpenTelemetry 0.32, sysinfo 0.39, Rust toolchain 1.95 |
+| [26.05_3](#26053---2026-05-05) | — (not released) | 2026-05-05 | Embedded and bundled KDL configs use `system` block; ACME hickory-resolver 0.26 fix |
+| [26.05_2](#26052---2026-05-03) | 0.6.13 | 2026-05-03 | Install script provisions systemd unit, system user, and starter config |
+| [26.05_1](#26051---2026-05-01) | 0.6.12 | 2026-05-01 | Per-SNI ACME certificates for multi-tenant TLS, dependency updates |
+| [26.04_7](#26047---2026-04-28) | 0.6.11 | 2026-04-28 | Security: rand fix in `zentinel-sim` |
+| [26.04_6](#26046---2026-04-25) | 0.6.10 | 2026-04-25 | Security: openssl & rand fixes, ACME schema docs, CI update |
+| [26.04_5](#26045---2026-04-20) | 0.6.9 | 2026-04-20 | Configurable ACME certificate key type (ECDSA P-256/P-384) |
+| [26.04_4](#26044---2026-04-19) | 0.6.8 | 2026-04-19 | Cloudflare DNS-01, custom ACME servers, EAB, SAN renewal fix |
+| [26.04_3](#26043---2026-04-16) | 0.6.7 | 2026-04-16 | Security: rand unsoundness fix, dependency updates |
+| [26.04_2](#26042---2026-04-10) | 0.6.6 | 2026-04-10 | Security: wasmtime 43.0.1 (critical sandbox escape fix) |
 | [26.04_1](#26041---2026-04-09) | 0.6.4 | 2026-04-09 | Numeric route priorities, host extraction fix, Docker glibc fix, conformance CI restored |
 | [26.03_4](#26034---2026-03-18) | 0.6.2 | 2026-03-18 | Configurable Cache-Status header name |
 | [26.02_18](#260218---2026-02-26) | 0.5.10 | 2026-02-26 | Remove v1 agent protocol |
@@ -95,9 +103,39 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ---
 
+## [26.08_1] - 2026-08-08
+
+**Crate version:** 0.6.24
+
+Dependency-only release. No proxy behavior, configuration schema, or agent
+protocol changes.
+
+### Security
+- Bump `rustls` 0.23.42 → 0.23.43, part of the rust-minor group. Upstream
+  hardens session-ticket age arithmetic and the PSK binder suffix calculation
+  (`checked_sub` in `Rfc5077Ticketer::decrypt`), and tightens QUIC cipher-suite
+  and TLS-version checks. No CVE assigned and no Zentinel-specific exposure
+  identified; taken as defense in depth for the TLS listener path. (#326)
+
+### Changed
+- Bump the rust-minor group (4 updates): `rustls` 0.23.42 → 0.23.43,
+  `http` 1.4.2 → 1.5.0, `redis` 1.4.1 → 1.5.0, and
+  `toml` 1.1.3+spec-1.1.0 → 1.1.4+spec-1.1.0. (#326)
+- Bump `pem` 3.0.6 → 4.0.0. (#327)
+- Bump `jsonschema` 0.48.1 → 0.49.5. (#328)
+- Bump `base64` 0.22.1 → 0.23.1. (#329)
+- Bump `validator` 0.20.0 → 0.21.0. (#330)
+- Bump `async-memcached` 0.6.0 → 0.7.0. (#332)
+
+### Documentation
+- Correct the documented release process to match the Release workflow's
+  actual tag+1 versioning behavior. (#325)
+
+---
+
 ## [26.07_4] - 2026-07-30
 
-**Crate version:** 0.6.22
+**Crate version:** 0.6.23
 
 ### Changed
 - Bump the `wasmtime` group (`wasmtime`, `wasmtime-wasi`) 46.0 → 47.0. (#319)
@@ -112,7 +150,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.07_3] - 2026-07-18
 
-**Crate version:** 0.6.21
+**Crate version:** 0.6.22
 
 ### Security
 - Bump `serde_with` 3.18.0 → 3.21.0 — fixes GHSA-7gcf-g7xr-8hxj, a serialization
@@ -131,7 +169,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.07_2] - 2026-07-06
 
-**Crate version:** 0.6.20
+**Crate version:** 0.6.21
 
 ### Changed
 - Bump `quick-xml` 0.40 → 0.41. (#300)
@@ -143,7 +181,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.07_1] - 2026-07-01
 
-**Crate version:** 0.6.19
+**Crate version:** 0.6.20
 
 ### Changed
 - Bump `maxminddb` 0.28 → 0.29. (#293)
@@ -155,7 +193,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.06_3] - 2026-06-23
 
-**Crate version:** 0.6.17
+**Crate version:** 0.6.18
 
 ### Added
 - **Merge duplicate top-level blocks across included KDL files.** `listeners`,
@@ -179,7 +217,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.06_2] - 2026-06-16
 
-**Crate version:** 0.6.16
+**Crate version:** 0.6.17
 
 ### Added
 - **Enforce agent request/response body limits and bound per-key limiter state.** Agent body inspection now enforces the configured `max-request-body-bytes` / `max-response-body-bytes`, and per-key rate-limiter state is bounded so it can no longer grow without limit — closing latent unbounded-growth paths and bringing runtime behavior in line with the Manifesto's "bounded by design" principle. (#273)
@@ -199,7 +237,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.06_1] - 2026-06-07
 
-**Crate version:** 0.6.15
+**Crate version:** 0.6.16
 
 ### Added
 - **Standalone Prometheus metrics server.** When `observability.metrics.enabled` is set, the proxy binds a dedicated HTTP listener on `observability.metrics.address` (default `0.0.0.0:9090`) and serves the Prometheus exposition format at `observability.metrics.path` (default `/metrics`), logging a `Metrics server listening` line at startup. Previously `address` was parsed but never consumed, so nothing bound the port — a silent failure that violated the "fail loudly" principle. (#256)
@@ -223,9 +261,24 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ---
 
+## [26.05_5] - 2026-05-25
+
+**Crate version:** — no crate was published for this release.
+
+Tagged and released on GitHub (binaries and signatures were produced), but the
+crates.io publish produced nothing: the tag sat at workspace version `0.6.14`,
+the same version 26.05_4 was tagged at, so the Release workflow's `tag + 1`
+computation resolved to `0.6.15` — already published by 26.05_4.
+
+The five dependency/CI changes it carried (#249, #250, #251, #252, #253) are
+documented under [26.06_1](#26061---2026-06-07), the next release that actually
+published a crate.
+
+---
+
 ## [26.05_4] - 2026-05-12
 
-**Crate version:** 0.6.14
+**Crate version:** 0.6.15
 
 ### Changed
 - **Bump `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` 0.31 → 0.32** as a coordinated stack. Bumping individually leaves the workspace with two versions of `opentelemetry` in the dependency graph, breaking trait resolution at the proxy boundary. (#244, supersedes #238 #239 #241)
@@ -239,7 +292,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.05_3] - 2026-05-05
 
-**Crate version:** 0.6.13
+**Crate version:** — this release was never tagged; its changes first shipped in 26.05_4 (`0.6.15`).
 
 ### Fixed
 - **Embedded `DEFAULT_CONFIG_KDL` no longer emits a deprecation warning on first run.** The fallback configuration baked into the binary still declared a `server { ... }` block, which the parser accepts but warns against. Switched to `system { ... }` so fresh Docker containers and binaries with no external config file start cleanly. Resolves #231. (#232)
@@ -256,7 +309,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.05_2] - 2026-05-03
 
-**Crate version:** 0.6.12
+**Crate version:** 0.6.13
 
 ### Added
 - **Systemd service bootstrap in the install script.** `curl -fsSL https://get.zentinelproxy.io | sh` now installs `/etc/systemd/system/zentinel.service`, a sysusers snippet at `/usr/lib/sysusers.d/zentinel.conf`, and a starter config at `/etc/zentinel/zentinel.kdl` on Linux hosts running systemd. Service enable and start are opt-in via `--enable-service` (or `ZENTINEL_ENABLE_SERVICE=1`). Resolves discussion #218. (#224)
@@ -272,7 +325,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.05_1] - 2026-05-01
 
-**Crate version:** 0.6.11
+**Crate version:** 0.6.12
 
 ### Added
 - **Per-SNI ACME certificates for multi-tenant TLS.** SNI blocks can now carry their own `acme` configuration, enabling independent certificate lifecycles per tenant on the same listener. Each ACME block gets its own `RenewalScheduler` and `AcmeClient` ("Option B" architecture), so a stuck issuance on one domain (e.g. waiting on DNS propagation) does not block renewals for others. Includes global domain-uniqueness validation across all ACME blocks (case-insensitive, preventing physical storage path collisions) and implicit hostname derivation from `acme.domains` when explicit `hostnames` are omitted. (#213)
@@ -288,7 +341,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.04_7] - 2026-04-28
 
-**Crate version:** 0.6.10
+**Crate version:** 0.6.11
 
 ### Security
 - **Bump `rand` 0.9.2 → 0.9.4 in `zentinel-sim`** — closes Dependabot alert for [GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc) (rand unsoundness with custom logger using `rand::rng()`). Also re-syncs `zentinel-sim`'s stale path-dep version pins to the workspace so its lockfile is regenerable. (#214)
@@ -297,7 +350,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.04_6] - 2026-04-25
 
-**Crate version:** 0.6.9
+**Crate version:** 0.6.10
 
 ### Security
 - **Bump `openssl` 0.10.77 → 0.10.78** — fixes 4 high-severity vulnerabilities: buffer overflows in `Deriver::derive`, `MdCtxRef::digest_final`, AES key wrap bounds, and unchecked PSK/cookie callback lengths leaking memory to peers. (#205)
@@ -313,7 +366,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.04_5] - 2026-04-20
 
-**Crate version:** 0.6.8
+**Crate version:** 0.6.9
 
 ### Added
 - **Configurable ACME certificate key type** via `key-type` config option. Supports `ecdsa-p256` (default) and `ecdsa-p384` for higher security strength. Invalid values produce a clear config parse error. (#199)
@@ -322,7 +375,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.04_4] - 2026-04-19
 
-**Crate version:** 0.6.7
+**Crate version:** 0.6.8
 
 ### Added
 - **Cloudflare DNS-01 provider** for ACME challenges, enabling wildcard certificate issuance via Cloudflare DNS API v4. Includes zone ID caching and full test coverage. (#197)
@@ -339,7 +392,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.04_3] - 2026-04-16
 
-**Crate version:** 0.6.6
+**Crate version:** 0.6.7
 
 ### Security
 - **Bump rand to fix unsoundness advisory** — Updates pingora fork to bump `rand` 0.8→0.9 across all pingora crates, and bumps direct `rand` 0.10.0→0.10.1 and transitive `rand` 0.9.2→0.9.4. Resolves Dependabot alerts #43, #44, #45 (RUSTSEC unsoundness with custom loggers). (#192)
@@ -356,7 +409,7 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
 
 ## [26.04_2] - 2026-04-10
 
-**Crate version:** 0.6.5
+**Crate version:** 0.6.6
 
 ### Security
 - **Bump wasmtime 43.0.0 → 43.0.1** — Resolves 10 Dependabot advisories including CVE-2026-34971 (critical: sandbox escape on aarch64 via miscompiled guest heap access in Cranelift), 6 medium-severity issues (OOB memory access, host panics/crashes), and 3 low-severity issues (data leakage, use-after-free). (#183)
