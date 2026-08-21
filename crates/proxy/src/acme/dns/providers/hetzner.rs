@@ -418,6 +418,7 @@ mod tests {
         let provider = HetznerProvider {
             client: Client::new(),
             token: "test".to_string(),
+            base_url: HETZNER_API_BASE.to_string(),
             zone_cache: Arc::new(RwLock::new(HashMap::new())),
         };
 
