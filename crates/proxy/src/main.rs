@@ -470,20 +470,34 @@ async fn initialize_acme(
 
         // Initialize ACME account. init_account already retries transient
         // Connect/TLS EOF with exponential backoff. If it still fails,
-        // keep the proxy ready and let the background RenewalScheduler
-        // retry — matching lego/certbot/caddy. Only non-retryable
-        // errors (auth/rate-limit) abort startup visibly. The pushed
-        // scheduler already carries the DNS manager.
+        // keep the proxy ready only for renewals (cert already present)
+        // and let the background RenewalScheduler retry. For first
+        // issuance (no cert files yet) the listener would remain
+        // unbound because hot-reload only swaps certs on live
+        // listeners, so fail fast instead of deferring silently.
+        let primary_domain_for_account = acme_config.domains.first().cloned();
         if let Err(e) = acme_client.init_account().await {
             use zentinel_proxy::acme::is_retryable_acme_error;
             if is_retryable_acme_error(&e) {
-                tracing::warn!(
+                let has_cert = primary_domain_for_account
+                    .as_deref()
+                    .and_then(|d| storage.certificate_paths(d))
+                    .is_some();
+                if has_cert {
+                    tracing::warn!(
+                        source = %description,
+                        error = %e,
+                        "ACME account init transient failure, proxy will stay ready and retry in background (renewal)"
+                    );
+                    schedulers.push(scheduler);
+                    continue;
+                }
+                tracing::error!(
                     source = %description,
                     error = %e,
-                    "ACME account init transient failure, proxy will stay ready and retry in background"
+                    "ACME account init transient failure during first issuance, failing fast (no cert to serve)"
                 );
-                schedulers.push(scheduler);
-                continue;
+                return Err(e);
             } else {
                 return Err(e);
             }
@@ -495,10 +509,11 @@ async fn initialize_acme(
         })?;
 
         if acme_client.needs_renewal(primary_domain)? {
-            // Initial issuance is best-effort at startup. If the
-            // network is flaky (proxy cold-start), log and defer to
-            // the background scheduler instead of crashing the whole
-            // proxy — matching Caddy/certmagic's async renewal.
+            // Issuance at startup: defer only for renewals (cert
+            // already present). First issuance with no cert files
+            // cannot be deferred — the HTTPS listener is skipped when
+            // cert files are absent (ACME certificate files not found,
+            // continue) and hot-reload never re-adds a listener.
             let issuance_result: Result<(), AcmeError> = async {
                 info!(
                     source = %description,
@@ -539,12 +554,23 @@ async fn initialize_acme(
             if let Err(e) = issuance_result {
                 use zentinel_proxy::acme::is_retryable_acme_error;
                 if is_retryable_acme_error(&e) {
-                    tracing::warn!(
-                        source = %description,
-                        domain = %primary_domain,
-                        error = %e,
-                        "Initial ACME issuance transient failure, deferring to background renewal"
-                    );
+                    let has_cert = storage.certificate_paths(primary_domain).is_some();
+                    if has_cert {
+                        tracing::warn!(
+                            source = %description,
+                            domain = %primary_domain,
+                            error = %e,
+                            "Initial ACME renewal transient failure, deferring to background renewal"
+                        );
+                    } else {
+                        tracing::error!(
+                            source = %description,
+                            domain = %primary_domain,
+                            error = %e,
+                            "Initial ACME issuance transient failure during first issuance, failing fast (no cert to serve)"
+                        );
+                        return Err(e);
+                    }
                 } else {
                     return Err(e);
                 }

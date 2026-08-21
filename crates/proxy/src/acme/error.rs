@@ -119,8 +119,8 @@ impl From<instant_acme::Error> for AcmeError {
 /// Covers the field-observed proxy cold-start pattern
 /// (`curl` first `35 unexpected eof` then `301`, ACME
 /// `client error (Connect)` / `TLS connect error`) and generic
-/// `hyper`/`transport`/`timeout` failures. Non-transient errors
-/// like auth/rate-limit must fail fast.
+/// transport failures. Non-transient errors like auth/rate-limit
+/// or DNS propagation timeouts must fail fast.
 pub fn is_retryable_acme_error(e: &AcmeError) -> bool {
     // Never retry deterministic errors: storage/config, missing
     // challenges, or polling timeouts (the latter is application-level
@@ -136,6 +136,25 @@ pub fn is_retryable_acme_error(e: &AcmeError) -> bool {
             | AcmeError::CertificateParse(_)
             | AcmeError::Timeout(_)
             | AcmeError::PropagationTimeout { .. }
+    ) {
+        return false;
+    }
+    // DNS provider errors: match variants explicitly instead of via
+    // string matching. `DnsProviderError::Timeout` is the real
+    // propagation timeout (`PropagationTimeout` is never constructed
+    // in practice) and must not be retried; the same string
+    // ("timed out") would otherwise incorrectly mark it retryable.
+    if matches!(
+        e,
+        AcmeError::DnsProvider(
+            DnsProviderError::Timeout { .. }
+                | DnsProviderError::RateLimited { .. }
+                | DnsProviderError::Authentication(_)
+                | DnsProviderError::ZoneNotFound { .. }
+                | DnsProviderError::Configuration(_)
+                | DnsProviderError::Credentials(_)
+                | DnsProviderError::UnsupportedDomain { .. }
+        )
     ) {
         return false;
     }
@@ -191,6 +210,24 @@ mod tests {
         let e = AcmeError::Storage(StorageError::InvalidStructure("x".to_string()));
         assert!(!is_retryable_acme_error(&e));
         let e = AcmeError::AccountCreation("401 Unauthorized".to_string());
+        assert!(!is_retryable_acme_error(&e));
+    }
+
+    #[test]
+    fn test_non_retryable_dns_provider_variants() {
+        let e = AcmeError::DnsProvider(DnsProviderError::Timeout { elapsed_secs: 120 });
+        assert!(!is_retryable_acme_error(&e));
+        // DnsProvider Timeout contains "timed out" but must not be retryable
+        assert!(e.to_string().to_lowercase().contains("timed out"));
+        let e = AcmeError::DnsProvider(DnsProviderError::Authentication("bad token".to_string()));
+        assert!(!is_retryable_acme_error(&e));
+        let e = AcmeError::DnsProvider(DnsProviderError::ZoneNotFound {
+            domain: "example.com".to_string(),
+        });
+        assert!(!is_retryable_acme_error(&e));
+        let e = AcmeError::DnsProvider(DnsProviderError::RateLimited {
+            retry_after_secs: 60,
+        });
         assert!(!is_retryable_acme_error(&e));
     }
 }

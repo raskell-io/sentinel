@@ -128,6 +128,18 @@ impl AcmeClient {
         retry_acme(|| async { self.init_account_once().await }).await
     }
 
+    /// Ensure ACME account is initialized, initializing if needed.
+    ///
+    /// Used by `RenewalScheduler` to lazily recover after a transient
+    /// `init_account` failure that was deferred to background during
+    /// startup. If the account is already present the call is a no-op.
+    pub async fn ensure_account(&self) -> Result<(), AcmeError> {
+        if self.account.read().await.is_some() {
+            return Ok(());
+        }
+        self.init_account().await
+    }
+
     async fn init_account_once(&self) -> Result<(), AcmeError> {
         // Check for existing account credentials (stored as JSON)
         if let Some(creds_json) = self.storage.load_credentials_json()? {
