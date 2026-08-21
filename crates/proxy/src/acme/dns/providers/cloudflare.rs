@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::acme::dns::provider::{
     challenge_record_fqdn, normalize_domain, DnsProvider, DnsProviderError, DnsResult,
@@ -20,6 +20,9 @@ use crate::acme::dns::provider::{
 
 /// Cloudflare API base URL
 const CLOUDFLARE_API_BASE: &str = "https://api.cloudflare.com/client/v4";
+
+/// Cloudflare error code for "An identical record already exists."
+const CF_ERR_DUPLICATE: i32 = 81058;
 
 /// Cloudflare DNS provider
 #[derive(Debug)]
@@ -157,6 +160,31 @@ impl DnsProvider for CloudflareProvider {
         })?;
 
         if !record_resp.success {
+            // Cover both the stable error code (81058) and the human
+            // message, matching acme.sh's grep for
+            // "An identical record already exists." / "already exists" /
+            // '"code":81058'. This guards against code drift.
+            let is_duplicate = record_resp.errors.iter().any(|e| {
+                e.code == CF_ERR_DUPLICATE || e.message.to_lowercase().contains("already exists")
+            });
+            if is_duplicate {
+                warn!(
+                    domain = %domain,
+                    record_name = %full_name,
+                    "Cloudflare reports identical TXT already exists, reusing existing record"
+                );
+                if let Some(existing_id) = self
+                    .find_existing_record_id(&zone_id, &full_name, record_value)
+                    .await?
+                {
+                    info!(
+                        domain = %domain,
+                        record_id = %existing_id,
+                        "Reusing existing Cloudflare TXT record for DNS-01"
+                    );
+                    return Ok(existing_id);
+                }
+            }
             return Err(DnsProviderError::RecordCreation {
                 record_name: full_name,
                 message: format!("{:?}", record_resp.errors),
@@ -223,6 +251,53 @@ impl DnsProvider for CloudflareProvider {
     }
 }
 
+impl CloudflareProvider {
+    async fn find_existing_record_id(
+        &self,
+        zone_id: &str,
+        full_name: &str,
+        expected_content: &str,
+    ) -> DnsResult<Option<String>> {
+        // Pagination not needed for ACME: only a few TXT records exist
+        // under _acme-challenge, so a single page is sufficient.
+        let resp = self
+            .client
+            .get(format!("{}/zones/{}/dns_records", self.base_url, zone_id))
+            .header("Authorization", format!("Bearer {}", self.token))
+            .query(&[
+                ("type", "TXT"),
+                ("name", full_name),
+                ("content", expected_content),
+            ])
+            .send()
+            .await
+            .map_err(|e| {
+                DnsProviderError::ApiRequest(format!("Failed to list TXT records: {}", e))
+            })?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let list_resp: CloudflareResponse<Vec<Record>> = resp.json().await.map_err(|e| {
+            DnsProviderError::ApiRequest(format!("Failed to parse TXT list response: {}", e))
+        })?;
+        if !list_resp.success {
+            return Ok(None);
+        }
+        let Some(records) = list_resp.result else {
+            return Ok(None);
+        };
+        for r in records {
+            if r.content.as_deref() == Some(expected_content) {
+                return Ok(Some(r.id));
+            }
+            if r.content.is_none() {
+                return Ok(Some(r.id));
+            }
+        }
+        Ok(None)
+    }
+}
+
 /// Generic Cloudflare API response
 #[derive(Debug, Deserialize)]
 struct CloudflareResponse<T> {
@@ -254,4 +329,10 @@ struct CreateRecordRequest {
 #[derive(Debug, Deserialize)]
 struct Record {
     id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default, rename = "type")]
+    type_name: Option<String>,
 }

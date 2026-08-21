@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::acme::dns::provider::{
     challenge_record_fqdn, normalize_domain, DnsProvider, DnsProviderError, DnsResult,
@@ -227,6 +227,29 @@ impl DnsProvider for HetznerProvider {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            // Hetzner typically returns 422 for duplicates, but gateways
+            // may translate it to 409. Cover both and rely on the
+            // "already exists" message to avoid false positives.
+            let is_duplicate = matches!(status.as_u16(), 409 | 422)
+                && body.to_lowercase().contains("already exists");
+            if is_duplicate {
+                warn!(
+                    domain = %domain,
+                    record_name = %relative_name,
+                    "Hetzner reports duplicate record, reusing existing"
+                );
+                if let Some(existing_id) = self
+                    .find_existing_record_id(&zone_id, &relative_name, record_value)
+                    .await?
+                {
+                    info!(
+                        domain = %domain,
+                        record_id = %existing_id,
+                        "Reusing existing Hetzner TXT record for DNS-01"
+                    );
+                    return Ok(existing_id);
+                }
+            }
             return Err(DnsProviderError::RecordCreation {
                 record_name: relative_name,
                 message: format!("HTTP {} - {}", status, body),
@@ -295,6 +318,38 @@ impl DnsProvider for HetznerProvider {
     }
 }
 
+impl HetznerProvider {
+    async fn find_existing_record_id(
+        &self,
+        zone_id: &str,
+        relative_name: &str,
+        expected_value: &str,
+    ) -> DnsResult<Option<String>> {
+        // Hetzner has no content filter; list by zone and filter
+        // client-side. Pagination not needed for ACME (few TXT).
+        let resp = self
+            .client
+            .get(format!("{}/records", HETZNER_API_BASE))
+            .header("Auth-API-Token", &self.token)
+            .query(&[("zone_id", zone_id)])
+            .send()
+            .await
+            .map_err(|e| DnsProviderError::ApiRequest(format!("Failed to list records: {}", e)))?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let list: RecordsResponse = resp.json().await.map_err(|e| {
+            DnsProviderError::ApiRequest(format!("Failed to parse record list: {}", e))
+        })?;
+        for r in list.records {
+            if r.name == *relative_name && r.value == expected_value && r.r#type == "TXT" {
+                return Ok(Some(r.id));
+            }
+        }
+        Ok(None)
+    }
+}
+
 // Hetzner API types
 
 #[derive(Debug, Deserialize)]
@@ -329,8 +384,19 @@ struct RecordResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct RecordsResponse {
+    records: Vec<Record>,
+}
+
+#[derive(Debug, Deserialize)]
 struct Record {
     id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "type")]
+    r#type: String,
+    #[serde(default)]
+    value: String,
 }
 
 #[cfg(test)]

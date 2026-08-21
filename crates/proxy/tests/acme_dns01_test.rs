@@ -644,4 +644,92 @@ mod cloudflare_provider {
         let result = provider.supports_domain("unknown.com").await.unwrap();
         assert!(!result);
     }
+
+    #[tokio::test]
+    async fn test_create_record_duplicate_reuses_existing_cloudflare() {
+        let mock_server = MockServer::start().await;
+        let zone_id = "zone-123";
+        let existing_id = "existing-456";
+        let expected_content = "sqGBWGO-ubD0sYsInrp3Zo8s3GT7T6ZArO5Jcz9bNbI";
+
+        Mock::given(method("GET"))
+            .and(path("/zones"))
+            .and(wiremock::matchers::query_param("name", "example.com"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "errors": [],
+                "result": [{ "id": zone_id, "name": "example.com" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(format!("/zones/{}/dns_records", zone_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": false,
+                "errors": [{ "code": 81058, "message": "An identical record already exists." }],
+                "result": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/zones/{}/dns_records", zone_id)))
+            .and(wiremock::matchers::query_param("type", "TXT"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "errors": [],
+                "result": [{ "id": existing_id, "name": "_acme-challenge.example.com", "content": expected_content, "type": "TXT" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let provider =
+            CloudflareProvider::new_test("token", mock_server.uri(), Duration::from_secs(30))
+                .unwrap();
+
+        let id = provider
+            .create_txt_record("example.com", "_acme-challenge", expected_content)
+            .await
+            .unwrap();
+
+        assert_eq!(id, existing_id);
+    }
+
+    #[tokio::test]
+    async fn test_create_record_non_duplicate_still_fails() {
+        let mock_server = MockServer::start().await;
+        let zone_id = "zone-123";
+
+        Mock::given(method("GET"))
+            .and(path("/zones"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "errors": [],
+                "result": [{ "id": zone_id, "name": "example.com" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(format!("/zones/{}/dns_records", zone_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": false,
+                "errors": [{ "code": 9000, "message": "some other error" }],
+                "result": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let provider =
+            CloudflareProvider::new_test("token", mock_server.uri(), Duration::from_secs(30))
+                .unwrap();
+
+        let err = provider
+            .create_txt_record("example.com", "_acme-challenge", "value")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, DnsProviderError::RecordCreation { .. }));
+    }
 }

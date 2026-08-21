@@ -32,9 +32,15 @@ listeners {
                     api-timeout-secs 30
 
                     propagation {
+                        // Delay before first TXT lookup — gives the authoritative
+                        // NS a window to converge (Cloudflare needs ~1-2s;
+                        // 20-30s is recommended for apex+wildcard).
                         initial-delay-secs 20
                         check-interval-secs 10
                         timeout-secs 300
+                        // Public resolvers to bypass Docker's 127.0.0.11
+                        // NXDOMAIN negative caching. Omit to auto-fallback
+                        // to 1.1.1.1/8.8.8.8/9.9.9.9.
                         nameservers "1.1.1.1" "8.8.8.8"
                     }
                 }

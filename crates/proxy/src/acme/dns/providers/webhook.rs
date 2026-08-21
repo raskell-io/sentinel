@@ -150,6 +150,36 @@ impl DnsProvider for WebhookProvider {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            // Treat duplicate as idempotent: many webhook backends return
+            // 409/422 for an identical TXT (same name+value). Like
+            // acme.sh and lego, reuse the existing record instead of
+            // failing the whole ACME flow. The list endpoint below is
+            // best-effort — the webhook contract only guarantees
+            // POST /records, DELETE /records/{id} and
+            // GET /domains/{domain}/supported. GET /records is a
+            // conventional extension and may be absent.
+            let is_duplicate = matches!(status.as_u16(), 409 | 422)
+                || body.to_lowercase().contains("already exists")
+                || body.to_lowercase().contains("duplicate");
+            if is_duplicate {
+                tracing::warn!(
+                    domain = %domain,
+                    record_name = %record_name,
+                    status = %status,
+                    "Webhook reports duplicate TXT, attempting to reuse"
+                );
+                if let Some(id) = self
+                    .find_existing_record_id(domain, record_name, record_value)
+                    .await?
+                {
+                    tracing::info!(
+                        domain = %domain,
+                        record_id = %id,
+                        "Reusing existing webhook TXT record"
+                    );
+                    return Ok(id);
+                }
+            }
             return Err(DnsProviderError::RecordCreation {
                 record_name: record_name.to_string(),
                 message: format!("Webhook returned HTTP {} - {}", status, body),
@@ -262,6 +292,77 @@ struct CreateRecordResponse {
 #[derive(Debug, Deserialize)]
 struct DomainSupportResponse {
     supported: bool,
+}
+
+impl WebhookProvider {
+    async fn find_existing_record_id(
+        &self,
+        domain: &str,
+        record_name: &str,
+        expected_value: &str,
+    ) -> DnsResult<Option<String>> {
+        // Best-effort: GET /records is not part of the documented
+        // webhook contract; it is tried as a conventional extension.
+        let builder = self
+            .client
+            .get(format!("{}/records", self.base_url))
+            .query(&[
+                ("domain", domain),
+                ("name", record_name),
+                ("type", "TXT"),
+                ("content", expected_value),
+            ]);
+        let resp = self
+            .add_auth(builder)
+            .send()
+            .await
+            .map_err(|e| DnsProviderError::ApiRequest(format!("Webhook list failed: {}", e)))?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let body = resp.text().await.unwrap_or_default();
+        if let Ok(list) = serde_json::from_str::<WebhookListResponse>(&body) {
+            for r in list.records {
+                if r.content.as_deref() == Some(expected_value)
+                    || r.value.as_deref() == Some(expected_value)
+                {
+                    return Ok(Some(r.id));
+                }
+                if r.content.is_none() && r.value.is_none() {
+                    return Ok(Some(r.id));
+                }
+            }
+        }
+        if let Ok(list) = serde_json::from_str::<WebhookResultListResponse>(&body) {
+            for r in list.result.unwrap_or_default() {
+                if r.content.as_deref() == Some(expected_value)
+                    || r.value.as_deref() == Some(expected_value)
+                {
+                    return Ok(Some(r.id));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookListResponse {
+    records: Vec<WebhookRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookResultListResponse {
+    result: Option<Vec<WebhookRecord>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookRecord {
+    id: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
 }
 
 #[cfg(test)]
