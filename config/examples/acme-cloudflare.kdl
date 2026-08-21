@@ -38,9 +38,10 @@ listeners {
                         initial-delay-secs 20
                         check-interval-secs 10
                         timeout-secs 300
-                        // Public resolvers to bypass Docker's 127.0.0.11
-                        // NXDOMAIN negative caching. Omit to auto-fallback
-                        // to 1.1.1.1/8.8.8.8/9.9.9.9.
+                        // Public resolvers bypass hickory 0.26's zero-NS
+                        // default (which fails with "no connections
+                        // available" and is swallowed as not-propagated).
+                        // Omit to auto-fallback to 8.8.8.8/1.1.1.1/9.9.9.9.
                         nameservers "1.1.1.1" "8.8.8.8"
                     }
                 }

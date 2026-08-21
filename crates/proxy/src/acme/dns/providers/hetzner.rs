@@ -26,6 +26,7 @@ const HETZNER_API_BASE: &str = "https://dns.hetzner.com/api/v1";
 pub struct HetznerProvider {
     client: Client,
     token: String,
+    base_url: String,
     /// Cache of domain -> zone_id mappings
     zone_cache: Arc<RwLock<HashMap<String, String>>>,
 }
@@ -45,8 +46,17 @@ impl HetznerProvider {
         Ok(Self {
             client,
             token: token.to_string(),
+            base_url: HETZNER_API_BASE.to_string(),
             zone_cache: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    /// Create a new Hetzner DNS provider with a custom base URL (for testing)
+    #[doc(hidden)]
+    pub fn new_test(token: &str, base_url: String, timeout: Duration) -> DnsResult<Self> {
+        let mut provider = Self::new(token, timeout)?;
+        provider.base_url = base_url;
+        Ok(provider)
     }
 
     /// Get the zone ID for a domain
@@ -82,7 +92,7 @@ impl HetznerProvider {
     async fn list_zones(&self) -> DnsResult<Vec<Zone>> {
         let response = self
             .client
-            .get(format!("{}/zones", HETZNER_API_BASE))
+            .get(format!("{}/zones", self.base_url))
             .header("Auth-API-Token", &self.token)
             .send()
             .await
@@ -152,7 +162,7 @@ impl HetznerProvider {
     async fn get_zone_name(&self, zone_id: &str) -> DnsResult<String> {
         let response = self
             .client
-            .get(format!("{}/zones/{}", HETZNER_API_BASE, zone_id))
+            .get(format!("{}/zones/{}", self.base_url, zone_id))
             .header("Auth-API-Token", &self.token)
             .send()
             .await
@@ -211,7 +221,7 @@ impl DnsProvider for HetznerProvider {
 
         let response = self
             .client
-            .post(format!("{}/records", HETZNER_API_BASE))
+            .post(format!("{}/records", self.base_url))
             .header("Auth-API-Token", &self.token)
             .json(&request)
             .send()
@@ -278,7 +288,7 @@ impl DnsProvider for HetznerProvider {
 
         let response = self
             .client
-            .delete(format!("{}/records/{}", HETZNER_API_BASE, record_id))
+            .delete(format!("{}/records/{}", self.base_url, record_id))
             .header("Auth-API-Token", &self.token)
             .send()
             .await
@@ -329,7 +339,7 @@ impl HetznerProvider {
         // client-side. Pagination not needed for ACME (few TXT).
         let resp = self
             .client
-            .get(format!("{}/records", HETZNER_API_BASE))
+            .get(format!("{}/records", self.base_url))
             .header("Auth-API-Token", &self.token)
             .query(&[("zone_id", zone_id)])
             .send()

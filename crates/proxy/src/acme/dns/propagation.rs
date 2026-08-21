@@ -211,19 +211,14 @@ impl PropagationChecker {
         }
     }
 
-    /// Verify a record exists immediately (no waiting)
-    ///
-    /// Useful for testing or verifying cleanup.
     /// Get the configuration
     pub fn config(&self) -> &PropagationConfig {
         &self.config
     }
-}
 
-/// Verify a record exists immediately (no waiting)
-///
-/// Useful for testing or verifying cleanup.
-impl PropagationChecker {
+    /// Verify a record exists immediately (no waiting)
+    ///
+    /// Useful for testing or verifying cleanup.
     pub async fn verify_record_exists(
         &self,
         domain: &str,

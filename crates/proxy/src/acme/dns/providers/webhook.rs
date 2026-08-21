@@ -150,17 +150,12 @@ impl DnsProvider for WebhookProvider {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            // Treat duplicate as idempotent: many webhook backends return
-            // 409/422 for an identical TXT (same name+value). Like
-            // acme.sh and lego, reuse the existing record instead of
-            // failing the whole ACME flow. The list endpoint below is
-            // best-effort — the webhook contract only guarantees
-            // POST /records, DELETE /records/{id} and
-            // GET /domains/{domain}/supported. GET /records is a
-            // conventional extension and may be absent.
+            // Treat duplicate as idempotent: reuse the existing record
+            // instead of failing. Mirrors Hetzner logic: require both
+            // 409/422 AND "already exists" to avoid treating generic
+            // 422 validation errors as duplicates.
             let is_duplicate = matches!(status.as_u16(), 409 | 422)
-                || body.to_lowercase().contains("already exists")
-                || body.to_lowercase().contains("duplicate");
+                && body.to_lowercase().contains("already exists");
             if is_duplicate {
                 tracing::warn!(
                     domain = %domain,
@@ -326,9 +321,6 @@ impl WebhookProvider {
                 if r.content.as_deref() == Some(expected_value)
                     || r.value.as_deref() == Some(expected_value)
                 {
-                    return Ok(Some(r.id));
-                }
-                if r.content.is_none() && r.value.is_none() {
                     return Ok(Some(r.id));
                 }
             }

@@ -290,9 +290,6 @@ impl CloudflareProvider {
             if r.content.as_deref() == Some(expected_content) {
                 return Ok(Some(r.id));
             }
-            if r.content.is_none() {
-                return Ok(Some(r.id));
-            }
         }
         Ok(None)
     }
@@ -330,9 +327,11 @@ struct CreateRecordRequest {
 struct Record {
     id: String,
     #[serde(default)]
+    #[allow(dead_code)]
     name: Option<String>,
     #[serde(default)]
     content: Option<String>,
     #[serde(default, rename = "type")]
+    #[allow(dead_code)]
     type_name: Option<String>,
 }

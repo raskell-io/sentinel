@@ -450,13 +450,14 @@ async fn initialize_acme(
                     .collect();
                 if nameservers.is_empty() {
                     // Fall back to the same public resolvers that
-                    // PropagationConfig::default() uses. This avoids
-                    // ResolverConfig::default() which reads
-                    // /etc/resolv.conf (e.g. Docker 127.0.0.11) and
-                    // hits NXDOMAIN negative caching. Explicitly
-                    // logged to satisfy "No implicit behavior".
+                    // PropagationConfig::default() uses. hickory 0.26's
+                    // ResolverConfig::default() yields zero nameservers
+                    // (not resolv.conf / 127.0.0.11); lookups then fail
+                    // with "no connections available", which check_record
+                    // swallows as not-propagated. Explicitly logged to
+                    // satisfy "No implicit behavior".
                     tracing::info!(
-                        "propagation nameservers not configured, falling back to public resolvers 1.1.1.1, 8.8.8.8, 9.9.9.9"
+                        "propagation nameservers not configured, falling back to public resolvers 8.8.8.8, 1.1.1.1, 9.9.9.9"
                     );
                     nameservers =
                         zentinel_proxy::acme::dns::PropagationConfig::default().nameservers;
