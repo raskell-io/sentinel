@@ -11,7 +11,7 @@ use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use tokio::time::Instant;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::provider::{challenge_record_fqdn, DnsProviderError};
 
@@ -108,9 +108,12 @@ impl PropagationChecker {
         let start = Instant::now();
         let deadline = start + self.config.timeout;
 
-        debug!(
+        info!(
             record = %record_name,
             timeout_secs = self.config.timeout.as_secs(),
+            initial_delay_secs = self.config.initial_delay.as_secs(),
+            check_interval_secs = self.config.check_interval.as_secs(),
+            nameservers = ?self.config.nameservers,
             "Waiting for DNS propagation"
         );
 
@@ -121,7 +124,7 @@ impl PropagationChecker {
             match self.check_record(&record_name, expected_value).await {
                 Ok(true) => {
                     let elapsed = start.elapsed();
-                    debug!(
+                    info!(
                         record = %record_name,
                         elapsed_secs = elapsed.as_secs(),
                         "DNS propagation confirmed"
@@ -129,7 +132,7 @@ impl PropagationChecker {
                     return Ok(());
                 }
                 Ok(false) => {
-                    trace!(record = %record_name, "Record not yet propagated");
+                    debug!(record = %record_name, "Record not yet propagated, retrying");
                 }
                 Err(e) => {
                     warn!(record = %record_name, error = %e, "DNS lookup error");
@@ -204,6 +207,16 @@ impl PropagationChecker {
     /// Verify a record exists immediately (no waiting)
     ///
     /// Useful for testing or verifying cleanup.
+    /// Get the configuration
+    pub fn config(&self) -> &PropagationConfig {
+        &self.config
+    }
+}
+
+/// Verify a record exists immediately (no waiting)
+///
+/// Useful for testing or verifying cleanup.
+impl PropagationChecker {
     pub async fn verify_record_exists(
         &self,
         domain: &str,
@@ -211,11 +224,6 @@ impl PropagationChecker {
     ) -> Result<bool, DnsProviderError> {
         let record_name = challenge_record_fqdn(domain);
         self.check_record(&record_name, expected_value).await
-    }
-
-    /// Get the configuration
-    pub fn config(&self) -> &PropagationConfig {
-        &self.config
     }
 }
 
