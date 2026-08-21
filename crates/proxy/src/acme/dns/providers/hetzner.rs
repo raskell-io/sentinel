@@ -415,12 +415,7 @@ mod tests {
 
     #[test]
     fn test_record_name_for_zone() {
-        let provider = HetznerProvider {
-            client: Client::new(),
-            token: "test".to_string(),
-            base_url: HETZNER_API_BASE.to_string(),
-            zone_cache: Arc::new(RwLock::new(HashMap::new())),
-        };
+        let provider = HetznerProvider::new("test", Duration::from_secs(30)).unwrap();
 
         // Direct zone
         assert_eq!(
