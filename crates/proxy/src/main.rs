@@ -426,11 +426,11 @@ async fn initialize_acme(
         // Create storage
         let storage = Arc::new(CertificateStorage::new(&acme_config.storage)?);
 
-        // Create client and initialize account
+        // Create client and renewal scheduler first so that even if
+        // init_account transiently fails, the pushed scheduler already
+        // carries the DNS manager and the background RenewalScheduler can
+        // retry with full context.
         let acme_client = Arc::new(AcmeClient::new(acme_config.clone(), Arc::clone(&storage)));
-        acme_client.init_account().await?;
-
-        // Create renewal scheduler
         let mut scheduler = RenewalScheduler::new(
             Arc::clone(&acme_client),
             Arc::clone(&challenge_manager),
@@ -468,58 +468,85 @@ async fn initialize_acme(
             }
         }
 
+        // Initialize ACME account. init_account already retries transient
+        // Connect/TLS EOF with exponential backoff. If it still fails,
+        // keep the proxy ready and let the background RenewalScheduler
+        // retry — matching lego/certbot/caddy. Only non-retryable
+        // errors (auth/rate-limit) abort startup visibly. The pushed
+        // scheduler already carries the DNS manager.
+        if let Err(e) = acme_client.init_account().await {
+            use zentinel_proxy::acme::is_retryable_acme_error;
+            if is_retryable_acme_error(&e) {
+                tracing::warn!(
+                    source = %description,
+                    error = %e,
+                    "ACME account init transient failure, proxy will stay ready and retry in background"
+                );
+                schedulers.push(scheduler);
+                continue;
+            } else {
+                return Err(e);
+            }
+        }
+
         // Check if initial certificate issuance is needed
         let primary_domain = acme_config.domains.first().ok_or_else(|| {
             AcmeError::OrderCreation(format!("No domains configured for ACME in {}", description))
         })?;
 
         if acme_client.needs_renewal(primary_domain)? {
-            info!(
-                source = %description,
-                domain = %primary_domain,
-                "Initial certificate issuance required"
-            );
-
-            match acme_config.challenge_type {
-                AcmeChallengeType::Http01 => {
-                    // Find an HTTP listener address for the temporary challenge server
-                    let http_addr = config
-                        .listeners
-                        .iter()
-                        .find(|l| l.protocol == zentinel_config::ListenerProtocol::Http)
-                        .map(|l| l.address.clone())
-                        .unwrap_or_else(|| "0.0.0.0:80".to_string());
-
-                    info!(
-                        address = %http_addr,
-                        "Starting temporary HTTP challenge server for initial certificate acquisition"
-                    );
-
-                    // Start temporary challenge server
-                    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-                    let cm_clone = Arc::clone(&challenge_manager);
-                    let _server_handle = tokio::spawn(async move {
-                        zentinel_proxy::acme::challenge_server::run_challenge_server(
-                            &http_addr,
-                            cm_clone,
-                            shutdown_rx,
-                        )
-                        .await
-                    });
-
-                    // Give the server a moment to bind
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                    // Obtain certificates
-                    let result = scheduler.ensure_certificates().await;
-
-                    // Shut down temporary server
-                    let _ = shutdown_tx.send(true);
-                    result?;
+            // Initial issuance is best-effort at startup. If the
+            // network is flaky (proxy cold-start), log and defer to
+            // the background scheduler instead of crashing the whole
+            // proxy — matching Caddy/certmagic's async renewal.
+            let issuance_result: Result<(), AcmeError> = async {
+                info!(
+                    source = %description,
+                    domain = %primary_domain,
+                    "Initial certificate issuance required"
+                );
+                match acme_config.challenge_type {
+                    AcmeChallengeType::Http01 => {
+                        let http_addr = config
+                            .listeners
+                            .iter()
+                            .find(|l| l.protocol == zentinel_config::ListenerProtocol::Http)
+                            .map(|l| l.address.clone())
+                            .unwrap_or_else(|| "0.0.0.0:80".to_string());
+                        info!(
+                            address = %http_addr,
+                            "Starting temporary HTTP challenge server for initial certificate acquisition"
+                        );
+                        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+                        let cm_clone = Arc::clone(&challenge_manager);
+                        let _server_handle = tokio::spawn(async move {
+                            zentinel_proxy::acme::challenge_server::run_challenge_server(
+                                &http_addr,
+                                cm_clone,
+                                shutdown_rx,
+                            )
+                            .await
+                        });
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        let result = scheduler.ensure_certificates().await;
+                        let _ = shutdown_tx.send(true);
+                        result
+                    }
+                    AcmeChallengeType::Dns01 => scheduler.ensure_certificates().await,
                 }
-                AcmeChallengeType::Dns01 => {
-                    // DNS-01 doesn't need a temporary server
-                    scheduler.ensure_certificates().await?;
+            }
+            .await;
+            if let Err(e) = issuance_result {
+                use zentinel_proxy::acme::is_retryable_acme_error;
+                if is_retryable_acme_error(&e) {
+                    tracing::warn!(
+                        source = %description,
+                        domain = %primary_domain,
+                        error = %e,
+                        "Initial ACME issuance transient failure, deferring to background renewal"
+                    );
+                } else {
+                    return Err(e);
                 }
             }
         }
