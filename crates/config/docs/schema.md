@@ -165,6 +165,19 @@ Request routing configuration.
 | `shadow` | `ShadowConfig` | - | Traffic mirroring config |
 | `fallback` | `FallbackConfig` | - | Fallback routing config |
 
+### RetryPolicy
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `max-attempts` | `u32` | `1` | Upstream peer selection attempts (initial attempt + retries) |
+
+> **Only `max-attempts` is implemented.** It bounds how many times the proxy
+> will pick a peer from the upstream pool when selection fails; it does not
+> re-send a request that reached an upstream. `timeout-ms`, `backoff-base-ms`,
+> `backoff-max-ms` and `retryable-status-codes` appeared in older examples but
+> were never implemented, and are now rejected at parse time rather than
+> silently ignored. Tracked in issue #279.
+
 ### MatchCondition
 
 | Type | Example | Description |

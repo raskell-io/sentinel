@@ -1,0 +1,14 @@
+// Catch-all for everything that is not the API.
+//
+// Catch-all routes need priority "low" so they are matched after more
+// specific routes.
+
+routes {
+    route "static" {
+        priority "low"
+        matches {
+            path-prefix "/"
+        }
+        upstream "static"
+    }
+}
