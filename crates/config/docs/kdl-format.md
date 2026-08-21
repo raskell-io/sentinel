@@ -180,12 +180,13 @@ listeners {
             client-auth false
             ocsp-stapling true
 
-            // SNI support for multiple domains
-            additional-certs {
-                cert hostnames=["api.example.com"] {
-                    cert-file "/etc/ssl/certs/api.crt"
-                    key-file "/etc/ssl/private/api.key"
-                }
+            // SNI certificate for an additional domain.
+            // NOTE: parsed and used for ACME issuance, but per-SNI
+            // certificate *serving* is not wired in yet (issue #303).
+            sni {
+                hostnames "api.example.com"
+                cert-file "/etc/ssl/certs/api.crt"
+                key-file "/etc/ssl/private/api.key"
             }
         }
     }

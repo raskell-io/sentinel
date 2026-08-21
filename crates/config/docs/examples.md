@@ -263,25 +263,29 @@ listeners {
             cert-file "/etc/ssl/certs/default.crt"
             key-file "/etc/ssl/private/default.key"
 
-            // Additional certificates for SNI
-            additional-certs {
-                // Explicit hostnames: only these are registered, SAN is ignored
-                cert hostnames=["api.example.com" "*.api.example.com"] {
-                    cert-file "/etc/ssl/certs/api.crt"
-                    key-file "/etc/ssl/private/api.key"
-                }
-                cert hostnames=["admin.example.com"] {
-                    cert-file "/etc/ssl/certs/admin.crt"
-                    key-file "/etc/ssl/private/admin.key"
-                }
+            // Additional certificates for SNI, one `sni` block per certificate.
+            // NOTE: `sni` blocks are parsed and used for ACME issuance, but
+            // per-SNI certificate *serving* is not wired in yet (issue #303);
+            // clients currently receive the default certificate.
 
-                // Priority hostnames: auto-extract all SANs, but this cert
-                // wins for "shared.example.com" if another cert also claims it
-                cert {
-                    priority-hostnames "shared.example.com"
-                    cert-file "/etc/ssl/certs/shared.crt"
-                    key-file "/etc/ssl/private/shared.key"
-                }
+            // Explicit hostnames: only these are registered, SAN is ignored
+            sni {
+                hostnames "api.example.com" "*.api.example.com"
+                cert-file "/etc/ssl/certs/api.crt"
+                key-file "/etc/ssl/private/api.key"
+            }
+            sni {
+                hostnames "admin.example.com"
+                cert-file "/etc/ssl/certs/admin.crt"
+                key-file "/etc/ssl/private/admin.key"
+            }
+
+            // Priority hostnames: auto-extract all SANs, but this cert
+            // wins for "shared.example.com" if another cert also claims it
+            sni {
+                priority-hostnames "shared.example.com"
+                cert-file "/etc/ssl/certs/shared.crt"
+                key-file "/etc/ssl/private/shared.key"
             }
         }
     }

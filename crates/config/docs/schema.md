@@ -70,12 +70,18 @@ Port binding configuration.
 | `ca-file` | `string` | - | CA certificate for client verification |
 | `min-version` | `string` | `"tls1.2"` | Minimum TLS version |
 | `max-version` | `string` | - | Maximum TLS version |
-| `cipher-suites` | `[string]` | `[]` | Cipher suites (empty = defaults) |
+| `cipher-suite` | `string` (repeatable) | `[]` | Cipher suite, one node per suite (empty = defaults) |
 | `client-auth` | `bool` | `false` | Require client certificates (mTLS) |
 | `ocsp-stapling` | `bool` | `true` | Enable OCSP stapling |
 | `session-resumption` | `bool` | `true` | Enable session resumption |
-| `additional-certs` | `[SniCertificate]` | `[]` | Additional certs for SNI |
+| `sni` | `SniCertificate` (repeatable) | `[]` | Additional certs for SNI, one block per cert |
 | `acme` | `AcmeConfig` | - | ACME automatic certificate management |
+
+> **Note:** `min-version`, `max-version`, `cipher-suite`, `client-auth`, and
+> per-SNI certificate serving are parsed but not yet applied to the listener
+> (issue #303); the listener currently uses the built-in intermediate TLS
+> profile and serves the primary certificate to all clients. Unknown nodes
+> inside `tls` and `sni` blocks are rejected at parse time.
 
 ### AcmeConfig
 
