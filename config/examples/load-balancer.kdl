@@ -42,11 +42,10 @@ routes {
             half-open-max-requests 3
         }
 
+        // retry-policy currently implements max-attempts only; per-attempt
+        // timeouts, backoff tuning and status-code retries are tracked in #279.
         retry-policy {
             max-attempts 3
-            timeout-ms 10000
-            backoff-base-ms 100
-            retryable-status-codes 502 503 504
         }
 
         policies {

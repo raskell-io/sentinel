@@ -3,8 +3,15 @@
 // This example demonstrates how to configure automatic TLS certificates
 // using Cloudflare DNS-01 challenges, which supports wildcard certificates.
 
+system {
+    worker-threads 0
+    max-connections 10000
+    graceful-shutdown-timeout-secs 30
+}
+
 listeners {
-    listener "https" address="0.0.0.0:443" {
+    listener "https" {
+        address "0.0.0.0:443"
         tls {
             acme {
                 email "admin@example.com"
@@ -41,13 +48,16 @@ listeners {
 
 upstreams {
     upstream "backend" {
-        server address="127.0.0.1:8080"
+        target "127.0.0.1:8080"
     }
 }
 
 routes {
     route "default" {
-        match path="/"
-        back-to upstream="backend"
+        priority "low"
+        matches {
+            path-prefix "/"
+        }
+        upstream "backend"
     }
 }
