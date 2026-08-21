@@ -33,11 +33,11 @@ listeners {
             min-version "TLS1.2"
             ocsp-stapling #true
             session-resumption #true
-            cipher-suites {
-                - "TLS_AES_128_GCM_SHA256"
-                - "TLS_AES_256_GCM_SHA384"
-                - "TLS_CHACHA20_POLY1305_SHA256"
-            }
+            // Custom cipher suites are configured as repeated nodes, e.g.:
+            //   cipher-suite "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+            // NOTE: cipher-suite, min-version, max-version and client-auth are
+            // parsed but not yet applied to the listener (issue #303); the
+            // listener currently uses the built-in intermediate TLS profile.
         }
     }
 }
@@ -138,12 +138,10 @@ routes {
             half-open-max-requests 3
         }
 
+        // retry-policy currently supports max-attempts only; per-attempt
+        // timeouts and backoff tuning are not yet implemented.
         retry-policy {
             max-attempts 3
-            timeout-ms 5000
-            backoff-base-ms 100
-            backoff-max-ms 2000
-            retryable-status-codes 502 503 504
         }
     }
 
@@ -361,7 +359,10 @@ waf {
         }
     }
 
-    mode "prevention"  // "detection" or "prevention"
+    // "off" until the WAF engine is wired into the proxy runtime; validation
+    // rejects "detection"/"prevention" so a config cannot imply inspection
+    // that is not happening.
+    mode "off"
     audit-log #true
 
     body-inspection {

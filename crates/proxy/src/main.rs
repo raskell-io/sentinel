@@ -829,13 +829,60 @@ fn run_server(
                                 }
                             };
                         tls_settings.enable_h2();
+
+                        // Until the Pingora fork accepts a pre-built rustls
+                        // ServerConfig (see TODO above and issue #303), settings
+                        // beyond the primary certificate are parsed but never
+                        // reach the listener. Say so loudly instead of letting
+                        // the config imply protections that are not active.
+                        if !tls_config.additional_certs.is_empty() {
+                            warn!(
+                                listener_id = %listener.id,
+                                sni_cert_count = tls_config.additional_certs.len(),
+                                "SNI certificates are configured but NOT served: \
+                                 per-SNI certificate selection is not wired into \
+                                 the TLS listener yet (issue #303). All clients \
+                                 receive the primary certificate."
+                            );
+                        }
+                        if tls_config.client_auth {
+                            warn!(
+                                listener_id = %listener.id,
+                                "SECURITY: client-auth (mTLS) is configured but \
+                                 NOT enforced: the listener does not request or \
+                                 verify client certificates (issue #303). Do not \
+                                 rely on mTLS for this listener."
+                            );
+                        }
+                        let mut unapplied: Vec<&str> = Vec::new();
+                        if tls_config.min_version != zentinel_common::types::TlsVersion::Tls12 {
+                            unapplied.push("min-version");
+                        }
+                        if tls_config.max_version.is_some() {
+                            unapplied.push("max-version");
+                        }
+                        if !tls_config.cipher_suites.is_empty() {
+                            unapplied.push("cipher-suite");
+                        }
+                        if !tls_config.session_resumption {
+                            unapplied.push("session-resumption");
+                        }
+                        if !unapplied.is_empty() {
+                            warn!(
+                                listener_id = %listener.id,
+                                settings = ?unapplied,
+                                "TLS hardening settings are configured but NOT \
+                                 applied: the listener uses Pingora's built-in \
+                                 intermediate profile (TLS 1.2+, default cipher \
+                                 suites) until issue #303 is resolved."
+                            );
+                        }
+
                         proxy_service.add_tls_with_settings(&listener.address, None, tls_settings);
                         info!(
                             listener_id = %listener.id,
                             address = %listener.address,
                             cert_file = %cert_path_str,
-                            min_tls_version = ?tls_config.min_version,
-                            client_auth = tls_config.client_auth,
                             acme_enabled = tls_config.acme.is_some(),
                             "HTTPS (h2+http/1.1) listening on: {}", listener.address
                         );

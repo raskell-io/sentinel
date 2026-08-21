@@ -253,15 +253,18 @@ listeners {
             cert-file "/etc/ssl/certs/default.crt"
             key-file "/etc/ssl/private/default.key"
 
-            additional-certs {
-                cert hostnames=["api.example.com", "*.api.example.com"] {
-                    cert-file "/etc/ssl/certs/api.crt"
-                    key-file "/etc/ssl/private/api.key"
-                }
-                cert hostnames=["admin.example.com"] {
-                    cert-file "/etc/ssl/certs/admin.crt"
-                    key-file "/etc/ssl/private/admin.key"
-                }
+            // One `sni` block per additional certificate.
+            // NOTE: parsed and used for ACME issuance, but per-SNI
+            // certificate *serving* is not wired in yet (issue #303).
+            sni {
+                hostnames "api.example.com" "*.api.example.com"
+                cert-file "/etc/ssl/certs/api.crt"
+                key-file "/etc/ssl/private/api.key"
+            }
+            sni {
+                hostnames "admin.example.com"
+                cert-file "/etc/ssl/certs/admin.crt"
+                key-file "/etc/ssl/private/admin.key"
             }
         }
     }
