@@ -205,11 +205,31 @@ pub fn parse_kdl_document(doc: kdl::KdlDocument) -> Result<Config> {
                 ));
             }
             other => {
+                const VALID_BLOCKS: &[&str] = &[
+                    "schema-version",
+                    "system",
+                    "listeners",
+                    "routes",
+                    "upstreams",
+                    "filters",
+                    "agents",
+                    "waf",
+                    "namespace",
+                    "limits",
+                    "observability",
+                    "rate-limits",
+                    "cache",
+                    "include",
+                ];
+                let suggestion = helpers::did_you_mean(other, VALID_BLOCKS)
+                    .map(|s| format!(" Did you mean '{}'?", s))
+                    .unwrap_or_default();
                 return Err(anyhow::anyhow!(
-                    "Unknown top-level configuration block: '{}'\n\
-                     Valid blocks are: schema-version, system, listeners, routes, upstreams, \
-                     filters, agents, waf, namespace, limits, observability, rate-limits, cache",
-                    other
+                    "Unknown top-level configuration block: '{}'.{}\n\
+                     Valid blocks are: {}",
+                    other,
+                    suggestion,
+                    VALID_BLOCKS.join(", ")
                 ));
             }
         }

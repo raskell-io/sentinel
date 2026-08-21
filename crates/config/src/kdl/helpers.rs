@@ -238,3 +238,85 @@ pub fn extract_u64_with_limits(node: &kdl::KdlNode) -> Result<u64> {
 
     Ok(u64_val)
 }
+
+/// Suggest the closest candidate for a (probably misspelled) input.
+///
+/// Returns `Some(candidate)` when a candidate is within a small edit distance
+/// of the input (scaled with input length), so error messages can offer a
+/// "did you mean" hint. Returns `None` when nothing is plausibly close.
+pub fn did_you_mean<'a>(input: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    // Allow more typo distance for longer inputs; at least 1, at most 3.
+    let max_distance = (input.len() / 4).clamp(1, 3);
+
+    candidates
+        .iter()
+        .map(|c| (edit_distance(input, c), *c))
+        .filter(|(d, _)| *d <= max_distance)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c)
+}
+
+/// Edit distance between two strings (over `char`s).
+///
+/// Optimal-string-alignment variant of Levenshtein: insertions, deletions,
+/// and substitutions cost 1, and an adjacent transposition ("hots" → "host")
+/// also costs 1, which matches how config keys are typically mistyped.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+
+    // rows[i][j] = distance between a[..i] and b[..j]
+    let mut rows: Vec<Vec<usize>> = vec![(0..=b.len()).collect()];
+
+    for (i, ca) in a.iter().enumerate() {
+        let mut row = vec![0usize; b.len() + 1];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let substitution_cost = if ca == cb { 0 } else { 1 };
+            let mut d = (rows[i][j] + substitution_cost) // substitute
+                .min(rows[i][j + 1] + 1) // delete
+                .min(row[j] + 1); // insert
+            if i > 0 && j > 0 && *ca == b[j - 1] && a[i - 1] == *cb {
+                d = d.min(rows[i - 1][j - 1] + 1); // transpose
+            }
+            row[j + 1] = d;
+        }
+        rows.push(row);
+    }
+
+    rows[a.len()][b.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edit_distance_basics() {
+        assert_eq!(edit_distance("", ""), 0);
+        assert_eq!(edit_distance("abc", "abc"), 0);
+        assert_eq!(edit_distance("abc", "abd"), 1);
+        assert_eq!(edit_distance("abc", ""), 3);
+        assert_eq!(edit_distance("path_prefix", "path-prefix"), 1);
+        // Adjacent transposition costs 1 (OSA variant)
+        assert_eq!(edit_distance("hots", "host"), 1);
+    }
+
+    #[test]
+    fn did_you_mean_suggests_close_candidates() {
+        let candidates = ["path", "path-prefix", "path-regex", "host", "method"];
+        assert_eq!(
+            did_you_mean("path_prefix", &candidates),
+            Some("path-prefix")
+        );
+        assert_eq!(did_you_mean("hots", &candidates), Some("host"));
+        assert_eq!(did_you_mean("pth", &candidates), Some("path"));
+    }
+
+    #[test]
+    fn did_you_mean_rejects_distant_candidates() {
+        let candidates = ["path", "host", "method"];
+        assert_eq!(did_you_mean("upstream", &candidates), None);
+        assert_eq!(did_you_mean("zzzzzz", &candidates), None);
+    }
+}
