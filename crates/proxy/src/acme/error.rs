@@ -6,6 +6,14 @@ use thiserror::Error;
 
 use super::dns::DnsProviderError;
 
+/// Maximum retries for transient ACME transport failures.
+///
+/// Shared by `AcmeClient::retry_acme` to avoid drift between
+/// `error` and `client` modules.
+pub const ACME_RETRY_MAX: usize = 3;
+/// Base backoff for the first transient retry (doubles each attempt).
+pub const ACME_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+
 /// Errors that can occur during ACME operations
 #[derive(Debug, Error)]
 pub enum AcmeError {
@@ -103,5 +111,86 @@ impl From<serde_json::Error> for StorageError {
 impl From<instant_acme::Error> for AcmeError {
     fn from(e: instant_acme::Error) -> Self {
         AcmeError::Protocol(e.to_string())
+    }
+}
+
+/// Whether an ACME error is transient and worth retrying.
+///
+/// Covers the field-observed proxy cold-start pattern
+/// (`curl` first `35 unexpected eof` then `301`, ACME
+/// `client error (Connect)` / `TLS connect error`) and generic
+/// `hyper`/`transport`/`timeout` failures. Non-transient errors
+/// like auth/rate-limit must fail fast.
+pub fn is_retryable_acme_error(e: &AcmeError) -> bool {
+    // Never retry deterministic errors: storage/config, missing
+    // challenges, or polling timeouts (the latter is application-level
+    // "wait too long", not a transient transport failure).
+    if matches!(
+        e,
+        AcmeError::Storage(_)
+            | AcmeError::NoAccount
+            | AcmeError::NoHttp01Challenge(_)
+            | AcmeError::NoDns01Challenge(_)
+            | AcmeError::NoDnsProvider
+            | AcmeError::WildcardRequiresDns01 { .. }
+            | AcmeError::CertificateParse(_)
+            | AcmeError::Timeout(_)
+            | AcmeError::PropagationTimeout { .. }
+    ) {
+        return false;
+    }
+    let msg = e.to_string().to_lowercase();
+    // Narrow allowlist: only transport-layer transient failures.
+    // Avoid bare "hyper"/"transport"/"timeout" which also match
+    // application-level timeouts or incidental substrings.
+    msg.contains("client error (connect)")
+        || msg.contains("unexpected eof")
+        || msg.contains("connection reset")
+        || msg.contains("connection closed")
+        || msg.contains("connection aborted")
+        || msg.contains("tls connect error")
+        || msg.contains("timed out")
+        || msg.contains("transport error")
+        || msg.contains("hyper::")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_retryable_connect_and_eof() {
+        let e = AcmeError::AccountCreation("client error (Connect)".to_string());
+        assert!(is_retryable_acme_error(&e));
+        let e = AcmeError::Protocol("unexpected eof while reading".to_string());
+        assert!(is_retryable_acme_error(&e));
+        let e = AcmeError::AccountCreation("TLS connect error".to_string());
+        assert!(is_retryable_acme_error(&e));
+    }
+
+    #[test]
+    fn test_retryable_transport_variants() {
+        let e = AcmeError::OrderCreation("connection reset by peer".to_string());
+        assert!(is_retryable_acme_error(&e));
+        let e = AcmeError::OrderCreation("transport error: closed".to_string());
+        assert!(is_retryable_acme_error(&e));
+        let e = AcmeError::Finalization("hyper::Error(ChannelClosed)".to_string());
+        assert!(is_retryable_acme_error(&e));
+    }
+
+    #[test]
+    fn test_non_retryable_timeouts_and_storage() {
+        let e = AcmeError::Timeout("timed out waiting for order".to_string());
+        assert!(!is_retryable_acme_error(&e));
+        let e = AcmeError::PropagationTimeout {
+            record: "_acme-challenge.example.com".to_string(),
+            elapsed: Duration::from_secs(120),
+        };
+        assert!(!is_retryable_acme_error(&e));
+        let e = AcmeError::Storage(StorageError::InvalidStructure("x".to_string()));
+        assert!(!is_retryable_acme_error(&e));
+        let e = AcmeError::AccountCreation("401 Unauthorized".to_string());
+        assert!(!is_retryable_acme_error(&e));
     }
 }

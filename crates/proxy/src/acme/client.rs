@@ -22,7 +22,7 @@ use tracing::{debug, error, info, trace, warn};
 use zentinel_config::server::AcmeConfig;
 
 use super::dns::challenge::{create_challenge_info, Dns01ChallengeInfo};
-use super::error::AcmeError;
+use super::error::{is_retryable_acme_error, AcmeError, ACME_RETRY_BACKOFF, ACME_RETRY_MAX};
 use super::storage::{CertificateStorage, StoredAccountCredentials};
 
 /// Let's Encrypt production directory URL
@@ -34,6 +34,38 @@ const LETSENCRYPT_STAGING: &str = "https://acme-staging-v02.api.letsencrypt.org/
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Timeout for challenge validation
 const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Retry transient ACME transport failures with exponential backoff.
+///
+/// Note on `create_order` retries: a retry creates a new ACME Order;
+/// the previous `pending` order is left to expire by the CA. This is
+/// harmless (CA auto-expires pending orders) and `429 rateLimited` is
+/// explicitly non-retryable, so quota is not burned.
+async fn retry_acme<F, Fut, T>(mut op: F) -> Result<T, AcmeError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, AcmeError>>,
+{
+    let mut backoff = ACME_RETRY_BACKOFF;
+    for attempt in 0..ACME_RETRY_MAX {
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_retryable_acme_error(&e) && attempt + 1 < ACME_RETRY_MAX => {
+                tracing::info!(
+                    attempt = attempt + 1,
+                    max_retries = ACME_RETRY_MAX,
+                    backoff_secs = backoff.as_secs(),
+                    error = %e,
+                    "ACME transient failure, retrying"
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = backoff.saturating_mul(2);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("retry loop always returns")
+}
 
 /// ACME client for automatic certificate management
 ///
@@ -93,6 +125,10 @@ impl AcmeClient {
     ///
     /// Returns an error if account creation or loading fails.
     pub async fn init_account(&self) -> Result<(), AcmeError> {
+        retry_acme(|| async { self.init_account_once().await }).await
+    }
+
+    async fn init_account_once(&self) -> Result<(), AcmeError> {
         // Check for existing account credentials (stored as JSON)
         if let Some(creds_json) = self.storage.load_credentials_json()? {
             info!("Loading existing ACME account from storage");
@@ -171,6 +207,10 @@ impl AcmeClient {
     /// A tuple of (Order, Vec<`ChallengeInfo`>) containing the order and
     /// HTTP-01 challenge information for each domain.
     pub async fn create_order(&self) -> Result<(Order, Vec<ChallengeInfo>), AcmeError> {
+        retry_acme(|| async { self.create_order_once().await }).await
+    }
+
+    async fn create_order_once(&self) -> Result<(Order, Vec<ChallengeInfo>), AcmeError> {
         let account_guard = self.account.read().await;
         let account = account_guard.as_ref().ok_or(AcmeError::NoAccount)?;
 
@@ -241,6 +281,10 @@ impl AcmeClient {
     /// A tuple of (Order, Vec<`Dns01ChallengeInfo`>) containing the order and
     /// DNS-01 challenge information for each domain.
     pub async fn create_order_dns01(&self) -> Result<(Order, Vec<Dns01ChallengeInfo>), AcmeError> {
+        retry_acme(|| async { self.create_order_dns01_once().await }).await
+    }
+
+    async fn create_order_dns01_once(&self) -> Result<(Order, Vec<Dns01ChallengeInfo>), AcmeError> {
         let account_guard = self.account.read().await;
         let account = account_guard.as_ref().ok_or(AcmeError::NoAccount)?;
 
@@ -401,6 +445,35 @@ impl AcmeClient {
         &self,
         order: &mut Order,
     ) -> Result<(String, String, DateTime<Utc>), AcmeError> {
+        // retry_acme cannot hold &mut Order across the FnMut boundary
+        // (E0658: async block escapes with borrowed &mut). Keep the
+        // retry loop inline for this &mut case — same policy as
+        // retry_acme (ACME_RETRY_MAX / BACKOFF + is_retryable).
+        let mut backoff = ACME_RETRY_BACKOFF;
+        for attempt in 0..ACME_RETRY_MAX {
+            match self.finalize_order_once(order).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_retryable_acme_error(&e) && attempt + 1 < ACME_RETRY_MAX => {
+                    tracing::info!(
+                        attempt = attempt + 1,
+                        max_retries = ACME_RETRY_MAX,
+                        backoff_secs = backoff.as_secs(),
+                        error = %e,
+                        "ACME transient failure, retrying"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff = backoff.saturating_mul(2);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!("retry loop always returns")
+    }
+
+    async fn finalize_order_once(
+        &self,
+        order: &mut Order,
+    ) -> Result<(String, String, DateTime<Utc>), AcmeError> {
         info!("Finalizing certificate order");
 
         // Map config key type to rcgen signature algorithm
@@ -462,7 +535,7 @@ impl AcmeClient {
                             "Timed out waiting for certificate".to_string(),
                         ));
                     }
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::time::sleep(ACME_RETRY_BACKOFF).await;
                 }
             }
         };
