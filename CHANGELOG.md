@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_3](#26083---2026-08-22) | 0.6.26 | 2026-08-22 | Per-SNI certificates, mTLS and TLS hardening settings now reach the listener (#303) |
 | [26.08_2](#26082---2026-08-22) | 0.6.25 | 2026-08-22 | ACME DNS-01 idempotency, breaking TLS config schema |
 | [26.08_1](#26081---2026-08-08) | 0.6.24 | 2026-08-08 | Security: rustls 0.23.43 (ticket-age and binder arithmetic hardening); dependency maintenance: pem 4.0, base64 0.23, jsonschema 0.49, validator 0.21, async-memcached 0.7, http 1.5, redis 1.5 |
 | [26.07_4](#26074---2026-07-30) | 0.6.23 | 2026-07-30 | Dependency maintenance: wasmtime 47, quinn-proto 0.11.16, maxminddb 0.30, rust-minor batch (17 updates), actions/setup-go 7 |
@@ -66,6 +67,48 @@ for details.
 ## [Unreleased]
 
 ---
+
+## [26.08_3] - 2026-08-22
+
+**Crate version:** 0.6.26
+
+> Closes the gap 26.08_2 warned about. If you configured SNI certificates,
+> `client-auth`, `min-version`/`max-version`, `cipher-suite` or
+> `session-resumption` and saw the startup warnings, those settings now take
+> effect. **Re-check that your configuration says what you intend before
+> upgrading** — a listener that previously ignored `client-auth true` will now
+> require and verify client certificates.
+
+### Fixed
+- **Per-SNI certificates are served.** A client is now sent the certificate
+  matching the SNI hostname it requested, with wildcard matching and fallback to
+  the default certificate. Previously every client received the primary
+  certificate regardless of the name requested. (#303)
+- **`client-auth` (mTLS) is enforced.** The listener requests and verifies client
+  certificates against `ca-file`. Previously it did neither, so a listener
+  configured for mTLS accepted unauthenticated connections. (#303)
+- **`min-version`, `max-version`, `cipher-suite` and `session-resumption` are
+  applied.** The listener previously used Pingora's built-in intermediate profile
+  (TLS 1.2+, default cipher suites) and ignored all four. (#303)
+- **Certificates reload on SIGHUP.** The resolver installed in the TLS
+  configuration is now the same object the certificate reloader refreshes, so a
+  renewed certificate is picked up without a restart. ACME renewals previously
+  reached disk but not the listener. (#303)
+
+### Changed
+- The startup warnings added in 26.08_2 for unapplied TLS settings are removed:
+  there is nothing left for them to warn about. (#303)
+
+### Internal
+- The pinned Pingora fork gains `TlsSettings::with_server_config`, which accepts a
+  caller-built `rustls::ServerConfig`. `TlsSettings::build()` previously
+  constructed its own and finished with `with_single_cert`, so no per-SNI
+  resolver, client-certificate verifier, or version/cipher selection could reach
+  the listener. (zentinelproxy/pingora#6)
+- `crates/proxy/tests/tls_handshake_test.rs` runs real TLS handshakes over
+  loopback and asserts on what the client observed. The existing SNI tests all
+  call the resolver directly, so none of them could have caught #303 — the defect
+  was that the resolver was never reached. (#350)
 
 ## [26.08_2] - 2026-08-22
 
