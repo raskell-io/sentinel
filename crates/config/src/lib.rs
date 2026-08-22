@@ -105,7 +105,10 @@ pub use routes::{
 };
 
 // Server
-pub use server::{ListenerConfig, ListenerProtocol, ServerConfig, SniCertificate, TlsConfig};
+pub use server::{
+    CertFolderReloadMode, ListenerConfig, ListenerProtocol, ServerConfig, SniCertFolder,
+    SniCertificate, TlsConfig,
+};
 
 // Re-export TraceIdFormat from common for convenience
 pub use zentinel_common::TraceIdFormat;

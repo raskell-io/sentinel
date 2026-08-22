@@ -10,9 +10,11 @@ use crate::server::{
     default_acme_storage, default_graceful_shutdown_timeout, default_keepalive_timeout,
     default_max_concurrent_streams, default_max_connections, default_renewal_days,
     default_request_timeout, default_worker_threads, AcmeChallengeType, AcmeConfig, AcmeKeyType,
-    DnsProviderConfig, DnsProviderType, ExternalAccountBinding, ListenerConfig, ListenerProtocol,
-    PropagationCheckConfig, ServerConfig, SniCertificate, TlsConfig,
+    CertFolderReloadMode, DnsProviderConfig, DnsProviderType, ExternalAccountBinding,
+    ListenerConfig, ListenerProtocol, PropagationCheckConfig, ServerConfig, SniCertFolder,
+    SniCertificate, TlsConfig,
 };
+use std::time::Duration;
 
 use super::helpers::{get_bool_entry, get_first_arg_string, get_int_entry, get_string_entry};
 
@@ -245,6 +247,20 @@ pub fn parse_tls_config(node: &kdl::KdlNode, listener_id: &str) -> Result<TlsCon
         Vec::new()
     };
 
+    // Certificate folders scanned for cert/key pairs.
+    let cert_folders = if let Some(children) = node.children() {
+        children
+            .nodes()
+            .iter()
+            .filter(|n| n.name().value() == "sni-certs")
+            .map(|folder_node| parse_sni_cert_folder(folder_node, listener_id))
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+
+    let allow_sni_overlaps = get_bool_entry(node, "allow-sni-overlaps").unwrap_or(false);
+
     debug!(
         listener_id = %listener_id,
         has_cert_file = cert_file.is_some(),
@@ -256,6 +272,8 @@ pub fn parse_tls_config(node: &kdl::KdlNode, listener_id: &str) -> Result<TlsCon
     );
 
     Ok(TlsConfig {
+        cert_folders,
+        allow_sni_overlaps,
         cert_file,
         key_file,
         additional_certs,
@@ -282,6 +300,8 @@ const KNOWN_TLS_NODES: &[&str] = &[
     "session-resumption",
     "cipher-suite",
     "sni",
+    "sni-certs",
+    "allow-sni-overlaps",
     "acme",
 ];
 
@@ -795,6 +815,92 @@ fn parse_sni_certificate(node: &kdl::KdlNode, listener_id: &str) -> Result<SniCe
 /// Parse TLS version string
 ///
 /// Only TLS 1.2 and 1.3 are supported (TLS 1.0/1.1 are deprecated)
+/// Parse an `sni-certs { ... }` block.
+///
+/// ```kdl
+/// sni-certs {
+///     cert-folder "/etc/zentinel/certs/dynamic/"
+///     reload-mode "watch"
+///     reload-interval "30s"
+/// }
+/// ```
+fn parse_sni_cert_folder(node: &kdl::KdlNode, listener_id: &str) -> Result<SniCertFolder> {
+    let cert_folder = get_string_entry(node, "cert-folder")
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "sni-certs block for listener '{}' requires 'cert-folder', for example: \
+                 sni-certs {{ cert-folder \"/etc/zentinel/certs/dynamic/\" }}",
+                listener_id
+            )
+        })?;
+
+    let reload_mode = match get_string_entry(node, "reload-mode") {
+        None => CertFolderReloadMode::Off,
+        Some(mode) => match mode.to_ascii_lowercase().as_str() {
+            "off" => CertFolderReloadMode::Off,
+            "interval" => CertFolderReloadMode::Interval,
+            "watch" => CertFolderReloadMode::Watch,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "sni-certs block for listener '{}' has unknown reload-mode '{}'. \
+                     Valid modes are: off, interval, watch",
+                    listener_id,
+                    other
+                ))
+            }
+        },
+    };
+
+    let reload_interval = match get_string_entry(node, "reload-interval") {
+        None => Duration::from_secs(30),
+        Some(text) => crate::kdl::upstreams::parse_duration_string(&text)
+            .map(Duration::from_secs)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "sni-certs block for listener '{}' has an invalid reload-interval '{}'. \
+                 Use a duration such as \"30s\", \"5m\" or \"1h\"",
+                    listener_id,
+                    text
+                )
+            })?,
+    };
+
+    // A timer that never fires is a configuration mistake worth naming rather
+    // than silently turning into a busy loop or a no-op.
+    if reload_mode != CertFolderReloadMode::Off && reload_interval.is_zero() {
+        return Err(anyhow::anyhow!(
+            "sni-certs block for listener '{}' has reload-mode '{}' with a zero \
+             reload-interval; use a non-zero interval or reload-mode \"off\"",
+            listener_id,
+            reload_mode
+        ));
+    }
+
+    // Reject unknown children so a typo does not silently disable reloading.
+    if let Some(children) = node.children() {
+        const KNOWN: &[&str] = &["cert-folder", "reload-mode", "reload-interval"];
+        for child in children.nodes() {
+            let name = child.name().value();
+            if !KNOWN.contains(&name) {
+                return Err(anyhow::anyhow!(
+                    "Unknown node '{}' in sni-certs block for listener '{}'. \
+                     Valid nodes are: {}",
+                    name,
+                    listener_id,
+                    KNOWN.join(", ")
+                ));
+            }
+        }
+    }
+
+    Ok(SniCertFolder {
+        cert_folder,
+        reload_mode,
+        reload_interval,
+    })
+}
+
 fn parse_tls_version(s: &str) -> TlsVersion {
     match s.to_lowercase().as_str() {
         "1.3" | "tls1.3" | "tlsv1.3" => TlsVersion::Tls13,

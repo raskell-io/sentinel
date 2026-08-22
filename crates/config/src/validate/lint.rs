@@ -238,6 +238,8 @@ mod tests {
             address: address.to_string(),
             protocol: crate::ListenerProtocol::Http,
             tls: Some(TlsConfig {
+                cert_folders: Vec::new(),
+                allow_sni_overlaps: false,
                 cert_file: Some(PathBuf::from("/path/to/cert.pem")),
                 key_file: Some(PathBuf::from("/path/to/key.pem")),
                 additional_certs: vec![],

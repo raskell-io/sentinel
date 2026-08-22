@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 use validator::Validate;
 
 use zentinel_common::types::{TlsVersion, TraceIdFormat};
@@ -148,6 +149,20 @@ pub struct TlsConfig {
     /// Maps hostname patterns to certificate configurations
     #[serde(default)]
     pub additional_certs: Vec<SniCertificate>,
+
+    /// Folders scanned for certificate/key pairs, in addition to the
+    /// explicitly listed `additional_certs`.
+    #[serde(default)]
+    pub cert_folders: Vec<SniCertFolder>,
+
+    /// Whether two certificates may claim the same hostname.
+    ///
+    /// Default `false`: an overlap is a configuration error, because which
+    /// certificate wins would otherwise depend on directory iteration order.
+    /// Set `true` to accept overlaps and resolve them by the documented
+    /// tie-break instead.
+    #[serde(default)]
+    pub allow_sni_overlaps: bool,
 
     /// CA certificate file path for client verification (mTLS)
     pub ca_file: Option<PathBuf>,
@@ -398,6 +413,55 @@ impl Default for PropagationCheckConfig {
             nameservers: Vec::new(),
         }
     }
+}
+
+/// How a scanned certificate folder is rechecked for changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CertFolderReloadMode {
+    /// Only rescan when the process is told to, via SIGHUP.
+    #[default]
+    Off,
+    /// Rescan on a timer.
+    Interval,
+    /// Rescan when the filesystem reports a change, falling back to the timer
+    /// if a watcher cannot be established.
+    Watch,
+}
+
+impl std::fmt::Display for CertFolderReloadMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CertFolderReloadMode::Off => write!(f, "off"),
+            CertFolderReloadMode::Interval => write!(f, "interval"),
+            CertFolderReloadMode::Watch => write!(f, "watch"),
+        }
+    }
+}
+
+/// A folder scanned for certificate/key pairs.
+///
+/// Each pair found is registered like an explicit `sni` block whose hostnames
+/// are extracted from the certificate's CN and SANs, which is what makes the
+/// folder useful: certificates can be added or removed without editing the
+/// configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SniCertFolder {
+    /// Directory to scan.
+    pub cert_folder: PathBuf,
+
+    /// When to rescan.
+    #[serde(default)]
+    pub reload_mode: CertFolderReloadMode,
+
+    /// How often to rescan under `interval`, and the fallback poll under
+    /// `watch` when no watcher could be established.
+    #[serde(default = "default_cert_reload_interval")]
+    pub reload_interval: Duration,
+}
+
+fn default_cert_reload_interval() -> Duration {
+    Duration::from_secs(30)
 }
 
 /// SNI certificate configuration
