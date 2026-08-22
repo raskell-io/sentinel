@@ -101,6 +101,12 @@ pub struct RequestContext {
     pub(crate) selected_upstream_address: Option<String>,
     /// Number of upstream attempts
     pub(crate) upstream_attempts: u32,
+    /// Times the request itself has been sent upstream.
+    ///
+    /// Distinct from `upstream_attempts`, which counts tries at *selecting* a
+    /// backend. This one backs the route's `retry-policy` and is incremented
+    /// in `upstream_peer`, which Pingora re-enters on every retry.
+    pub(crate) request_attempts: u32,
 
     // === Scope (for namespaced configurations) ===
     /// Namespace for this request (if routed to a namespace scope)
@@ -340,6 +346,7 @@ impl RequestContext {
             upstream: None,
             selected_upstream_address: None,
             upstream_attempts: 0,
+            request_attempts: 0,
             namespace: None,
             service: None,
             method: String::new(),
@@ -491,6 +498,11 @@ impl RequestContext {
 
     /// Get the number of upstream attempts.
     #[inline]
+    /// Times the request itself has been sent upstream.
+    pub fn request_attempts(&self) -> u32 {
+        self.request_attempts
+    }
+
     pub fn upstream_attempts(&self) -> u32 {
         self.upstream_attempts
     }
