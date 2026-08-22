@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_2](#26082---2026-08-22) | 0.6.25 | 2026-08-22 | ACME DNS-01 idempotency, breaking TLS config schema |
 | [26.08_1](#26081---2026-08-08) | 0.6.24 | 2026-08-08 | Security: rustls 0.23.43 (ticket-age and binder arithmetic hardening); dependency maintenance: pem 4.0, base64 0.23, jsonschema 0.49, validator 0.21, async-memcached 0.7, http 1.5, redis 1.5 |
 | [26.07_4](#26074---2026-07-30) | 0.6.23 | 2026-07-30 | Dependency maintenance: wasmtime 47, quinn-proto 0.11.16, maxminddb 0.30, rust-minor batch (17 updates), actions/setup-go 7 |
 | [26.07_3](#26073---2026-07-18) | 0.6.22 | 2026-07-18 | Security: serde_with 3.21 (GHSA-7gcf-g7xr-8hxj); dependency maintenance: tokio-tungstenite 0.30, jsonschema 0.48, rust-minor batches (13 updates) |
@@ -64,8 +65,16 @@ for details.
 
 ## [Unreleased]
 
-> **Breaking release.** Includes a breaking listener TLS config-schema change
-> (below). The next release should bump the crate SemVer minor (0.6.x → 0.7.0).
+---
+
+## [26.08_2] - 2026-08-22
+
+**Crate version:** 0.6.25
+
+> **Contains a breaking configuration change** (listener TLS schema, below).
+> Released as a SemVer patch rather than a minor bump, so pinning `0.6` will
+> pick it up: check your listener `tls` blocks before upgrading. Configs using
+> `additional-certs` or `cipher-suites` will fail to load.
 
 ### Changed
 - **BREAKING — listener TLS config schema.** SNI certificates now use repeated
@@ -74,6 +83,10 @@ for details.
   Unknown nodes inside `tls` and `sni` blocks are now **rejected at parse time**
   (previously silently ignored) with descriptive errors and legacy-syntax hints, so
   a config can no longer imply TLS behavior the proxy never applies. (#311)
+- Route match conditions with a missing or non-string value are now a hard error
+  rather than being silently skipped. A route that drops a match condition matches
+  more traffic than its author intended. (#344)
+- `shadow` percentages are validated instead of silently coerced. (#344)
 
 ### Added
 - Loud startup warnings when TLS hardening settings — per-SNI certificate serving,
@@ -81,6 +94,37 @@ for details.
   configured but not yet applied by the listener (issue #303); the listener uses
   Pingora's built-in intermediate profile and serves the primary certificate to all
   clients until #303 lands. Unenforced mTLS emits a `SECURITY:` warning. (#311)
+- Actionable errors for route match conditions: the route, the condition and a
+  concrete example are named, and unknown condition names get a "did you mean"
+  suggestion from an edit-distance match. (#344)
+- `crates/config/tests/shipped_examples.rs` loads and validates every shipped
+  example plus the multi-file tree, so the examples cannot drift again. (#345)
+
+### Fixed
+- **ACME DNS-01 is now idempotent.** `create_txt_record` behaves as an *ensure*
+  operation across Cloudflare, Hetzner and webhook providers, so a stale
+  `_acme-challenge` TXT from a failed run no longer breaks issuance on restart.
+  Duplicate detection requires both the status code and the provider's message,
+  and only exact value matches are reused — the previous heuristic could select an
+  unrelated record and delete it during cleanup. (#343)
+- **DNS-01 propagation is visible.** Empty `propagation.nameservers` now falls back
+  to public resolvers instead of failing every lookup silently at `TRACE`. (#343)
+- **Transient ACME failures no longer abort startup.** Account, order and
+  finalization errors retry with bounded backoff, and retryability is decided by
+  matching error variants rather than message substrings, so a propagation timeout
+  is no longer misclassified as transient. (#346)
+- **Keep-ready deferral is scoped to renewals.** A transient failure during *first*
+  issuance now fails fast rather than leaving the HTTPS listener silently absent —
+  a skipped listener could never be re-added, since hot-reload only swaps
+  certificates on live listeners. (#346)
+- All 22 shipped example configs load and validate again; nine did not. Fixes
+  property-style `address=`, `server` in place of `target`, bare booleans, and
+  `retry-policy` keys that were never implemented. `config/example-multi-file/`
+  is rebuilt as a working demonstration of the `include` mechanism. (#345)
+
+### Security
+- Bump `wasmtime-wasi` 47.0.2 → 47.0.3, carrying upstream fixes including
+  GHSA-hgjw-h833-99q9 (stores mixing type indices between engines). (#338)
 
 ### Migration
 
@@ -100,6 +144,10 @@ cipher-suites {                            cipher-suite "TLS_AES_128_GCM_SHA256"
     - "TLS_AES_256_GCM_SHA384"
 }
 ```
+
+`retry-policy` accepts only `max-attempts`; `timeout-ms`, `backoff-base-ms`,
+`backoff-max-ms` and `retryable-status-codes` are rejected at parse time and
+must be removed. The behaviour they describe is tracked in #279.
 
 ---
 
