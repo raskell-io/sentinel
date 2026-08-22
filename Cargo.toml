@@ -30,15 +30,15 @@ rust-version = "1.95.0"
 
 [workspace.dependencies]
 # Core dependencies (using our fork with security fixes, rebased on 0.8.1)
-pingora = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00", features = ["proxy", "lb", "rustls"] }
-pingora-core = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00", features = ["rustls"] }
-pingora-http = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00" }
-pingora-proxy = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00" }
-pingora-load-balancing = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00" }
-pingora-timeout = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00" }
-pingora-limits = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00" }
-pingora-cache = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00" }
-pingora-memory-cache = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "b8d0c00" }
+pingora = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897", features = ["proxy", "lb", "rustls"] }
+pingora-core = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897", features = ["rustls"] }
+pingora-http = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897" }
+pingora-proxy = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897" }
+pingora-load-balancing = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897" }
+pingora-timeout = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897" }
+pingora-limits = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897" }
+pingora-cache = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897" }
+pingora-memory-cache = { version = "0.8.1", git = "https://github.com/zentinelproxy/pingora.git", rev = "ffaf897" }
 
 # Async runtime
 # Minimal feature set for proxy workloads (trimmed from "full" for smaller binary)
@@ -127,4 +127,3 @@ debug = true
 [profile.bench]
 opt-level = 3
 debug = false
-
