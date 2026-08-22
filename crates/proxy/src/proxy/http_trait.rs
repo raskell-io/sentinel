@@ -70,6 +70,67 @@ impl ProxyHttp for ZentinelProxy {
         RequestContext::new()
     }
 
+    /// Whether to discard this upstream response and retry the request.
+    ///
+    /// Pingora calls this before any of the response reaches downstream, which
+    /// is the only point where discarding is still possible. Without it a
+    /// `retry-policy` could only ever cover transport errors, because a status
+    /// code is not an error for the retry loop to react to.
+    ///
+    /// Deliberately returns `false` on the final attempt: three failed tries
+    /// should end with the upstream's 503, not a generic gateway error.
+    fn should_retry_response(
+        &self,
+        session: &Session,
+        resp: &ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> bool {
+        let Some(route) = ctx.route_config() else {
+            return false;
+        };
+        let Some(policy) = route.retry_policy.as_ref() else {
+            return false;
+        };
+
+        if !policy.is_retryable_status(resp.status.as_u16()) {
+            return false;
+        }
+
+        // Replaying a POST can duplicate a side effect the origin already
+        // performed, and nothing here can tell whether it did.
+        let method = session.req_header().method.as_str();
+        if !policy.may_retry_method(method) {
+            debug!(
+                correlation_id = %ctx.trace_id,
+                method = method,
+                status = resp.status.as_u16(),
+                "Not retrying a non-idempotent request; set retry-non-idempotent to allow it"
+            );
+            return false;
+        }
+
+        // `max_attempts` counts the first try, so the last attempt must let
+        // the response through rather than turning it into a proxy error.
+        if ctx.request_attempts >= policy.max_attempts {
+            debug!(
+                correlation_id = %ctx.trace_id,
+                status = resp.status.as_u16(),
+                attempts = ctx.request_attempts,
+                "Retry budget exhausted; forwarding the upstream response"
+            );
+            return false;
+        }
+
+        info!(
+            correlation_id = %ctx.trace_id,
+            status = resp.status.as_u16(),
+            attempt = ctx.request_attempts,
+            max_attempts = policy.max_attempts,
+            "Retrying request after a retryable upstream status"
+        );
+        true
+    }
+
     fn fail_to_connect(
         &self,
         _session: &mut Session,
@@ -654,13 +715,35 @@ impl ProxyHttp for ZentinelProxy {
                 )
             })?;
 
-        // Select peer from pool with retries
-        let max_retries = route_match
-            .config
-            .retry_policy
-            .as_ref()
-            .map(|r| r.max_attempts)
-            .unwrap_or(1);
+        // Retry *peer selection*, which fails only when the pool has no
+        // healthy member. This is deliberately not `retry-policy.max-attempts`:
+        // that governs retrying the request, and conflating the two meant a
+        // route configured for request resilience got extra tries at picking a
+        // backend instead -- an operation that rarely fails, and where retrying
+        // only delays the error.
+        const PEER_SELECTION_ATTEMPTS: u32 = 2;
+        let max_retries = PEER_SELECTION_ATTEMPTS;
+
+        // Delay before this attempt at the *request*, from the route's policy.
+        // upstream_peer is re-entered by Pingora's retry loop, so this is where
+        // the backoff belongs.
+        // Count first, then decide: this call *is* attempt N, so gating on
+        // the pre-increment value skipped the backoff before the first retry.
+        ctx.request_attempts += 1;
+        if ctx.request_attempts > 1 {
+            if let Some(policy) = route_match.config.retry_policy.as_ref() {
+                let backoff = policy.backoff_for(ctx.request_attempts);
+                if !backoff.is_zero() {
+                    trace!(
+                        correlation_id = %ctx.trace_id,
+                        attempt = ctx.request_attempts,
+                        backoff_ms = backoff.as_millis(),
+                        "Backing off before retrying the request"
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
 
         trace!(
             correlation_id = %ctx.trace_id,
@@ -731,6 +814,20 @@ impl ProxyHttp for ZentinelProxy {
                     }
                     if let Some(upstream_secs) = ctx.filter_upstream_timeout_secs {
                         peer.options.read_timeout = Some(Duration::from_secs(upstream_secs));
+                    }
+
+                    // A retry policy's per-attempt timeout caps each try.
+                    // Without it, three attempts against a black-holed
+                    // upstream each wait the full connect timeout, so a policy
+                    // meant to improve availability triples the worst-case
+                    // latency instead.
+                    if let Some(per_attempt) = route_match
+                        .config
+                        .retry_policy
+                        .as_ref()
+                        .and_then(|p| p.per_attempt_timeout)
+                    {
+                        peer.options.connection_timeout = Some(per_attempt);
                     }
 
                     return Ok(Box::new(peer));

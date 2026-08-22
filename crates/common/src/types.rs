@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 /// HTTP method wrapper with validation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -221,12 +222,97 @@ pub enum HealthCheckType {
 /// Retry policy
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicy {
+    /// Total attempts, including the first. `3` means one try and two retries.
     pub max_attempts: u32,
+
+    /// Upstream status codes that cause the response to be discarded and the
+    /// request retried.
+    ///
+    /// Empty by default: retrying on a status code replays the request, and
+    /// which codes are safe to replay depends on the application. `503` from
+    /// a load shedder is worth retrying; `500` from a handler that already
+    /// charged a card is not.
+    #[serde(default)]
+    pub retryable_status_codes: Vec<u16>,
+
+    /// Delay before the first retry. Doubles each attempt, capped at
+    /// `max_backoff`.
+    #[serde(default = "default_retry_backoff")]
+    pub backoff: Duration,
+
+    /// Ceiling for the doubling backoff.
+    #[serde(default = "default_retry_max_backoff")]
+    pub max_backoff: Duration,
+
+    /// Connection timeout applied to each attempt.
+    ///
+    /// Without this, three attempts against a black-holed upstream each wait
+    /// the full connect timeout, so a policy meant to improve availability
+    /// triples the worst-case latency instead.
+    #[serde(default)]
+    pub per_attempt_timeout: Option<Duration>,
+
+    /// Whether a request may be retried when its method is not idempotent.
+    ///
+    /// Off by default. Replaying a POST can duplicate a side effect the
+    /// origin already performed, and the proxy cannot tell whether it did.
+    #[serde(default)]
+    pub retry_non_idempotent: bool,
+}
+
+fn default_retry_backoff() -> Duration {
+    Duration::from_millis(100)
+}
+
+fn default_retry_max_backoff() -> Duration {
+    Duration::from_secs(2)
 }
 
 impl Default for RetryPolicy {
     fn default() -> Self {
-        Self { max_attempts: 3 }
+        Self {
+            max_attempts: 3,
+            retryable_status_codes: Vec::new(),
+            backoff: default_retry_backoff(),
+            max_backoff: default_retry_max_backoff(),
+            per_attempt_timeout: None,
+            retry_non_idempotent: false,
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// Backoff before `attempt` (1-based: the delay before attempt 2 is
+    /// `backoff`, before attempt 3 is `backoff * 2`, and so on).
+    pub fn backoff_for(&self, attempt: u32) -> Duration {
+        if attempt <= 1 {
+            return Duration::ZERO;
+        }
+        let doublings = attempt.saturating_sub(2).min(16);
+        let scaled = self
+            .backoff
+            .saturating_mul(1u32.checked_shl(doublings).unwrap_or(u32::MAX));
+        scaled.min(self.max_backoff)
+    }
+
+    /// Whether this status code should cause a retry.
+    pub fn is_retryable_status(&self, status: u16) -> bool {
+        self.retryable_status_codes.contains(&status)
+    }
+
+    /// Whether a request using `method` may be replayed.
+    ///
+    /// Idempotent methods are safe by definition. Anything else needs
+    /// `retry_non_idempotent`, because replaying it can duplicate a side
+    /// effect the origin already performed.
+    pub fn may_retry_method(&self, method: &str) -> bool {
+        if self.retry_non_idempotent {
+            return true;
+        }
+        matches!(
+            method.to_ascii_uppercase().as_str(),
+            "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS" | "TRACE"
+        )
     }
 }
 
@@ -494,5 +580,94 @@ mod tests {
             TraceIdFormat::from_str_loose("unknown"),
             TraceIdFormat::TinyFlake
         );
+    }
+}
+
+#[cfg(test)]
+mod retry_policy_tests {
+    use super::*;
+
+    fn policy() -> RetryPolicy {
+        RetryPolicy {
+            backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(2),
+            ..RetryPolicy::default()
+        }
+    }
+
+    /// `backoff_for` takes the attempt number the delay precedes, so attempt 1
+    /// (the first try) has no delay and attempt 2 waits the base backoff.
+    /// Getting this off by one silently skips the first retry's backoff, which
+    /// is the difference between spacing retries out and hammering a struggling
+    /// upstream three times in a millisecond.
+    #[test]
+    fn backoff_doubles_from_the_second_attempt() {
+        let p = policy();
+        assert_eq!(p.backoff_for(1), Duration::ZERO);
+        assert_eq!(p.backoff_for(2), Duration::from_millis(100));
+        assert_eq!(p.backoff_for(3), Duration::from_millis(200));
+        assert_eq!(p.backoff_for(4), Duration::from_millis(400));
+    }
+
+    #[test]
+    fn backoff_is_capped() {
+        let p = policy();
+        assert_eq!(p.backoff_for(20), Duration::from_secs(2));
+        // And does not overflow at absurd attempt counts.
+        assert_eq!(p.backoff_for(u32::MAX), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn zero_backoff_stays_zero() {
+        let p = RetryPolicy {
+            backoff: Duration::ZERO,
+            ..RetryPolicy::default()
+        };
+        assert_eq!(p.backoff_for(3), Duration::ZERO);
+    }
+
+    #[test]
+    fn only_configured_status_codes_are_retryable() {
+        let p = RetryPolicy {
+            retryable_status_codes: vec![502, 503],
+            ..RetryPolicy::default()
+        };
+        assert!(p.is_retryable_status(503));
+        assert!(!p.is_retryable_status(500));
+        assert!(!p.is_retryable_status(200));
+    }
+
+    /// Nothing is retryable by default. Replaying a request has side effects
+    /// the proxy cannot see, so it should take a deliberate choice.
+    #[test]
+    fn no_status_code_is_retryable_by_default() {
+        let p = RetryPolicy::default();
+        for status in [500, 502, 503, 504] {
+            assert!(!p.is_retryable_status(status));
+        }
+    }
+
+    #[test]
+    fn only_idempotent_methods_are_replayed_by_default() {
+        let p = RetryPolicy::default();
+        for method in ["GET", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE", "get"] {
+            assert!(p.may_retry_method(method), "{method} should be retryable");
+        }
+        for method in ["POST", "PATCH", "post", "LOCK"] {
+            assert!(
+                !p.may_retry_method(method),
+                "{method} must not be replayed without opting in"
+            );
+        }
+    }
+
+    #[test]
+    fn opting_in_allows_replaying_any_method() {
+        let p = RetryPolicy {
+            retry_non_idempotent: true,
+            ..RetryPolicy::default()
+        };
+        assert!(p.may_retry_method("POST"));
+        assert!(p.may_retry_method("PATCH"));
     }
 }
