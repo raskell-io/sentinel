@@ -1678,6 +1678,8 @@ mod tests {
     fn tls_cipher_suites_produce_warning() {
         let mut config = Config::default_for_testing();
         config.listeners[0].tls = Some(crate::TlsConfig {
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: Some("/tmp/cert.pem".into()),
             key_file: Some("/tmp/key.pem".into()),
             additional_certs: vec![],
@@ -1710,6 +1712,8 @@ mod tests {
     fn tls_max_version_produces_warning() {
         let mut config = Config::default_for_testing();
         config.listeners[0].tls = Some(crate::TlsConfig {
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: Some("/tmp/cert.pem".into()),
             key_file: Some("/tmp/key.pem".into()),
             additional_certs: vec![],
@@ -1948,6 +1952,8 @@ mod tests {
 
         // --- TlsConfig ---
         let _tls = TlsConfig {
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: Some("/tmp/cert.pem".into()),
             key_file: Some("/tmp/key.pem".into()),
             additional_certs: vec![],
@@ -2162,6 +2168,8 @@ mod tests {
 
         // TLS cipher_suites (unwired — Pingora doesn't expose custom cipher config)
         config.listeners[0].tls = Some(crate::TlsConfig {
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: Some("/tmp/cert.pem".into()),
             key_file: Some("/tmp/key.pem".into()),
             additional_certs: vec![],

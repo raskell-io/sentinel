@@ -78,6 +78,8 @@ fn test_ca_roots() -> RootCertStore {
 fn base_tls_config() -> TlsConfig {
     let fixtures = fixtures_path();
     TlsConfig {
+        cert_folders: Vec::new(),
+        allow_sni_overlaps: false,
         cert_file: Some(fixtures.join("server-default.crt")),
         key_file: Some(fixtures.join("server-default.key")),
         additional_certs: vec![],

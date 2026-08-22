@@ -63,7 +63,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -75,7 +75,7 @@ use rustls::sign::CertifiedKey;
 use rustls::{RootCertStore, ServerConfig};
 use tracing::{debug, error, info, trace, warn};
 
-use zentinel_config::{TlsConfig, UpstreamTlsConfig};
+use zentinel_config::{SniCertFolder, SniCertificate, TlsConfig, UpstreamTlsConfig};
 
 /// Error type for TLS operations
 #[derive(Debug)]
@@ -172,8 +172,20 @@ impl SniResolver {
         let mut priority_exact: HashSet<String> = HashSet::new();
         let mut priority_wildcard: HashSet<String> = HashSet::new();
 
+        // Certificates found by scanning configured folders are registered
+        // exactly like explicit `sni` blocks with no `hostnames`: their names
+        // come from the certificate's CN and SANs. Feeding them through the
+        // same loop keeps one implementation of hostname extraction, priority
+        // handling and overlap detection.
+        let scanned = scan_cert_folders(&config.cert_folders, listener_id_str);
+        let all_sni_certs: Vec<&SniCertificate> = config
+            .additional_certs
+            .iter()
+            .chain(scanned.iter())
+            .collect();
+
         // Load SNI certificates
-        for (i, sni_config) in config.additional_certs.iter().enumerate() {
+        for (i, sni_config) in all_sni_certs.into_iter().enumerate() {
             // Resolve paths for this SNI cert
             let (sni_cert_path_buf, sni_key_path_buf);
             let (sni_cert_path, sni_key_path) = match (&sni_config.cert_file, &sni_config.key_file)
@@ -302,11 +314,26 @@ impl SniResolver {
                                     "Skipping wildcard SNI registration, existing cert has priority"
                                 );
                                 continue;
+                            } else if config.allow_sni_overlaps {
+                                // Overlaps accepted: the first registration
+                                // wins. Certificates are registered in sorted
+                                // path order, so the winner is the same on
+                                // every machine and across reloads rather
+                                // than whatever the filesystem listed first.
+                                warn!(
+                                    listener_id = %listener_id_str,
+                                    pattern = %hostname,
+                                    cert_file = %sni_cert_path.display(),
+                                    "Overlapping wildcard SNI certificate ignored; \
+                                     an earlier certificate already claims this name"
+                                );
+                                continue;
                             } else {
                                 // Neither has priority, ambiguity error
                                 return Err(TlsError::ConfigBuild(format!(
                                     "Ambiguous SNI configuration: wildcard '*.{}' matches multiple certificates (including {:?}). \
-                                     Use explicit 'hostnames' or 'priority-hostnames' to resolve the conflict.",
+                                     Use explicit 'hostnames' or 'priority-hostnames' to resolve the conflict, \
+                                     or set 'allow-sni-overlaps true' to accept the first match in path order.",
                                     domain,
                                     sni_cert_path
                                 )));
@@ -353,11 +380,21 @@ impl SniResolver {
                                     "Skipping SNI registration, existing cert has priority"
                                 );
                                 continue;
+                            } else if config.allow_sni_overlaps {
+                                warn!(
+                                    listener_id = %listener_id_str,
+                                    hostname = %hostname_lower,
+                                    cert_file = %sni_cert_path.display(),
+                                    "Overlapping SNI certificate ignored; \
+                                     an earlier certificate already claims this name"
+                                );
+                                continue;
                             } else {
                                 // Neither has priority, ambiguity error
                                 return Err(TlsError::ConfigBuild(format!(
                                     "Ambiguous SNI configuration: hostname '{}' matches multiple certificates (including {:?}). \
-                                     Use explicit 'hostnames' or 'priority-hostnames' to resolve the conflict.",
+                                     Use explicit 'hostnames' or 'priority-hostnames' to resolve the conflict, \
+                                     or set 'allow-sni-overlaps true' to accept the first match in path order.",
                                     hostname_lower,
                                     sni_cert_path
                                 )));
@@ -385,6 +422,15 @@ impl SniResolver {
             wildcard_certs = wildcard_certs.len(),
             "SNI resolver initialized"
         );
+
+        if let Some(metrics) = crate::tls_metrics::get_tls_metrics() {
+            // The default certificate counts too: it is what an unmatched
+            // name is served.
+            metrics.set_certificates_loaded(
+                listener_id_str,
+                1 + sni_certs.len() + wildcard_certs.len(),
+            );
+        }
 
         Ok(Self {
             default_cert: Arc::new(default_cert),
@@ -506,8 +552,17 @@ impl HotReloadableSniResolver {
             "Reloading TLS certificates"
         );
 
-        // Try to load new certificates
-        let new_resolver = SniResolver::from_config(&config, Some(&self.listener_id))?;
+        // Try to load new certificates. A failure leaves the previous ones in
+        // place, which is invisible in traffic -- hence the counter.
+        let new_resolver = match SniResolver::from_config(&config, Some(&self.listener_id)) {
+            Ok(resolver) => resolver,
+            Err(e) => {
+                if let Some(metrics) = crate::tls_metrics::get_tls_metrics() {
+                    metrics.record_reload(&self.listener_id, false);
+                }
+                return Err(e);
+            }
+        };
 
         // Swap in the new resolver atomically
         *self.inner.write() = Arc::new(new_resolver);
@@ -517,6 +572,9 @@ impl HotReloadableSniResolver {
             listener_id = %self.listener_id,
             "TLS certificates reloaded successfully"
         );
+        if let Some(metrics) = crate::tls_metrics::get_tls_metrics() {
+            metrics.record_reload(&self.listener_id, true);
+        }
         Ok(())
     }
 
@@ -554,6 +612,136 @@ impl ResolvesServerCert for HotReloadableSniResolver {
     fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
         Some(self.inner.read().resolve(client_hello.server_name()))
     }
+}
+
+/// Extensions treated as certificates, paired with a key of the same stem.
+const CERT_EXTENSIONS: &[&str] = &["crt", "pem", "cert"];
+
+/// Extensions treated as private keys.
+const KEY_EXTENSIONS: &[&str] = &["key"];
+
+/// Scan configured folders for certificate/key pairs.
+///
+/// A pair is a certificate file and a key file sharing a stem — `a.crt` with
+/// `a.key`. Entries are returned sorted by path so that registration order,
+/// and therefore any tie-break between overlapping certificates, does not
+/// depend on the order the filesystem happens to return.
+///
+/// Problems with individual files are skipped and warned about rather than
+/// failing the scan. A folder is a moving target — certificates are written
+/// there by other processes, sometimes non-atomically — so one half-written
+/// file must not take down every other certificate on the listener. The
+/// warning is what keeps that from being silent.
+fn scan_cert_folders(folders: &[SniCertFolder], listener_id: &str) -> Vec<SniCertificate> {
+    let mut found = Vec::new();
+
+    for folder in folders {
+        let dir = &folder.cert_folder;
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                warn!(
+                    listener_id = %listener_id,
+                    cert_folder = %dir.display(),
+                    error = %e,
+                    "Certificate folder could not be read; no certificates loaded from it"
+                );
+                continue;
+            }
+        };
+
+        // Collect and sort first: read_dir order is unspecified, and a
+        // tie-break that depends on it would resolve differently between
+        // machines or after a reload.
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file())
+            .collect();
+        paths.sort();
+
+        let mut pairs = 0usize;
+        for cert_path in &paths {
+            let Some(extension) = cert_path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if !CERT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()) {
+                continue;
+            }
+
+            let Some(key_path) = matching_key_path(cert_path) else {
+                warn!(
+                    listener_id = %listener_id,
+                    cert_file = %cert_path.display(),
+                    "Certificate in scanned folder has no matching key file; skipping"
+                );
+                if let Some(metrics) = crate::tls_metrics::get_tls_metrics() {
+                    metrics.record_folder_entry_skipped(listener_id, "no_key");
+                }
+                continue;
+            };
+
+            // Load it here purely to reject unusable pairs with a precise
+            // message. The pair is loaded again by the caller, which is cheap
+            // next to serving traffic with a certificate that turns out to be
+            // unreadable.
+            if let Err(e) = load_certified_key(cert_path, &key_path) {
+                warn!(
+                    listener_id = %listener_id,
+                    cert_file = %cert_path.display(),
+                    key_file = %key_path.display(),
+                    error = %e,
+                    "Certificate pair in scanned folder could not be loaded; skipping"
+                );
+                if let Some(metrics) = crate::tls_metrics::get_tls_metrics() {
+                    metrics.record_folder_entry_skipped(listener_id, "unreadable");
+                }
+                continue;
+            }
+
+            found.push(SniCertificate {
+                hostnames: Vec::new(),
+                priority_hostnames: Vec::new(),
+                cert_file: Some(cert_path.clone()),
+                key_file: Some(key_path),
+                acme: None,
+            });
+            pairs += 1;
+        }
+
+        info!(
+            listener_id = %listener_id,
+            cert_folder = %dir.display(),
+            certificates = pairs,
+            reload_mode = %folder.reload_mode,
+            "Scanned certificate folder"
+        );
+    }
+
+    found
+}
+
+/// Find the key file belonging to a certificate, by stem.
+///
+/// `server.crt` pairs with `server.key`. A `.pem` certificate also accepts a
+/// `.pem` key only when they are separate files, since a combined PEM holding
+/// both is loaded from the one path.
+fn matching_key_path(cert_path: &Path) -> Option<PathBuf> {
+    for extension in KEY_EXTENSIONS {
+        let candidate = cert_path.with_extension(extension);
+        if candidate != cert_path && candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    // A PEM bundle may carry the key alongside the certificate.
+    if cert_path
+        .extension()
+        .and_then(|e| e.to_str())?
+        .eq_ignore_ascii_case("pem")
+        && load_certified_key(cert_path, cert_path).is_ok()
+    {
+        return Some(cert_path.to_path_buf());
+    }
+    None
 }
 
 /// Certificate reload manager

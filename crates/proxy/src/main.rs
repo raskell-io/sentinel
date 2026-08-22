@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use pingora::prelude::*;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use zentinel_config::server::{AcmeChallengeType, AcmeConfig};
 use zentinel_config::Config;
@@ -933,7 +933,18 @@ fn run_server(
                             };
                         tls_settings.enable_h2();
 
-                        cert_reloader.register(&listener.id, sni_resolver);
+                        cert_reloader.register(&listener.id, sni_resolver.clone());
+
+                        // Folders configured to reload on their own get a
+                        // watcher or a timer. Without this the `reload-mode`
+                        // setting would parse and do nothing, which is the
+                        // failure mode this listener was just fixed for.
+                        spawn_cert_folder_reloaders(
+                            &runtime,
+                            &listener.id,
+                            tls_config,
+                            sni_resolver,
+                        );
 
                         proxy_service.add_tls_with_settings(&listener.address, None, tls_settings);
                         info!(
@@ -1086,6 +1097,170 @@ fn create_default_config_file(path: &std::path::Path) -> Result<()> {
         .with_context(|| format!("Failed to write default config to: {:?}", path))?;
 
     Ok(())
+}
+
+/// Start a reload task for each certificate folder that asks for one.
+///
+/// `off` folders are left alone: they still rescan on SIGHUP, because the
+/// resolver rebuilds from configuration and the scan is part of that.
+fn spawn_cert_folder_reloaders(
+    runtime: &tokio::runtime::Runtime,
+    listener_id: &str,
+    tls_config: &zentinel_config::TlsConfig,
+    resolver: Arc<HotReloadableSniResolver>,
+) {
+    use zentinel_config::CertFolderReloadMode;
+
+    for folder in &tls_config.cert_folders {
+        match folder.reload_mode {
+            CertFolderReloadMode::Off => continue,
+            CertFolderReloadMode::Interval => {
+                info!(
+                    listener_id = %listener_id,
+                    cert_folder = %folder.cert_folder.display(),
+                    interval_secs = folder.reload_interval.as_secs(),
+                    "Certificate folder will be rescanned on a timer"
+                );
+                let resolver = resolver.clone();
+                let listener_id = listener_id.to_string();
+                let path = folder.cert_folder.clone();
+                let interval = folder.reload_interval;
+                runtime.spawn(async move {
+                    let mut ticker = tokio::time::interval(interval);
+                    // The first tick fires immediately; the folder was just
+                    // scanned, so skip it.
+                    ticker.tick().await;
+                    loop {
+                        ticker.tick().await;
+                        reload_folder(&resolver, &listener_id, &path, "interval");
+                    }
+                });
+            }
+            CertFolderReloadMode::Watch => {
+                info!(
+                    listener_id = %listener_id,
+                    cert_folder = %folder.cert_folder.display(),
+                    "Certificate folder will be rescanned when it changes"
+                );
+                let resolver = resolver.clone();
+                let listener_id = listener_id.to_string();
+                let path = folder.cert_folder.clone();
+                let interval = folder.reload_interval;
+                runtime.spawn(async move {
+                    watch_cert_folder(resolver, listener_id, path, interval).await;
+                });
+            }
+        }
+    }
+}
+
+/// Rescan one listener's certificates, logging the outcome.
+fn reload_folder(
+    resolver: &HotReloadableSniResolver,
+    listener_id: &str,
+    path: &std::path::Path,
+    trigger: &str,
+) {
+    match resolver.reload() {
+        Ok(()) => {
+            debug!(
+                listener_id = %listener_id,
+                cert_folder = %path.display(),
+                trigger = trigger,
+                "Certificates reloaded"
+            );
+        }
+        Err(e) => {
+            // The previous certificates stay in use. Reporting matters more
+            // than retrying: a folder that has gone bad will keep failing, and
+            // silence would look identical to a folder that never changes.
+            error!(
+                listener_id = %listener_id,
+                cert_folder = %path.display(),
+                trigger = trigger,
+                error = %e,
+                "Certificate reload failed; continuing with the previous certificates"
+            );
+        }
+    }
+}
+
+/// Watch a folder and rescan when it changes, falling back to a timer.
+///
+/// Filesystem watching is not available everywhere, and a network filesystem
+/// may report nothing at all. Rather than leave the operator with a folder
+/// that silently never reloads, a failed watcher degrades to the configured
+/// interval and says so.
+async fn watch_cert_folder(
+    resolver: Arc<HotReloadableSniResolver>,
+    listener_id: String,
+    path: std::path::PathBuf,
+    fallback_interval: std::time::Duration,
+) {
+    use notify::{RecursiveMode, Watcher};
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if res.is_ok() {
+            // A full rescan follows, so one signal is enough however many
+            // events arrived; a full channel already means one is pending.
+            let _ = tx.try_send(());
+        }
+    });
+
+    let mut watcher = match watcher {
+        Ok(w) => w,
+        Err(e) => {
+            warn!(
+                listener_id = %listener_id,
+                cert_folder = %path.display(),
+                error = %e,
+                interval_secs = fallback_interval.as_secs(),
+                "Could not create a filesystem watcher; falling back to interval rescans"
+            );
+            return interval_fallback(resolver, listener_id, path, fallback_interval).await;
+        }
+    };
+
+    if let Err(e) = watcher.watch(&path, RecursiveMode::NonRecursive) {
+        warn!(
+            listener_id = %listener_id,
+            cert_folder = %path.display(),
+            error = %e,
+            interval_secs = fallback_interval.as_secs(),
+            "Could not watch the certificate folder; falling back to interval rescans"
+        );
+        return interval_fallback(resolver, listener_id, path, fallback_interval).await;
+    }
+
+    // Certificates are often written as several files in quick succession —
+    // a key then a certificate. Waiting briefly after the first event avoids
+    // rescanning midway through and reading a pair that is not yet complete.
+    const SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+
+    while rx.recv().await.is_some() {
+        tokio::time::sleep(SETTLE).await;
+        while rx.try_recv().is_ok() {}
+        reload_folder(&resolver, &listener_id, &path, "watch");
+    }
+
+    // The watcher is dropped when this task ends; keep it alive until then.
+    drop(watcher);
+}
+
+/// Timer-driven rescans, used directly and as the watch fallback.
+async fn interval_fallback(
+    resolver: Arc<HotReloadableSniResolver>,
+    listener_id: String,
+    path: std::path::PathBuf,
+    interval: std::time::Duration,
+) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        reload_folder(&resolver, &listener_id, &path, "interval-fallback");
+    }
 }
 
 /// Async signal handler task

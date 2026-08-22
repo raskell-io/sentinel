@@ -460,6 +460,10 @@ impl ConfigTranslator {
         }
 
         Some(TlsConfig {
+            // Gateway API has no equivalent of folder scanning; certificates
+            // come from Secret references.
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: Some(default_cert.cert_path),
             key_file: Some(default_cert.key_path),
             additional_certs,
