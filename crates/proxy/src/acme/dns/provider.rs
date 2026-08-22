@@ -74,13 +74,19 @@ pub trait DnsProvider: Send + Sync + Debug {
     ///
     /// # Returns
     ///
-    /// The record ID for later cleanup, or an error
+    /// The record ID for later cleanup, or an error. Implementations should
+    /// treat this as an **ensure** operation: if an identical TXT record
+    /// (same name + type + content) already exists — typically a leftover
+    /// from a previous failed ACME run or concurrent authorization retry —
+    /// return the existing record ID instead of failing. This matches the
+    /// behavior of `acme.sh` (which treats `81058` / `already exists` as OK)
+    /// and makes `cleanup` idempotent.
     ///
     /// # Implementation Notes
     ///
     /// - The full record name should be `{record_name}.{domain}`
     /// - Use a short TTL (60s recommended) for challenge records
-    /// - If a record already exists, either update it or create a new one
+    /// - If a record already exists with the same value, reuse its ID
     async fn create_txt_record(
         &self,
         domain: &str,

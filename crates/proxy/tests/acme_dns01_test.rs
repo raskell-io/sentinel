@@ -8,7 +8,8 @@ use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use zentinel_proxy::acme::dns::{
-    create_challenge_info, Dns01ChallengeManager, DnsProvider, DnsProviderError, WebhookProvider,
+    create_challenge_info, Dns01ChallengeManager, DnsProvider, DnsProviderError, HetznerProvider,
+    WebhookProvider,
 };
 
 // ============================================================================
@@ -643,5 +644,241 @@ mod cloudflare_provider {
 
         let result = provider.supports_domain("unknown.com").await.unwrap();
         assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_create_record_duplicate_reuses_existing_cloudflare() {
+        let mock_server = MockServer::start().await;
+        let zone_id = "zone-123";
+        let existing_id = "existing-456";
+        let expected_content = "sqGBWGO-ubD0sYsInrp3Zo8s3GT7T6ZArO5Jcz9bNbI";
+
+        Mock::given(method("GET"))
+            .and(path("/zones"))
+            .and(wiremock::matchers::query_param("name", "example.com"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "errors": [],
+                "result": [{ "id": zone_id, "name": "example.com" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(format!("/zones/{}/dns_records", zone_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": false,
+                "errors": [{ "code": 81058, "message": "An identical record already exists." }],
+                "result": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/zones/{}/dns_records", zone_id)))
+            .and(wiremock::matchers::query_param("type", "TXT"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "errors": [],
+                "result": [{ "id": existing_id, "name": "_acme-challenge.example.com", "content": expected_content, "type": "TXT" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let provider =
+            CloudflareProvider::new_test("token", mock_server.uri(), Duration::from_secs(30))
+                .unwrap();
+
+        let id = provider
+            .create_txt_record("example.com", "_acme-challenge", expected_content)
+            .await
+            .unwrap();
+
+        assert_eq!(id, existing_id);
+    }
+
+    #[tokio::test]
+    async fn test_create_record_non_duplicate_still_fails() {
+        let mock_server = MockServer::start().await;
+        let zone_id = "zone-123";
+
+        Mock::given(method("GET"))
+            .and(path("/zones"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "errors": [],
+                "result": [{ "id": zone_id, "name": "example.com" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(format!("/zones/{}/dns_records", zone_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": false,
+                "errors": [{ "code": 9000, "message": "some other error" }],
+                "result": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let provider =
+            CloudflareProvider::new_test("token", mock_server.uri(), Duration::from_secs(30))
+                .unwrap();
+
+        let err = provider
+            .create_txt_record("example.com", "_acme-challenge", "value")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, DnsProviderError::RecordCreation { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_cloudflare_duplicate_without_matching_value_still_fails() {
+        // Duplicate error but list returns a different value — reuse must
+        // not happen (apex+wildcard share _acme-challenge with different
+        // contents). Provider should fall through to RecordCreation error.
+        let mock_server = MockServer::start().await;
+        let zone_id = "zone-123";
+
+        Mock::given(method("GET"))
+            .and(path("/zones"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "errors": [],
+                "result": [{ "id": zone_id, "name": "example.com" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(format!("/zones/{}/dns_records", zone_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": false,
+                "errors": [{ "code": 81058, "message": "An identical record already exists." }],
+                "result": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/zones/{}/dns_records", zone_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "errors": [],
+                "result": [{ "id": "other-id", "name": "_acme-challenge.example.com", "content": "other-value", "type": "TXT" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let provider =
+            CloudflareProvider::new_test("token", mock_server.uri(), Duration::from_secs(30))
+                .unwrap();
+
+        let err = provider
+            .create_txt_record("example.com", "_acme-challenge", "expected-value")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, DnsProviderError::RecordCreation { .. }));
+    }
+}
+
+mod hetzner_provider {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_create_record_duplicate_reuses_existing_hetzner() {
+        let mock_server = MockServer::start().await;
+        let zone_id = "zone-123";
+        let expected_value = "hetzner-challenge-value";
+        let existing_id = "existing-hetzner-456";
+
+        Mock::given(method("GET"))
+            .and(path("/zones"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "zones": [{ "id": zone_id, "name": "example.com" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/zones/{}", zone_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "zone": { "id": zone_id, "name": "example.com" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/records"))
+            .respond_with(ResponseTemplate::new(422).set_body_string("already exists"))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/records"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "records": [{ "id": existing_id, "name": "_acme-challenge", "value": expected_value, "type": "TXT" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let provider =
+            HetznerProvider::new_test("token", mock_server.uri(), Duration::from_secs(30)).unwrap();
+
+        let id = provider
+            .create_txt_record("example.com", "_acme-challenge", expected_value)
+            .await
+            .unwrap();
+
+        assert_eq!(id, existing_id);
+    }
+
+    #[tokio::test]
+    async fn test_create_record_duplicate_without_match_still_fails_hetzner() {
+        let mock_server = MockServer::start().await;
+        let zone_id = "zone-123";
+
+        Mock::given(method("GET"))
+            .and(path("/zones"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "zones": [{ "id": zone_id, "name": "example.com" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/zones/{}", zone_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "zone": { "id": zone_id, "name": "example.com" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/records"))
+            .respond_with(ResponseTemplate::new(422).set_body_string("already exists"))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/records"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "records": [{ "id": "other-id", "name": "_acme-challenge", "value": "other-value", "type": "TXT" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let provider =
+            HetznerProvider::new_test("token", mock_server.uri(), Duration::from_secs(30)).unwrap();
+
+        let err = provider
+            .create_txt_record("example.com", "_acme-challenge", "expected-value")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, DnsProviderError::RecordCreation { .. }));
     }
 }

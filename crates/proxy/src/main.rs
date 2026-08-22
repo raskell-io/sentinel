@@ -442,12 +442,26 @@ async fn initialize_acme(
             if let Some(ref dns_config) = acme_config.dns_provider {
                 let provider = zentinel_proxy::acme::dns::create_provider(dns_config)?;
 
-                let nameservers: Vec<std::net::IpAddr> = dns_config
+                let mut nameservers: Vec<std::net::IpAddr> = dns_config
                     .propagation
                     .nameservers
                     .iter()
                     .filter_map(|s| s.parse().ok())
                     .collect();
+                if nameservers.is_empty() {
+                    // Fall back to the same public resolvers that
+                    // PropagationConfig::default() uses. hickory 0.26's
+                    // ResolverConfig::default() yields zero nameservers
+                    // (not resolv.conf / 127.0.0.11); lookups then fail
+                    // with "no connections available", which check_record
+                    // swallows as not-propagated. Explicitly logged to
+                    // satisfy "No implicit behavior".
+                    tracing::info!(
+                        "propagation nameservers not configured, falling back to public resolvers 8.8.8.8, 1.1.1.1, 9.9.9.9"
+                    );
+                    nameservers =
+                        zentinel_proxy::acme::dns::PropagationConfig::default().nameservers;
+                }
 
                 let propagation_config = zentinel_proxy::acme::dns::PropagationConfig {
                     initial_delay: std::time::Duration::from_secs(
