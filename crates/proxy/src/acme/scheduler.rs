@@ -134,6 +134,18 @@ impl RenewalScheduler {
         // config block are part of the same certificate and stored under the primary domain.
         let domain = &domains[0];
 
+        // Lazily ensure the ACME account exists. When startup deferred
+        // init_account due to a transient error, no account is present
+        // and create_order would return NoAccount forever without this.
+        if let Err(e) = self.client.ensure_account().await {
+            error!(
+                domain = %domain,
+                error = %e,
+                "Failed to ensure ACME account before renewal check"
+            );
+            return Err(e);
+        }
+
         match self.client.needs_renewal(domain) {
             Ok(true) => {
                 info!(domain = %domain, "Certificate needs renewal");

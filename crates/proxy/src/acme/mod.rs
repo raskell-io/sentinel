@@ -102,6 +102,6 @@ mod storage;
 
 pub use challenge::ChallengeManager;
 pub use client::AcmeClient;
-pub use error::AcmeError;
+pub use error::{is_retryable_acme_error, AcmeError};
 pub use scheduler::RenewalScheduler;
 pub use storage::CertificateStorage;
