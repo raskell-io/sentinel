@@ -11,7 +11,7 @@ use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use tokio::time::Instant;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::provider::{challenge_record_fqdn, DnsProviderError};
 
@@ -108,9 +108,12 @@ impl PropagationChecker {
         let start = Instant::now();
         let deadline = start + self.config.timeout;
 
-        debug!(
+        info!(
             record = %record_name,
             timeout_secs = self.config.timeout.as_secs(),
+            initial_delay_secs = self.config.initial_delay.as_secs(),
+            check_interval_secs = self.config.check_interval.as_secs(),
+            nameservers = ?self.config.nameservers,
             "Waiting for DNS propagation"
         );
 
@@ -121,7 +124,7 @@ impl PropagationChecker {
             match self.check_record(&record_name, expected_value).await {
                 Ok(true) => {
                     let elapsed = start.elapsed();
-                    debug!(
+                    info!(
                         record = %record_name,
                         elapsed_secs = elapsed.as_secs(),
                         "DNS propagation confirmed"
@@ -129,7 +132,7 @@ impl PropagationChecker {
                     return Ok(());
                 }
                 Ok(false) => {
-                    trace!(record = %record_name, "Record not yet propagated");
+                    debug!(record = %record_name, "Record not yet propagated, retrying");
                 }
                 Err(e) => {
                     warn!(record = %record_name, error = %e, "DNS lookup error");
@@ -161,12 +164,19 @@ impl PropagationChecker {
                         continue;
                     };
 
-                    // TXT records can have multiple strings, join them
+                    // TXT records can have multiple strings, join them.
+                    // Some providers/panels store the value with
+                    // surrounding quotes (RFC 1035 zone-file style);
+                    // tolerate them on the read path while the write
+                    // path still sends the bare value.
                     let value: String = txt
                         .txt_data
                         .iter()
                         .map(|data| String::from_utf8_lossy(data))
-                        .collect();
+                        .collect::<String>()
+                        .trim()
+                        .trim_matches('"')
+                        .to_string();
 
                     trace!(
                         record = %record_name,
@@ -201,6 +211,11 @@ impl PropagationChecker {
         }
     }
 
+    /// Get the configuration
+    pub fn config(&self) -> &PropagationConfig {
+        &self.config
+    }
+
     /// Verify a record exists immediately (no waiting)
     ///
     /// Useful for testing or verifying cleanup.
@@ -211,11 +226,6 @@ impl PropagationChecker {
     ) -> Result<bool, DnsProviderError> {
         let record_name = challenge_record_fqdn(domain);
         self.check_record(&record_name, expected_value).await
-    }
-
-    /// Get the configuration
-    pub fn config(&self) -> &PropagationConfig {
-        &self.config
     }
 }
 
@@ -258,5 +268,20 @@ mod tests {
 
         let checker = checker.unwrap();
         assert_eq!(checker.config().initial_delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_quoted_txt_tolerance() {
+        // Read path trims surrounding quotes. Verify the transform
+        // used in check_record matches expectations.
+        let raw = "\"sqGBWGO-ubD0sYsInrp3Zo8s3GT7T6ZArO5Jcz9bNbI\"";
+        let normalized = raw.trim().trim_matches('"').to_string();
+        assert_eq!(normalized, "sqGBWGO-ubD0sYsInrp3Zo8s3GT7T6ZArO5Jcz9bNbI");
+
+        let spaced = "  \"hello\"  ";
+        assert_eq!(spaced.trim().trim_matches('"').to_string(), "hello");
+
+        let bare = "hello";
+        assert_eq!(bare.trim().trim_matches('"').to_string(), "hello");
     }
 }

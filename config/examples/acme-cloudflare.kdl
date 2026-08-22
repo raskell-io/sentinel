@@ -32,9 +32,16 @@ listeners {
                     api-timeout-secs 30
 
                     propagation {
+                        // Delay before first TXT lookup — gives the authoritative
+                        // NS a window to converge (Cloudflare needs ~1-2s;
+                        // 20-30s is recommended for apex+wildcard).
                         initial-delay-secs 20
                         check-interval-secs 10
                         timeout-secs 300
+                        // Public resolvers bypass hickory 0.26's zero-NS
+                        // default (which fails with "no connections
+                        // available" and is swallowed as not-propagated).
+                        // Omit to auto-fallback to 8.8.8.8/1.1.1.1/9.9.9.9.
                         nameservers "1.1.1.1" "8.8.8.8"
                     }
                 }
