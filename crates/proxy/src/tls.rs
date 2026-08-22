@@ -1531,20 +1531,30 @@ fn resolve_cipher_suites(names: &[String]) -> Result<Vec<rustls::SupportedCipher
 /// Applies protocol versions, cipher suites, session resumption, mTLS,
 /// and SNI certificate resolution from the Zentinel TLS config.
 ///
-/// # Note
-///
-/// This ServerConfig is fully configured but currently not used by
-/// Pingora's listener infrastructure. Pingora's rustls `TlsSettings`
-/// builds its own `ServerConfig` internally with hardcoded defaults.
-/// A future update to the Pingora fork should accept a pre-built
-/// `ServerConfig` via `TlsSettings`, at which point this function's
-/// output will be wired into the listener setup.
+/// The certificate resolver is built fresh from `config` and never changes
+/// afterwards. Use [`build_server_config_with_resolver`] to supply a
+/// [`HotReloadableSniResolver`] instead, so that certificates reloaded from
+/// disk are picked up by connections already being served.
 pub fn build_server_config(
     config: &TlsConfig,
     listener_id: &str,
 ) -> Result<ServerConfig, TlsError> {
     let resolver = SniResolver::from_config(config, Some(listener_id))?;
+    build_server_config_with_resolver(config, Arc::new(resolver))
+}
 
+/// Build a TLS ServerConfig around a caller-supplied certificate resolver.
+///
+/// Everything except certificate selection still comes from `config`:
+/// protocol versions, cipher suites, client authentication and session
+/// resumption. Separating the resolver lets the caller keep a handle on it,
+/// which is what makes certificate hot-reload possible — the resolver
+/// installed in the [`ServerConfig`] and the one being reloaded have to be
+/// the same object, or reloads update something no connection consults.
+pub fn build_server_config_with_resolver(
+    config: &TlsConfig,
+    resolver: Arc<dyn ResolvesServerCert>,
+) -> Result<ServerConfig, TlsError> {
     // Resolve protocol versions from config
     let versions = resolve_protocol_versions(config);
     info!(
@@ -1587,17 +1597,17 @@ pub fn build_server_config(
 
             builder
                 .with_client_cert_verifier(verifier)
-                .with_cert_resolver(Arc::new(resolver))
+                .with_cert_resolver(resolver.clone())
         } else {
             warn!("client_auth enabled but no ca_file specified, disabling client auth");
             builder
                 .with_no_client_auth()
-                .with_cert_resolver(Arc::new(resolver))
+                .with_cert_resolver(resolver.clone())
         }
     } else {
         builder
             .with_no_client_auth()
-            .with_cert_resolver(Arc::new(resolver))
+            .with_cert_resolver(resolver.clone())
     };
 
     // Configure ALPN for HTTP/2 support

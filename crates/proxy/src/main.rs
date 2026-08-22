@@ -26,7 +26,7 @@ use zentinel_proxy::acme::{
     AcmeClient, AcmeError, CertificateStorage, ChallengeManager, RenewalScheduler,
 };
 use zentinel_proxy::bundle::{run_bundle_command, BundleArgs};
-use zentinel_proxy::tls::HotReloadableSniResolver;
+use zentinel_proxy::tls::{self, CertificateReloader, HotReloadableSniResolver};
 use zentinel_proxy::{ReloadTrigger, SignalManager, SignalType, ZentinelProxy};
 
 /// Version string combining Cargo semver and CalVer release tag
@@ -793,6 +793,10 @@ fn run_server(
         .server_options(server_options)
         .build();
 
+    // Tracks the certificate resolver of every TLS listener, so SIGHUP can
+    // refresh certificates from disk without restarting the process.
+    let cert_reloader = Arc::new(CertificateReloader::new());
+
     // Configure listening addresses from config
     for listener in &config.listeners {
         match listener.protocol {
@@ -875,15 +879,47 @@ fn run_server(
                             continue;
                         }
 
-                        // TODO: Once the Pingora fork's TlsSettings supports accepting
-                        // a pre-built rustls::ServerConfig, use tls::build_server_config()
-                        // here to apply cipher_suites, min/max_version, and session_resumption.
-                        // Currently Pingora's TlsSettings::build() creates its own ServerConfig
-                        // with hardcoded defaults, ignoring our TLS hardening settings.
+                        // Build the certificate resolver first and keep a handle
+                        // on it. The resolver installed in the ServerConfig has
+                        // to be the same object the reloader refreshes, or a
+                        // reload updates something no live connection consults.
+                        let sni_resolver = match HotReloadableSniResolver::from_config(
+                            tls_config.clone(),
+                            listener.id.clone(),
+                        ) {
+                            Ok(r) => Arc::new(r),
+                            Err(e) => {
+                                error!(
+                                    listener_id = %listener.id,
+                                    error = %e,
+                                    "Failed to load TLS certificates for listener"
+                                );
+                                continue;
+                            }
+                        };
+
+                        // Everything the operator configured -- SNI certificates,
+                        // client auth, protocol versions, cipher suites, session
+                        // resumption -- is expressed here and handed to the
+                        // listener as a complete rustls ServerConfig.
+                        let server_config = match tls::build_server_config_with_resolver(
+                            tls_config,
+                            sni_resolver.clone(),
+                        ) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                error!(
+                                    listener_id = %listener.id,
+                                    error = %e,
+                                    "Failed to build TLS configuration for listener"
+                                );
+                                continue;
+                            }
+                        };
+
                         let mut tls_settings =
-                            match pingora::listeners::tls::TlsSettings::intermediate(
-                                &cert_path_str,
-                                &key_path_str,
+                            match pingora::listeners::tls::TlsSettings::with_server_config(
+                                server_config,
                             ) {
                                 Ok(s) => s,
                                 Err(e) => {
@@ -897,53 +933,7 @@ fn run_server(
                             };
                         tls_settings.enable_h2();
 
-                        // Until the Pingora fork accepts a pre-built rustls
-                        // ServerConfig (see TODO above and issue #303), settings
-                        // beyond the primary certificate are parsed but never
-                        // reach the listener. Say so loudly instead of letting
-                        // the config imply protections that are not active.
-                        if !tls_config.additional_certs.is_empty() {
-                            warn!(
-                                listener_id = %listener.id,
-                                sni_cert_count = tls_config.additional_certs.len(),
-                                "SNI certificates are configured but NOT served: \
-                                 per-SNI certificate selection is not wired into \
-                                 the TLS listener yet (issue #303). All clients \
-                                 receive the primary certificate."
-                            );
-                        }
-                        if tls_config.client_auth {
-                            warn!(
-                                listener_id = %listener.id,
-                                "SECURITY: client-auth (mTLS) is configured but \
-                                 NOT enforced: the listener does not request or \
-                                 verify client certificates (issue #303). Do not \
-                                 rely on mTLS for this listener."
-                            );
-                        }
-                        let mut unapplied: Vec<&str> = Vec::new();
-                        if tls_config.min_version != zentinel_common::types::TlsVersion::Tls12 {
-                            unapplied.push("min-version");
-                        }
-                        if tls_config.max_version.is_some() {
-                            unapplied.push("max-version");
-                        }
-                        if !tls_config.cipher_suites.is_empty() {
-                            unapplied.push("cipher-suite");
-                        }
-                        if !tls_config.session_resumption {
-                            unapplied.push("session-resumption");
-                        }
-                        if !unapplied.is_empty() {
-                            warn!(
-                                listener_id = %listener.id,
-                                settings = ?unapplied,
-                                "TLS hardening settings are configured but NOT \
-                                 applied: the listener uses Pingora's built-in \
-                                 intermediate profile (TLS 1.2+, default cipher \
-                                 suites) until issue #303 is resolved."
-                            );
-                        }
+                        cert_reloader.register(&listener.id, sni_resolver);
 
                         proxy_service.add_tls_with_settings(&listener.address, None, tls_settings);
                         info!(
@@ -951,6 +941,8 @@ fn run_server(
                             address = %listener.address,
                             cert_file = %cert_path_str,
                             acme_enabled = tls_config.acme.is_some(),
+                            sni_cert_count = tls_config.additional_certs.len(),
+                            client_auth = tls_config.client_auth,
                             "HTTPS (h2+http/1.1) listening on: {}", listener.address
                         );
                     }
@@ -1005,8 +997,9 @@ fn run_server(
 
     // Spawn signal handler task in the runtime
     let signal_manager_clone = signal_manager.clone();
+    let cert_reloader_clone = cert_reloader.clone();
     runtime.spawn(async move {
-        run_signal_handler(signal_manager_clone, config_manager).await;
+        run_signal_handler(signal_manager_clone, config_manager, cert_reloader_clone).await;
     });
 
     info!("Zentinel proxy started successfully");
@@ -1101,6 +1094,7 @@ fn create_default_config_file(path: &std::path::Path) -> Result<()> {
 async fn run_signal_handler(
     signal_manager: Arc<SignalManager>,
     config_manager: Arc<zentinel_proxy::ConfigManager>,
+    cert_reloader: Arc<CertificateReloader>,
 ) {
     loop {
         // Use spawn_blocking to wait for signals without blocking the async runtime
@@ -1119,6 +1113,27 @@ async fn run_signal_handler(
                         error!("Configuration reload failed: {}", e);
                         error!("Continuing with previous configuration");
                     }
+                }
+
+                // Certificates are reloaded independently of the configuration:
+                // a renewed certificate changes the file on disk without
+                // changing a byte of config, so a config reload alone would
+                // never pick it up. A listener whose reload fails keeps serving
+                // its previous certificate.
+                let (reloaded, failures) = cert_reloader.reload_all();
+                for (listener_id, e) in &failures {
+                    error!(
+                        listener_id = %listener_id,
+                        error = %e,
+                        "TLS certificate reload failed, keeping previous certificates"
+                    );
+                }
+                if reloaded > 0 || !failures.is_empty() {
+                    info!(
+                        reloaded = reloaded,
+                        failed = failures.len(),
+                        "TLS certificates reloaded"
+                    );
                 }
             }
             Ok(Some(SignalType::Shutdown)) => {
