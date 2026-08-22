@@ -701,6 +701,22 @@ impl<'a> RequestInfo<'a> {
                     let _ = write!(buf, "\n{k}={v}");
                 }
             }
+            // Query parameters, for the same reason. `path` here comes from
+            // `Uri::path()` and carries no query string, so without this two
+            // requests differing only in their query share a cache entry: once
+            // `/api?version=v2` is cached, `/api?version=v1` is served the v2
+            // route and reaches the wrong upstream.
+            //
+            // The separator differs from the header one so a header and a
+            // query parameter with the same name and value cannot produce the
+            // same key.
+            if let Some(ref params) = self.query_params {
+                let mut pairs: Vec<_> = params.iter().collect();
+                pairs.sort_by_key(|(k, _)| k.as_str());
+                for (k, v) in pairs {
+                    let _ = write!(buf, "\t{k}={v}");
+                }
+            }
             f(&buf)
         })
     }
@@ -994,6 +1010,302 @@ mod tests {
         assert_eq!(
             matcher.match_request(&req).unwrap().route_id.as_str(),
             "header-v2"
+        );
+    }
+}
+
+#[cfg(test)]
+mod probe_113 {
+    use super::*;
+    use zentinel_common::types::Priority;
+    use zentinel_config::{MatchCondition, RouteConfig};
+
+    fn route(id: &str, matches: Vec<MatchCondition>) -> RouteConfig {
+        RouteConfig {
+            id: id.to_string(),
+            priority: Priority::NORMAL,
+            matches,
+            upstream: Some("u".to_string()),
+            service_type: zentinel_config::ServiceType::Web,
+            policies: Default::default(),
+            filters: vec![],
+            builtin_handler: None,
+            waf_enabled: false,
+            retry_policy: None,
+            static_files: None,
+            api_schema: None,
+            error_pages: None,
+            websocket: false,
+            websocket_inspection: false,
+            inference: None,
+            shadow: None,
+            fallback: None,
+        }
+    }
+
+    #[test]
+    fn probe_query_param_matching() {
+        let build = || {
+            RouteMatcher::new(
+                vec![
+                    route(
+                        "v2",
+                        vec![
+                            MatchCondition::PathPrefix("/api".into()),
+                            MatchCondition::QueryParam {
+                                name: "version".into(),
+                                value: Some("v2".into()),
+                            },
+                        ],
+                    ),
+                    route("fallback", vec![MatchCondition::PathPrefix("/api".into())]),
+                ],
+                None,
+            )
+            .unwrap()
+        };
+
+        // A: correct param, fresh matcher.
+        let m = build();
+        let mut p1 = std::collections::HashMap::new();
+        p1.insert("version".to_string(), "v2".to_string());
+        let r = m.match_request(&RequestInfo::new("GET", "/api/x", "h").with_query_params(p1));
+        println!(
+            "  A version=v2, fresh   -> {:?}",
+            r.map(|r| r.route_id.to_string())
+        );
+
+        // B: WRONG param, fresh matcher. Should fall through to "fallback".
+        let m = build();
+        let mut p2 = std::collections::HashMap::new();
+        p2.insert("version".to_string(), "v1".to_string());
+        let r = m.match_request(&RequestInfo::new("GET", "/api/x", "h").with_query_params(p2));
+        println!(
+            "  B version=v1, fresh   -> {:?}",
+            r.map(|r| r.route_id.to_string())
+        );
+
+        // C: NO params, fresh matcher. Should fall through to "fallback".
+        let m = build();
+        let r = m.match_request(&RequestInfo::new("GET", "/api/x", "h"));
+        println!(
+            "  C no params, fresh    -> {:?}",
+            r.map(|r| r.route_id.to_string())
+        );
+
+        // D: cache poisoning -- same matcher, v2 first then v1.
+        let m = build();
+        let mut pa = std::collections::HashMap::new();
+        pa.insert("version".to_string(), "v2".to_string());
+        let first = m.match_request(&RequestInfo::new("GET", "/api/x", "h").with_query_params(pa));
+        let mut pb = std::collections::HashMap::new();
+        pb.insert("version".to_string(), "v1".to_string());
+        let second = m.match_request(&RequestInfo::new("GET", "/api/x", "h").with_query_params(pb));
+        println!(
+            "  D v2 then v1, shared  -> first={:?} second={:?}",
+            first.map(|r| r.route_id.to_string()),
+            second.map(|r| r.route_id.to_string())
+        );
+    }
+}
+
+#[cfg(test)]
+mod route_cache_correctness {
+    use super::*;
+    use std::collections::HashMap;
+    use zentinel_common::types::Priority;
+    use zentinel_config::{MatchCondition, RouteConfig};
+
+    fn route(id: &str, matches: Vec<MatchCondition>) -> RouteConfig {
+        RouteConfig {
+            id: id.to_string(),
+            priority: Priority::NORMAL,
+            matches,
+            upstream: Some("u".to_string()),
+            service_type: zentinel_config::ServiceType::Web,
+            policies: Default::default(),
+            filters: vec![],
+            builtin_handler: None,
+            waf_enabled: false,
+            retry_policy: None,
+            static_files: None,
+            api_schema: None,
+            error_pages: None,
+            websocket: false,
+            websocket_inspection: false,
+            inference: None,
+            shadow: None,
+            fallback: None,
+        }
+    }
+
+    fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn matched(m: &RouteMatcher, req: &RequestInfo<'_>) -> Option<String> {
+        m.match_request(req).map(|r| r.route_id.to_string())
+    }
+
+    fn query_matcher() -> RouteMatcher {
+        RouteMatcher::new(
+            vec![
+                route(
+                    "v2",
+                    vec![
+                        MatchCondition::PathPrefix("/api".into()),
+                        MatchCondition::QueryParam {
+                            name: "version".into(),
+                            value: Some("v2".into()),
+                        },
+                    ],
+                ),
+                route("fallback", vec![MatchCondition::PathPrefix("/api".into())]),
+            ],
+            None,
+        )
+        .unwrap()
+    }
+
+    /// Two requests differing only in a query parameter must not share a cache
+    /// entry.
+    ///
+    /// `path` comes from `Uri::path()` and carries no query string, so before
+    /// query parameters were part of the cache key, the first request through
+    /// a path decided the route for every later request to that path. A
+    /// `?version=v2` request would pin `/api` to the v2 route and a subsequent
+    /// `?version=v1` would be sent to the wrong upstream.
+    #[test]
+    fn a_query_parameter_change_is_not_served_from_cache() {
+        let m = query_matcher();
+
+        let first = matched(
+            &m,
+            &RequestInfo::new("GET", "/api/x", "h").with_query_params(params(&[("version", "v2")])),
+        );
+        let second = matched(
+            &m,
+            &RequestInfo::new("GET", "/api/x", "h").with_query_params(params(&[("version", "v1")])),
+        );
+
+        assert_eq!(first.as_deref(), Some("v2"));
+        assert_eq!(
+            second.as_deref(),
+            Some("fallback"),
+            "the second request was served the first request's route from cache"
+        );
+    }
+
+    /// And in the other order, so the test cannot pass merely because the
+    /// first result happened to be the fallback.
+    #[test]
+    fn the_reverse_order_is_also_correct() {
+        let m = query_matcher();
+
+        let first = matched(
+            &m,
+            &RequestInfo::new("GET", "/api/x", "h").with_query_params(params(&[("version", "v1")])),
+        );
+        let second = matched(
+            &m,
+            &RequestInfo::new("GET", "/api/x", "h").with_query_params(params(&[("version", "v2")])),
+        );
+
+        assert_eq!(first.as_deref(), Some("fallback"));
+        assert_eq!(second.as_deref(), Some("v2"));
+    }
+
+    /// A request with no query parameters must not pick up a cached entry from
+    /// one that had them.
+    #[test]
+    fn an_absent_query_parameter_is_distinct_from_a_present_one() {
+        let m = query_matcher();
+
+        assert_eq!(
+            matched(
+                &m,
+                &RequestInfo::new("GET", "/api/x", "h")
+                    .with_query_params(params(&[("version", "v2")]))
+            )
+            .as_deref(),
+            Some("v2")
+        );
+        assert_eq!(
+            matched(&m, &RequestInfo::new("GET", "/api/x", "h")).as_deref(),
+            Some("fallback"),
+            "a request without the parameter must not inherit the parameterised route"
+        );
+    }
+
+    /// Parameter order in the map must not change the key, or the cache would
+    /// miss on every request and quietly stop being a cache.
+    #[test]
+    fn parameter_order_does_not_affect_the_cache_key() {
+        let m = query_matcher();
+
+        let a = RequestInfo::new("GET", "/api/x", "h")
+            .with_query_params(params(&[("version", "v2"), ("page", "1")]));
+        let b = RequestInfo::new("GET", "/api/x", "h")
+            .with_query_params(params(&[("page", "1"), ("version", "v2")]));
+
+        assert_eq!(matched(&m, &a).as_deref(), Some("v2"));
+        assert_eq!(matched(&m, &b).as_deref(), Some("v2"));
+
+        // Both requests are the same request, so they must share one cache
+        // entry. Two entries would mean the key depends on map iteration
+        // order, and the cache would miss on almost every request.
+        assert_eq!(
+            m.cache_stats().entries,
+            1,
+            "parameter order changed the cache key"
+        );
+    }
+
+    /// A header and a query parameter with the same name and value must not
+    /// collide, or one could stand in for the other.
+    #[test]
+    fn a_header_and_a_query_parameter_do_not_collide() {
+        let m = RouteMatcher::new(
+            vec![
+                route(
+                    "by-header",
+                    vec![
+                        MatchCondition::PathPrefix("/x".into()),
+                        MatchCondition::Header {
+                            name: "tenant".into(),
+                            value: Some("acme".into()),
+                        },
+                    ],
+                ),
+                route(
+                    "by-query",
+                    vec![
+                        MatchCondition::PathPrefix("/x".into()),
+                        MatchCondition::QueryParam {
+                            name: "tenant".into(),
+                            value: Some("acme".into()),
+                        },
+                    ],
+                ),
+                route("fallback", vec![MatchCondition::PathPrefix("/x".into())]),
+            ],
+            None,
+        )
+        .unwrap();
+
+        let with_header =
+            RequestInfo::new("GET", "/x", "h").with_headers(params(&[("tenant", "acme")]));
+        let with_query =
+            RequestInfo::new("GET", "/x", "h").with_query_params(params(&[("tenant", "acme")]));
+
+        assert_eq!(matched(&m, &with_header).as_deref(), Some("by-header"));
+        assert_eq!(
+            matched(&m, &with_query).as_deref(),
+            Some("by-query"),
+            "a query parameter was served the header route's cache entry"
         );
     }
 }
