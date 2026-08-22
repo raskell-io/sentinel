@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "TinyUFO"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "ahash 0.8.12",
  "crossbeam-queue",
@@ -4275,7 +4275,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pingora"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "pingora-cache",
  "pingora-core",
@@ -4288,7 +4288,7 @@ dependencies = [
 [[package]]
 name = "pingora-cache"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -4324,7 +4324,7 @@ dependencies = [
 [[package]]
 name = "pingora-core"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -4377,12 +4377,12 @@ dependencies = [
 [[package]]
 name = "pingora-error"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 
 [[package]]
 name = "pingora-header-serde"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "bytes",
  "http 1.5.0",
@@ -4397,7 +4397,7 @@ dependencies = [
 [[package]]
 name = "pingora-http"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "bytes",
  "http 1.5.0",
@@ -4407,7 +4407,7 @@ dependencies = [
 [[package]]
 name = "pingora-ketama"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "crc32fast",
 ]
@@ -4415,7 +4415,7 @@ dependencies = [
 [[package]]
 name = "pingora-limits"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "ahash 0.8.12",
 ]
@@ -4423,7 +4423,7 @@ dependencies = [
 [[package]]
 name = "pingora-load-balancing"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4444,7 +4444,7 @@ dependencies = [
 [[package]]
 name = "pingora-lru"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "arrayvec",
  "hashbrown 0.12.3",
@@ -4455,7 +4455,7 @@ dependencies = [
 [[package]]
 name = "pingora-memory-cache"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "TinyUFO",
  "ahash 0.8.12",
@@ -4470,7 +4470,7 @@ dependencies = [
 [[package]]
 name = "pingora-pool"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "crossbeam-queue",
  "log",
@@ -4484,7 +4484,7 @@ dependencies = [
 [[package]]
 name = "pingora-proxy"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4506,7 +4506,7 @@ dependencies = [
 [[package]]
 name = "pingora-runtime"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "once_cell",
  "rand 0.8.6",
@@ -4517,7 +4517,7 @@ dependencies = [
 [[package]]
 name = "pingora-rustls"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "log",
  "no_debug",
@@ -4533,7 +4533,7 @@ dependencies = [
 [[package]]
 name = "pingora-timeout"
 version = "0.8.1"
-source = "git+https://github.com/zentinelproxy/pingora.git?rev=ffaf897#ffaf897847dbe6212c862cdae73df855bfd59470"
+source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "once_cell",
  "parking_lot",
