@@ -71,6 +71,8 @@ mod storage_resolver_integration {
 
         // Build TlsConfig with ACME pointing at the storage
         let config = TlsConfig {
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: None,
             key_file: None,
             additional_certs: vec![],
@@ -307,6 +309,8 @@ mod validate_acme_config {
         // ACME-managed config without cert_file/key_file should pass validation
         let temp_dir = tempfile::tempdir().unwrap();
         let config = TlsConfig {
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: None,
             key_file: None,
             additional_certs: vec![],
@@ -332,6 +336,8 @@ mod validate_acme_config {
     fn test_validate_requires_cert_or_acme() {
         // No cert_file, no key_file, no ACME → should fail
         let config = TlsConfig {
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: None,
             key_file: None,
             additional_certs: vec![],

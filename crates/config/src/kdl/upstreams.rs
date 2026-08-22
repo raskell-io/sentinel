@@ -280,7 +280,7 @@ fn parse_sticky_session_config(children: &kdl::KdlDocument) -> StickySessionConf
 }
 
 /// Parse duration string like "1h", "30m", "1d" to seconds
-fn parse_duration_string(s: &str) -> Option<u64> {
+pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
         return None;

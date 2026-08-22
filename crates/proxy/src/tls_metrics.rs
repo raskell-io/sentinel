@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use once_cell::sync::OnceCell;
-use prometheus::{register_int_counter_vec, IntCounterVec};
+use prometheus::{register_int_counter_vec, register_int_gauge_vec, IntCounterVec, IntGaugeVec};
 use std::sync::Arc;
 
 /// Global TLS metrics instance.
@@ -32,6 +32,25 @@ pub struct TlsMetrics {
     /// Number of SNI certificates skipped at startup due to missing files (ACME)
     /// Labels: listener, primary_domain
     sni_certs_skipped_total: IntCounterVec,
+
+    /// Certificates currently loaded per listener.
+    ///
+    /// A gauge rather than a counter: what matters operationally is how many
+    /// are in service right now, which falls when a certificate is removed
+    /// from a scanned folder.
+    /// Labels: listener
+    certificates_loaded: IntGaugeVec,
+
+    /// Certificate reload attempts, by outcome.
+    ///
+    /// A failed reload leaves the previous certificates in use, so failures
+    /// are invisible in traffic. This is how they become visible.
+    /// Labels: listener, result
+    reload_total: IntCounterVec,
+
+    /// Files in a scanned folder that could not be used as a certificate.
+    /// Labels: listener, reason
+    folder_entries_skipped_total: IntCounterVec,
 }
 
 impl TlsMetrics {
@@ -44,9 +63,58 @@ impl TlsMetrics {
         )
         .context("Failed to register zentinel_tls_sni_certs_skipped_total metric")?;
 
+        let certificates_loaded = register_int_gauge_vec!(
+            "zentinel_tls_certificates_loaded",
+            "Number of TLS certificates currently loaded for a listener",
+            &["listener"]
+        )
+        .context("Failed to register zentinel_tls_certificates_loaded metric")?;
+
+        let reload_total = register_int_counter_vec!(
+            "zentinel_tls_reload_total",
+            "Total TLS certificate reload attempts by outcome",
+            &["listener", "result"]
+        )
+        .context("Failed to register zentinel_tls_reload_total metric")?;
+
+        let folder_entries_skipped_total = register_int_counter_vec!(
+            "zentinel_tls_folder_entries_skipped_total",
+            "Files in a scanned certificate folder that could not be loaded",
+            &["listener", "reason"]
+        )
+        .context("Failed to register zentinel_tls_folder_entries_skipped_total metric")?;
+
         Ok(Self {
             sni_certs_skipped_total,
+            certificates_loaded,
+            reload_total,
+            folder_entries_skipped_total,
         })
+    }
+
+    /// Record how many certificates a listener currently has loaded.
+    pub fn set_certificates_loaded(&self, listener_id: &str, count: usize) {
+        self.certificates_loaded
+            .with_label_values(&[listener_id])
+            .set(count as i64);
+    }
+
+    /// Record the outcome of a reload attempt.
+    pub fn record_reload(&self, listener_id: &str, succeeded: bool) {
+        let result = if succeeded { "success" } else { "failure" };
+        self.reload_total
+            .with_label_values(&[listener_id, result])
+            .inc();
+    }
+
+    /// Record a file skipped during a folder scan.
+    ///
+    /// `reason` is a small fixed set (`no_key`, `unreadable`) rather than the
+    /// error text, so it cannot become an unbounded label.
+    pub fn record_folder_entry_skipped(&self, listener_id: &str, reason: &str) {
+        self.folder_entries_skipped_total
+            .with_label_values(&[listener_id, reason])
+            .inc();
     }
 
     /// Record an SNI certificate skip event.

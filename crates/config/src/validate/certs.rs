@@ -204,6 +204,8 @@ mod tests {
 
     fn test_tls_config() -> TlsConfig {
         TlsConfig {
+            cert_folders: Vec::new(),
+            allow_sni_overlaps: false,
             cert_file: Some("/nonexistent/cert.pem".into()),
             key_file: Some("/nonexistent/key.pem".into()),
             additional_certs: vec![],
