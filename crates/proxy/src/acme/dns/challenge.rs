@@ -89,7 +89,9 @@ impl Dns01ChallengeManager {
             "Creating DNS-01 challenge record"
         );
 
-        // Create the TXT record
+        // Create the TXT record. Providers implement ensure semantics
+        // (see DnsProvider::create_txt_record), so duplicate name+value
+        // is treated as success by reusing the existing record ID.
         let record_id = self
             .provider
             .create_txt_record(
@@ -101,7 +103,7 @@ impl Dns01ChallengeManager {
 
         challenge.record_id = Some(record_id.clone());
 
-        debug!(
+        info!(
             domain = %challenge.domain,
             record_id = %record_id,
             "DNS record created, waiting for propagation"
