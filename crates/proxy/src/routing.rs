@@ -480,36 +480,73 @@ impl CompiledMatcher {
     }
 }
 
+/// Normalize a host for comparison.
+///
+/// Three things, each of which was a way for a route to silently not match:
+///
+/// * **Port removed.** `Host: example.com:8080` must match `example.com`, per
+///   the Gateway API spec.
+/// * **Trailing dot removed.** `example.com.` names the same host as
+///   `example.com`. Without this a restrictive host route could be skipped by
+///   appending a dot, falling through to whatever permissive route follows.
+/// * **Lowercased.** Host comparison is case-insensitive (RFC 3986 §3.2.2).
+///   Both sides are normalized, so neither a mixed-case request nor a
+///   mixed-case config silently matches nothing.
+fn normalize_host(host: &str) -> String {
+    // An IPv6 literal is bracketed and full of colons, so its port is
+    // whatever follows the closing bracket. Splitting on the first colon
+    // would reduce `[::1]:8080` to `[`.
+    let without_port = if host.starts_with('[') {
+        match host.find(']') {
+            Some(end) => &host[..=end],
+            None => host,
+        }
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+
+    let without_dot = without_port.strip_suffix('.').unwrap_or(without_port);
+    without_dot.to_ascii_lowercase()
+}
+
 impl HostMatcher {
-    /// Parse a host pattern into a matcher
+    /// Parse a host pattern into a matcher.
+    ///
+    /// The pattern is normalized the same way request hosts are, so a route
+    /// written `host "Example.com"` matches `example.com`. Without that it
+    /// matched nothing at all, silently.
     fn parse(pattern: &str) -> Self {
-        if pattern.starts_with("*.") {
+        let pattern = normalize_host(pattern);
+        if let Some(suffix) = pattern.strip_prefix("*.") {
             // Wildcard pattern
             Self::Wildcard {
-                suffix: pattern[2..].to_string(),
+                suffix: suffix.to_string(),
             }
         } else if pattern.contains('*') || pattern.contains('[') {
-            // Treat as regex if it contains other special characters
-            if let Ok(regex) = Regex::new(pattern) {
-                Self::Regex(regex)
-            } else {
-                // Fall back to exact match if regex compilation fails
-                warn!("Invalid host regex pattern: {}, using exact match", pattern);
-                Self::Exact(pattern.to_string())
+            // Treat as regex if it contains other special characters.
+            // Built case-insensitively rather than by lowercasing the pattern,
+            // which would corrupt character classes such as [A-Z].
+            match regex::RegexBuilder::new(&pattern)
+                .case_insensitive(true)
+                .build()
+            {
+                Ok(regex) => Self::Regex(regex),
+                Err(_) => {
+                    // Fall back to exact match if regex compilation fails
+                    warn!("Invalid host regex pattern: {}, using exact match", pattern);
+                    Self::Exact(pattern)
+                }
             }
         } else {
             // Exact match
-            Self::Exact(pattern.to_string())
+            Self::Exact(pattern)
         }
     }
 
     /// Check if this matcher matches the host.
-    ///
-    /// Strips any port suffix from the host before matching, per Gateway API
-    /// spec: `Host: example.com:8080` must match hostname `example.com`.
     fn matches(&self, host: &str) -> bool {
-        // Strip port from host (e.g. "example.com:8080" → "example.com")
-        let host = host.split(':').next().unwrap_or(host);
+        let host = normalize_host(host);
+        let host = host.as_str();
         match self {
             Self::Exact(pattern) => host == pattern,
             Self::Wildcard { suffix } => {
@@ -1307,5 +1344,447 @@ mod route_cache_correctness {
             Some("by-query"),
             "a query parameter was served the header route's cache entry"
         );
+    }
+}
+
+/// Route matching edge cases (#113).
+///
+/// The matcher decides which upstream every request reaches, so a wrong
+/// answer is a wrong backend rather than an error anyone sees. These pin the
+/// behaviour that is easy to get wrong and impossible to notice.
+#[cfg(test)]
+mod route_matching_edges {
+    use super::*;
+    use std::collections::HashMap;
+    use zentinel_common::types::Priority;
+    use zentinel_config::{MatchCondition, RouteConfig};
+
+    fn route(id: &str, matches: Vec<MatchCondition>) -> RouteConfig {
+        route_with_priority(id, matches, Priority::NORMAL)
+    }
+
+    fn route_with_priority(
+        id: &str,
+        matches: Vec<MatchCondition>,
+        priority: Priority,
+    ) -> RouteConfig {
+        RouteConfig {
+            id: id.to_string(),
+            priority,
+            matches,
+            upstream: Some("u".to_string()),
+            service_type: zentinel_config::ServiceType::Web,
+            policies: Default::default(),
+            filters: vec![],
+            builtin_handler: None,
+            waf_enabled: false,
+            retry_policy: None,
+            static_files: None,
+            api_schema: None,
+            error_pages: None,
+            websocket: false,
+            websocket_inspection: false,
+            inference: None,
+            shadow: None,
+            fallback: None,
+        }
+    }
+
+    fn matcher(routes: Vec<RouteConfig>) -> RouteMatcher {
+        RouteMatcher::new(routes, None).expect("routes should compile")
+    }
+
+    fn hit(m: &RouteMatcher, method: &str, path: &str, host: &str) -> Option<String> {
+        m.match_request(&RequestInfo::new(method, path, host))
+            .map(|r| r.route_id.to_string())
+    }
+
+    fn pairs(kv: &[(&str, &str)]) -> HashMap<String, String> {
+        kv.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    // -- Host -------------------------------------------------------------
+
+    /// Host comparison is case-insensitive (RFC 3986 §3.2.2). Both sides are
+    /// normalized: a mixed-case request must match, and just as importantly a
+    /// route written `host "Example.com"` must not silently match nothing.
+    #[test]
+    fn host_matching_ignores_case_on_both_sides() {
+        let m = matcher(vec![route(
+            "h",
+            vec![MatchCondition::Host("example.com".into())],
+        )]);
+        assert_eq!(hit(&m, "GET", "/", "example.com").as_deref(), Some("h"));
+        assert_eq!(hit(&m, "GET", "/", "EXAMPLE.COM").as_deref(), Some("h"));
+        assert_eq!(hit(&m, "GET", "/", "ExAmPlE.cOm").as_deref(), Some("h"));
+
+        let m = matcher(vec![route(
+            "h",
+            vec![MatchCondition::Host("Example.COM".into())],
+        )]);
+        assert_eq!(
+            hit(&m, "GET", "/", "example.com").as_deref(),
+            Some("h"),
+            "a mixed-case config host must still match"
+        );
+    }
+
+    /// A trailing dot names the same host. Without normalizing it, a
+    /// restrictive host route can be skipped by appending a dot and falling
+    /// through to whatever permissive route follows.
+    #[test]
+    fn a_trailing_dot_does_not_bypass_a_host_route() {
+        // Priority is explicit so the outcome turns on the host match alone,
+        // not on how a host-only route ranks against a path catch-all.
+        let m = matcher(vec![
+            route_with_priority(
+                "restricted",
+                vec![
+                    MatchCondition::Host("admin.example.com".into()),
+                    MatchCondition::PathPrefix("/".into()),
+                ],
+                Priority::HIGH,
+            ),
+            route_with_priority(
+                "catchall",
+                vec![MatchCondition::PathPrefix("/".into())],
+                Priority::LOW,
+            ),
+        ]);
+
+        assert_eq!(
+            hit(&m, "GET", "/", "admin.example.com").as_deref(),
+            Some("restricted")
+        );
+        assert_eq!(
+            hit(&m, "GET", "/", "admin.example.com.").as_deref(),
+            Some("restricted"),
+            "a trailing dot must not route around the host match"
+        );
+        // A genuinely different host still falls through.
+        assert_eq!(
+            hit(&m, "GET", "/", "other.com").as_deref(),
+            Some("catchall")
+        );
+    }
+
+    /// Path specificity outranks host specificity, so a route matching only a
+    /// host loses to a catch-all that matches a path.
+    ///
+    /// This is the documented ordering rather than a defect, but it is
+    /// surprising enough to pin: an operator adding a host-only route
+    /// alongside a `path-prefix "/"` catch-all gets the catch-all, and the
+    /// host route never fires. Give the host route a path condition, or a
+    /// higher priority.
+    #[test]
+    fn a_host_only_route_loses_to_a_path_catchall() {
+        let m = matcher(vec![
+            route(
+                "host_only",
+                vec![MatchCondition::Host("admin.example.com".into())],
+            ),
+            route("catchall", vec![MatchCondition::PathPrefix("/".into())]),
+        ]);
+        assert_eq!(
+            hit(&m, "GET", "/", "admin.example.com").as_deref(),
+            Some("catchall")
+        );
+
+        // Adding the path condition is what makes it win.
+        let m = matcher(vec![
+            route(
+                "host_and_path",
+                vec![
+                    MatchCondition::Host("admin.example.com".into()),
+                    MatchCondition::PathPrefix("/".into()),
+                ],
+            ),
+            route("catchall", vec![MatchCondition::PathPrefix("/".into())]),
+        ]);
+        assert_eq!(
+            hit(&m, "GET", "/", "admin.example.com").as_deref(),
+            Some("host_and_path")
+        );
+    }
+
+    #[test]
+    fn a_port_is_ignored_when_matching_a_host() {
+        let m = matcher(vec![route(
+            "h",
+            vec![MatchCondition::Host("example.com".into())],
+        )]);
+        assert_eq!(
+            hit(&m, "GET", "/", "example.com:8443").as_deref(),
+            Some("h")
+        );
+        assert_eq!(hit(&m, "GET", "/", "example.com:80").as_deref(), Some("h"));
+    }
+
+    /// An IPv6 literal is bracketed and full of colons, so splitting on the
+    /// first one to strip a port reduces `[::1]:8080` to `[`.
+    #[test]
+    fn an_ipv6_host_is_not_mangled_by_port_stripping() {
+        assert_eq!(normalize_host("[::1]:8080"), "[::1]");
+        assert_eq!(normalize_host("[2001:DB8::1]"), "[2001:db8::1]");
+        assert_eq!(normalize_host("[::1]"), "[::1]");
+    }
+
+    #[test]
+    fn wildcard_hosts_also_ignore_case_port_and_trailing_dot() {
+        let m = matcher(vec![route(
+            "w",
+            vec![MatchCondition::Host("*.example.com".into())],
+        )]);
+        for host in [
+            "api.example.com",
+            "API.EXAMPLE.COM",
+            "api.example.com:8443",
+            "api.example.com.",
+        ] {
+            assert_eq!(
+                hit(&m, "GET", "/", host).as_deref(),
+                Some("w"),
+                "host {host}"
+            );
+        }
+    }
+
+    /// A wildcard covers one or more labels beneath the suffix, never the bare
+    /// suffix itself. `*.example.com` must not match `example.com`.
+    #[test]
+    fn a_wildcard_does_not_match_its_own_suffix() {
+        let m = matcher(vec![route(
+            "w",
+            vec![MatchCondition::Host("*.example.com".into())],
+        )]);
+        assert_eq!(hit(&m, "GET", "/", "example.com").as_deref(), None);
+        assert_eq!(hit(&m, "GET", "/", "notexample.com").as_deref(), None);
+    }
+
+    /// Several host conditions on one route are alternatives, while a host and
+    /// a path condition must both hold. Getting this backwards would either
+    /// make multi-host routes unreachable or make every route far too broad.
+    #[test]
+    fn hosts_are_alternatives_but_other_conditions_are_required() {
+        let m = matcher(vec![route(
+            "multi",
+            vec![
+                MatchCondition::Host("a.com".into()),
+                MatchCondition::Host("b.com".into()),
+                MatchCondition::PathPrefix("/x".into()),
+            ],
+        )]);
+
+        assert_eq!(hit(&m, "GET", "/x", "a.com").as_deref(), Some("multi"));
+        assert_eq!(hit(&m, "GET", "/x", "b.com").as_deref(), Some("multi"));
+        assert_eq!(
+            hit(&m, "GET", "/x", "c.com").as_deref(),
+            None,
+            "an unlisted host must not match"
+        );
+        assert_eq!(
+            hit(&m, "GET", "/y", "a.com").as_deref(),
+            None,
+            "the path is still required"
+        );
+    }
+
+    // -- Path -------------------------------------------------------------
+
+    #[test]
+    fn an_exact_path_does_not_match_children_or_a_trailing_slash() {
+        let m = matcher(vec![route(
+            "exact",
+            vec![MatchCondition::Path("/api".into())],
+        )]);
+        assert_eq!(hit(&m, "GET", "/api", "h").as_deref(), Some("exact"));
+        assert_eq!(hit(&m, "GET", "/api/", "h").as_deref(), None);
+        assert_eq!(hit(&m, "GET", "/api/users", "h").as_deref(), None);
+        assert_eq!(hit(&m, "GET", "/apiv2", "h").as_deref(), None);
+    }
+
+    /// A prefix must stop at a path segment boundary, or `/api` would claim
+    /// `/apikeys` and route it to the wrong backend.
+    #[test]
+    fn a_prefix_stops_at_a_segment_boundary() {
+        let m = matcher(vec![route(
+            "p",
+            vec![MatchCondition::PathPrefix("/api".into())],
+        )]);
+        assert_eq!(hit(&m, "GET", "/api", "h").as_deref(), Some("p"));
+        assert_eq!(hit(&m, "GET", "/api/", "h").as_deref(), Some("p"));
+        assert_eq!(hit(&m, "GET", "/api/users", "h").as_deref(), Some("p"));
+        assert_eq!(hit(&m, "GET", "/apikeys", "h").as_deref(), None);
+        assert_eq!(hit(&m, "GET", "/apiv2/users", "h").as_deref(), None);
+    }
+
+    /// An unusable regex must fail the load rather than becoming a route that
+    /// silently never matches.
+    #[test]
+    fn an_invalid_path_regex_is_rejected_at_load() {
+        for pattern in ["(unclosed", "a{2,1}", "[z-a]"] {
+            assert!(
+                RouteMatcher::new(
+                    vec![route("r", vec![MatchCondition::PathRegex(pattern.into())])],
+                    None,
+                )
+                .is_err(),
+                "{pattern:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_regex_is_anchored_as_written() {
+        let m = matcher(vec![route(
+            "r",
+            vec![MatchCondition::PathRegex("^/v[0-9]+/users$".into())],
+        )]);
+        assert_eq!(hit(&m, "GET", "/v1/users", "h").as_deref(), Some("r"));
+        assert_eq!(hit(&m, "GET", "/v42/users", "h").as_deref(), Some("r"));
+        assert_eq!(hit(&m, "GET", "/v1/users/1", "h").as_deref(), None);
+        assert_eq!(hit(&m, "GET", "/x/v1/users", "h").as_deref(), None);
+    }
+
+    // -- Method, header, query --------------------------------------------
+
+    #[test]
+    fn a_method_condition_accepts_any_of_its_methods() {
+        let m = matcher(vec![route(
+            "rw",
+            vec![MatchCondition::Method(vec!["POST".into(), "PUT".into()])],
+        )]);
+        assert_eq!(hit(&m, "POST", "/x", "h").as_deref(), Some("rw"));
+        assert_eq!(hit(&m, "PUT", "/x", "h").as_deref(), Some("rw"));
+        assert_eq!(hit(&m, "GET", "/x", "h").as_deref(), None);
+        assert_eq!(hit(&m, "DELETE", "/x", "h").as_deref(), None);
+    }
+
+    /// A header condition with no value matches on presence alone; with a
+    /// value it must match exactly. Conflating the two would make a
+    /// presence check accept any value, or a value check accept none.
+    #[test]
+    fn a_header_condition_distinguishes_presence_from_value() {
+        let present = matcher(vec![route(
+            "any",
+            vec![MatchCondition::Header {
+                name: "x-key".into(),
+                value: None,
+            }],
+        )]);
+        let exact = matcher(vec![route(
+            "exact",
+            vec![MatchCondition::Header {
+                name: "x-key".into(),
+                value: Some("secret".into()),
+            }],
+        )]);
+
+        let with_other =
+            RequestInfo::new("GET", "/x", "h").with_headers(pairs(&[("x-key", "other")]));
+        let with_secret =
+            RequestInfo::new("GET", "/x", "h").with_headers(pairs(&[("x-key", "secret")]));
+        let without = RequestInfo::new("GET", "/x", "h").with_headers(pairs(&[("y", "1")]));
+
+        assert!(present.match_request(&with_other).is_some());
+        assert!(present.match_request(&without).is_none());
+        assert!(exact.match_request(&with_secret).is_some());
+        assert!(exact.match_request(&with_other).is_none());
+    }
+
+    #[test]
+    fn a_query_condition_distinguishes_presence_from_value() {
+        let present = matcher(vec![route(
+            "any",
+            vec![MatchCondition::QueryParam {
+                name: "debug".into(),
+                value: None,
+            }],
+        )]);
+        let exact = matcher(vec![route(
+            "exact",
+            vec![MatchCondition::QueryParam {
+                name: "v".into(),
+                value: Some("2".into()),
+            }],
+        )]);
+
+        assert!(present
+            .match_request(
+                &RequestInfo::new("GET", "/x", "h").with_query_params(pairs(&[("debug", "0")]))
+            )
+            .is_some());
+        assert!(present
+            .match_request(&RequestInfo::new("GET", "/x", "h"))
+            .is_none());
+        assert!(exact
+            .match_request(
+                &RequestInfo::new("GET", "/x", "h").with_query_params(pairs(&[("v", "2")]))
+            )
+            .is_some());
+        assert!(exact
+            .match_request(
+                &RequestInfo::new("GET", "/x", "h").with_query_params(pairs(&[("v", "1")]))
+            )
+            .is_none());
+    }
+
+    // -- Selection --------------------------------------------------------
+
+    #[test]
+    fn higher_priority_wins_regardless_of_declaration_order() {
+        let m = matcher(vec![
+            route_with_priority(
+                "low",
+                vec![MatchCondition::PathPrefix("/a".into())],
+                Priority::LOW,
+            ),
+            route_with_priority(
+                "high",
+                vec![MatchCondition::PathPrefix("/a".into())],
+                Priority::HIGH,
+            ),
+        ]);
+        assert_eq!(hit(&m, "GET", "/a", "h").as_deref(), Some("high"));
+    }
+
+    /// Equal priorities must resolve the same way every time. If this depended
+    /// on hash or iteration order, two identically configured proxies would
+    /// route the same request differently.
+    #[test]
+    fn equal_priorities_resolve_deterministically() {
+        for _ in 0..10 {
+            let m = matcher(vec![
+                route("first", vec![MatchCondition::PathPrefix("/a".into())]),
+                route("second", vec![MatchCondition::PathPrefix("/a".into())]),
+            ]);
+            assert_eq!(hit(&m, "GET", "/a", "h").as_deref(), Some("first"));
+        }
+    }
+
+    /// A route with no conditions matches everything, so it is only ever
+    /// correct as a catch-all and must not shadow a more specific route.
+    #[test]
+    fn a_route_with_no_conditions_matches_anything() {
+        let m = matcher(vec![route("catchall", vec![])]);
+        assert_eq!(
+            hit(&m, "GET", "/anything", "h").as_deref(),
+            Some("catchall")
+        );
+        assert_eq!(
+            hit(&m, "POST", "/", "other.host").as_deref(),
+            Some("catchall")
+        );
+    }
+
+    #[test]
+    fn no_match_returns_none_rather_than_an_arbitrary_route() {
+        let m = matcher(vec![route(
+            "api",
+            vec![MatchCondition::PathPrefix("/api".into())],
+        )]);
+        assert_eq!(hit(&m, "GET", "/other", "h").as_deref(), None);
     }
 }
