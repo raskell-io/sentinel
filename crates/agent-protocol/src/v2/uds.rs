@@ -724,12 +724,36 @@ impl AgentClientV2Uds {
     }
 
     /// Send a configure event.
+    ///
+    /// Unlike the typed events, a configure payload is arbitrary operator
+    /// configuration with no correlation id of its own, so one is added here.
+    /// The server needs it to address its reply, and [`Self::send_event`] no
+    /// longer injects one.
     pub async fn send_configure(
         &self,
         correlation_id: &str,
         event: &serde_json::Value,
     ) -> Result<AgentResponse, AgentProtocolError> {
-        self.send_event(MessageType::Configure, correlation_id, event)
+        let mut payload = event.clone();
+        match payload.as_object_mut() {
+            Some(obj) => {
+                obj.insert(
+                    "correlation_id".to_string(),
+                    serde_json::Value::String(correlation_id.to_string()),
+                );
+            }
+            // A non-object payload has nowhere to put the id. Wrapping it would
+            // change the shape agents are told to expect, so send it as-is and
+            // let the server fall back to an empty id rather than silently
+            // reshaping an operator's configuration.
+            None => {
+                warn!(
+                    correlation_id = %correlation_id,
+                    "Configure payload is not a JSON object; sending without a correlation id"
+                );
+            }
+        }
+        self.send_event(MessageType::Configure, correlation_id, &payload)
             .await
     }
 
@@ -919,18 +943,18 @@ impl AgentClientV2Uds {
                     .map_err(|e| AgentProtocolError::Serialization(e.to_string()))?
             }
             UdsEncoding::MessagePack => {
-                // MessagePack path: use wrapper struct for efficient serialization
-                #[derive(serde::Serialize)]
-                struct EventWithCorrelation<'a, T: serde::Serialize> {
-                    correlation_id: &'a str,
-                    #[serde(flatten)]
-                    event: &'a T,
-                }
-                let wrapped = EventWithCorrelation {
-                    correlation_id,
-                    event,
-                };
-                encoding.serialize(&wrapped)?
+                // The event is serialized as it stands. This used to go through
+                // a wrapper struct that added `correlation_id` alongside a
+                // `#[serde(flatten)]`ed event, which emitted the key *twice*
+                // for the six event types that already carry one of their own.
+                // JSON never showed it, because the branch above mutates a
+                // `Value` and the second insert overwrites the first; a
+                // MessagePack map keeps both entries, and the server's derived
+                // `Deserialize` rejects the payload with "duplicate field". The
+                // correlation id is part of every typed event already —
+                // `send_configure` puts one into its untyped payload before
+                // handing it over.
+                encoding.serialize(event)?
             }
         };
 

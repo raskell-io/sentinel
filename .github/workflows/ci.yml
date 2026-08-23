@@ -159,5 +159,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
+      # --all-features matches the clippy job above. Without it, optional
+      # features are compiled by clippy but executed by nothing, which is how
+      # `binary-uds` shipped hanging every agent call but one (#359, #360).
       - name: Run unit tests
-        run: cargo test --workspace --lib
+        run: cargo test --workspace --lib --all-features

@@ -12,7 +12,8 @@
 #   - workflow_dispatch: lets a maintainer trigger a run on demand
 #     before merging a risky PR.
 #
-# Locally: `cargo test --workspace` reproduces what this job runs.
+# Locally: `cargo test --workspace --all-features` reproduces what this job
+# runs.
 
 name: Tests
 
@@ -73,5 +74,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
+      # --all-features so that optional features are exercised and not merely
+      # compiled — see the note in ci.yml's unit-test job.
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features
