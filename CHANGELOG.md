@@ -75,6 +75,29 @@ for details.
 > `failure-mode` — are now read at all. All five are detailed below.
 
 ### Added
+- **Native MCP and A2A awareness.** Routes can carry an `mcp` or `a2a` block
+  and the proxy inspects the JSON-RPC envelope: per-method and per-tool
+  allow/deny lists, resolved against the request body.
+
+  The reason this is in the proxy rather than an agent is MCP's Streamable HTTP
+  transport, which mirrors `method` and the tool name into `Mcp-Method` and
+  `Mcp-Name` headers so intermediaries can route without parsing bodies. Taken
+  at face value that is a bypass: send `Mcp-Name: read_file` with a body calling
+  `delete_everything` and any allowlist keyed on the header waves it through.
+  Zentinel resolves policy from the body and treats a header that disagrees as
+  hostile. `Mcp-Param-*` headers, which mirror individual tool arguments, are
+  checked the same way.
+
+  Requests claiming a protocol revision older than `2026-07-28` are refused by
+  default, because those revisions never required headers to match the body — so
+  without that check an attacker opts out of validation by claiming an old
+  version. Configurable via `require-validated-version`.
+
+  A2A carries no mirrored headers, so its policy resolves from the body
+  directly. Unknown methods are forwarded by default so the proxy does not block
+  agent upgrades.
+
+  Verified against the MCP draft revision `2026-07-28` and A2A v1.0. (#377)
 - **`zentinel lint` reports config keys that no parser reads.** A misspelled key
   in a nested KDL block was accepted and discarded — no error, no warning, no
   effect — so `failure_mode` with an underscore, or `ratelimit` without a
