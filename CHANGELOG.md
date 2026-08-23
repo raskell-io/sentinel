@@ -124,6 +124,21 @@ for details.
   nothing will now start matching. (#113)
 
 ### Fixed
+- **Distributed rate-limit fallback and TTL are read.** The backend parser
+  looked for `redis-fallback`, `memcached-fallback` and `memcached-ttl` while
+  every config writes `redis-fallback-local`, `memcached-fallback-local` and
+  `memcached-ttl-secs`. The defaults matched what the examples asked for, so
+  the mismatch was invisible until a value differed — and the value that
+  mattered was `#false`. An operator disabling local fallback (so a Redis
+  outage does not silently degrade one global limit into one limit per proxy
+  instance) was ignored, and got local fallback anyway. (#365)
+- **WAF rule exclusions are read.** Exclusions were looked for as direct
+  children of `ruleset`, but configs group them in an `exclusions { }` block,
+  so every exclusion was discarded — including all of `config/zentinel.kdl`'s.
+  Rules an operator had excluded because they false-positive on their
+  application kept firing, with the exclusion plainly visible in the file. The
+  two-argument scope form (`scope "path" "/api/v1/upload"`), which the shipped
+  config uses, is now accepted alongside `scope "path=/api/v1/upload"`. (#365)
 - **Route `policies` are read.** Six of the nine fields on `RoutePolicies` were
   never populated: the parser set header rewriting and caching and left the rest
   behind a `..Default::default()`. `timeout-secs`, `max-body-size`,

@@ -839,12 +839,29 @@ fn parse_waf_ruleset(node: &kdl::KdlNode) -> Result<crate::waf::WafRuleset> {
         .map(|v| v as u32)
         .unwrap_or(5);
 
-    // Parse exclusions
+    // Parse exclusions.
+    //
+    // This only looked for `exclusion` nodes directly under `ruleset`, but
+    // every config groups them in an `exclusions { }` block — including
+    // config/zentinel.kdl, whose three exclusions were all discarded. Rules an
+    // operator excluded because they false-positive on their application kept
+    // firing, with the exclusion visible in the file and no indication why it
+    // did nothing. Both shapes are accepted.
     let mut exclusions = Vec::new();
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            if child.name().value() == "exclusion" {
-                exclusions.push(parse_rule_exclusion(child)?);
+            match child.name().value() {
+                "exclusion" => exclusions.push(parse_rule_exclusion(child)?),
+                "exclusions" => {
+                    if let Some(grandchildren) = child.children() {
+                        for entry in grandchildren.nodes() {
+                            if entry.name().value() == "exclusion" {
+                                exclusions.push(parse_rule_exclusion(entry)?);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -889,19 +906,43 @@ fn parse_rule_exclusion(node: &kdl::KdlNode) -> Result<crate::waf::RuleExclusion
         }
     }
 
-    // Parse scope
+    // Parse scope.
+    //
+    // Two spellings are accepted: `scope "path=/x"` and the two-argument form
+    // `scope "path" "/x"`, which is what config/zentinel.kdl uses and the more
+    // natural KDL of the two. Only the first was implemented, which nobody
+    // noticed while exclusions were being discarded wholesale.
+    let scope_argument = node.children().and_then(|c| {
+        c.nodes()
+            .iter()
+            .find(|n| n.name().value() == "scope")
+            .and_then(|n| n.entries().get(1))
+            .and_then(|e| e.value().as_string())
+            .map(str::to_string)
+    });
+
     let scope = if let Some(scope_str) = get_string_entry(node, "scope") {
-        match scope_str.to_lowercase().as_str() {
-            "global" => ExclusionScope::Global,
-            path if path.starts_with("path=") => {
+        match (scope_str.to_lowercase().as_str(), scope_argument) {
+            ("global", _) => ExclusionScope::Global,
+            ("path", Some(pattern)) => ExclusionScope::Path(pattern),
+            ("host", Some(hostname)) => ExclusionScope::Host(hostname),
+            (path, None) if path.starts_with("path=") => {
                 ExclusionScope::Path(path.trim_start_matches("path=").to_string())
             }
-            host if host.starts_with("host=") => {
+            (host, None) if host.starts_with("host=") => {
                 ExclusionScope::Host(host.trim_start_matches("host=").to_string())
             }
-            other => {
+            ("path", None) | ("host", None) => {
                 return Err(anyhow::anyhow!(
-                    "Invalid exclusion scope '{}'. Valid options: global, path=<pattern>, host=<hostname>",
+                    "Exclusion scope '{}' needs a value, e.g. scope \"{}\" \"<value>\"",
+                    scope_str,
+                    scope_str
+                ));
+            }
+            (other, _) => {
+                return Err(anyhow::anyhow!(
+                    "Invalid exclusion scope '{}'. Valid options: global, path=<pattern>, \
+                     host=<hostname>, or the two-argument form scope \"path\" \"<pattern>\"",
                     other
                 ));
             }
@@ -1438,9 +1479,128 @@ fn parse_tracing_backend(node: &kdl::KdlNode) -> Result<crate::observability::Tr
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use zentinel_common::CircuitBreakerConfig;
 
-    use super::*;
+    /// Exclusions were looked for as direct children of `ruleset`, while every
+    /// config groups them in an `exclusions { }` block — so none were ever
+    /// parsed, and rules an operator had excluded kept firing.
+    mod waf_rule_exclusions {
+        use super::*;
+
+        fn ruleset_of(body: &str) -> crate::waf::WafRuleset {
+            let kdl = format!("ruleset {{\n{body}\n}}\n");
+            let doc: kdl::KdlDocument = kdl.parse().expect("kdl parses");
+            parse_waf_ruleset(doc.nodes().first().expect("ruleset node"))
+                .expect("ruleset should parse")
+        }
+
+        #[test]
+        fn exclusions_inside_a_wrapper_block_are_parsed() {
+            let ruleset = ruleset_of(
+                "  exclusions {\n    exclusion {\n      rule-ids \"920350\" \"920420\"\n      scope \"global\"\n    }\n  }",
+            );
+            assert_eq!(ruleset.exclusions.len(), 1);
+            assert_eq!(ruleset.exclusions[0].rule_ids, ["920350", "920420"]);
+        }
+
+        /// The pre-existing shape kept working.
+        #[test]
+        fn exclusions_directly_under_ruleset_are_still_parsed() {
+            let ruleset =
+                ruleset_of("  exclusion {\n    rule-ids \"941100\"\n    scope \"global\"\n  }");
+            assert_eq!(ruleset.exclusions.len(), 1);
+        }
+
+        #[test]
+        fn both_shapes_can_be_mixed() {
+            let ruleset = ruleset_of(
+                "  exclusion {\n    rule-ids \"1\"\n  }\n  exclusions {\n    exclusion {\n      rule-ids \"2\"\n    }\n  }",
+            );
+            assert_eq!(ruleset.exclusions.len(), 2);
+        }
+
+        #[test]
+        fn the_two_argument_scope_form_is_accepted() {
+            let ruleset = ruleset_of(
+                "  exclusions {\n    exclusion {\n      rule-ids \"941100\"\n      scope \"path\" \"/api/v1/upload\"\n    }\n  }",
+            );
+            assert!(matches!(
+                &ruleset.exclusions[0].scope,
+                crate::waf::ExclusionScope::Path(p) if p == "/api/v1/upload"
+            ));
+        }
+
+        #[test]
+        fn the_equals_scope_form_is_accepted() {
+            let ruleset = ruleset_of(
+                "  exclusions {\n    exclusion {\n      rule-ids \"941100\"\n      scope \"path=/api/v1/upload\"\n    }\n  }",
+            );
+            assert!(matches!(
+                &ruleset.exclusions[0].scope,
+                crate::waf::ExclusionScope::Path(p) if p == "/api/v1/upload"
+            ));
+        }
+
+        #[test]
+        fn a_host_scope_is_accepted_in_both_forms() {
+            for body in [
+                "  exclusions {\n    exclusion {\n      rule-ids \"1\"\n      scope \"host\" \"api.example.com\"\n    }\n  }",
+                "  exclusions {\n    exclusion {\n      rule-ids \"1\"\n      scope \"host=api.example.com\"\n    }\n  }",
+            ] {
+                let ruleset = ruleset_of(body);
+                assert!(matches!(
+                    &ruleset.exclusions[0].scope,
+                    crate::waf::ExclusionScope::Host(h) if h == "api.example.com"
+                ));
+            }
+        }
+
+        /// A scope that names a kind but gives no value is a mistake worth
+        /// reporting, not one to resolve silently to global.
+        #[test]
+        fn a_scope_kind_without_a_value_is_rejected() {
+            let kdl = "ruleset {\n  exclusions {\n    exclusion {\n      rule-ids \"1\"\n      scope \"path\"\n    }\n  }\n}\n";
+            let doc: kdl::KdlDocument = kdl.parse().unwrap();
+            let err = parse_waf_ruleset(doc.nodes().first().unwrap())
+                .expect_err("a valueless path scope should be rejected");
+            assert!(err.to_string().contains("needs a value"));
+        }
+
+        /// Pins the regression to the shipped config, whose three exclusions
+        /// across two entries were all being discarded.
+        #[test]
+        fn shipped_config_exclusions_take_effect() {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/zentinel.kdl");
+            let text = std::fs::read_to_string(path).expect("shipped config readable");
+            let config = crate::Config::from_kdl(&text).expect("shipped config parses");
+
+            let waf = config.waf.as_ref().expect("shipped config defines waf");
+            assert_eq!(
+                waf.ruleset.exclusions.len(),
+                2,
+                "both exclusions in the shipped config should be parsed"
+            );
+
+            let ids: Vec<&str> = waf
+                .ruleset
+                .exclusions
+                .iter()
+                .flat_map(|e| e.rule_ids.iter().map(String::as_str))
+                .collect();
+            assert!(ids.contains(&"920350"));
+            assert!(ids.contains(&"941100"));
+
+            assert!(
+                waf.ruleset
+                    .exclusions
+                    .iter()
+                    .any(|e| matches!(&e.scope, crate::waf::ExclusionScope::Path(p) if p == "/api/v1/upload")),
+                "the path-scoped exclusion should keep its path"
+            );
+        }
+    }
+
     use crate::filters::RateLimitKey;
 
     #[test]
