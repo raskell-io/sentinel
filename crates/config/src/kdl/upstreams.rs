@@ -176,12 +176,8 @@ pub fn parse_upstreams(node: &kdl::KdlNode) -> Result<HashMap<String, UpstreamCo
     if let Some(children) = node.children() {
         for child in children.nodes() {
             if child.name().value() == "upstream" {
-                match parse_upstream(child) {
-                    Ok(config) => {
-                        upstreams.insert(config.id.clone(), config);
-                    }
-                    Err(e) => return Err(e),
-                }
+                let config = parse_upstream(child)?;
+                upstreams.insert(config.id.clone(), config);
             }
         }
     }
@@ -352,10 +348,13 @@ fn parse_http_version(node: &kdl::KdlNode) -> HttpVersionConfig {
 /// connection-pool {
 ///     max-connections 100
 ///     max-idle 20
-///     idle-timeout 60
-///     max-lifetime 3600
+///     idle-timeout-secs 60
+///     max-lifetime-secs 3600
 /// }
 /// ```
+///
+/// `idle-timeout` and `max-lifetime` are accepted as aliases for the two
+/// `-secs` names.
 fn parse_connection_pool(node: &kdl::KdlNode) -> ConnectionPoolConfig {
     let max_connections = get_int_entry(node, "max-connections")
         .map(|v| v as usize)
@@ -365,11 +364,20 @@ fn parse_connection_pool(node: &kdl::KdlNode) -> ConnectionPoolConfig {
         .map(|v| v as usize)
         .unwrap_or(20);
 
-    let idle_timeout_secs = get_int_entry(node, "idle-timeout")
+    // `-secs` is the documented spelling and the one every shipped config and
+    // example uses; the bare form appears only in this function's own doc
+    // comment. Reading only the bare form meant `max-lifetime-secs 300` in
+    // config/zentinel.kdl was discarded and pools ran with no lifetime cap at
+    // all. Both are accepted so anyone who followed the old rustdoc keeps
+    // working, with the documented name taking precedence.
+    let idle_timeout_secs = get_int_entry(node, "idle-timeout-secs")
+        .or_else(|| get_int_entry(node, "idle-timeout"))
         .map(|v| v as u64)
         .unwrap_or(60);
 
-    let max_lifetime_secs = get_int_entry(node, "max-lifetime").map(|v| v as u64);
+    let max_lifetime_secs = get_int_entry(node, "max-lifetime-secs")
+        .or_else(|| get_int_entry(node, "max-lifetime"))
+        .map(|v| v as u64);
 
     ConnectionPoolConfig {
         max_connections,
@@ -727,6 +735,89 @@ mod tests {
             .unwrap()
             .targets
             .clone()
+    }
+
+    /// The documented spellings carry a unit suffix. Reading only the bare
+    /// names meant every config written against the documentation — including
+    /// the ones shipped in this repo — had its pool lifetime silently dropped.
+    mod connection_pool_key_names {
+        use super::*;
+
+        fn pool_of(kdl: &str) -> ConnectionPoolConfig {
+            parse_kdl_upstreams(kdl)
+                .unwrap()
+                .get("backend")
+                .unwrap()
+                .connection_pool
+                .clone()
+        }
+
+        fn with_pool(body: &str) -> String {
+            format!(
+                r#"upstreams {{
+                    upstream "backend" {{
+                        target "127.0.0.1:9000"
+                        connection-pool {{ {body} }}
+                    }}
+                }}"#
+            )
+        }
+
+        #[test]
+        fn documented_secs_names_are_read() {
+            let pool = pool_of(&with_pool("idle-timeout-secs 45\nmax-lifetime-secs 300"));
+            assert_eq!(pool.idle_timeout_secs, 45);
+            assert_eq!(pool.max_lifetime_secs, Some(300));
+        }
+
+        /// The bare names were what the parser used to read, and they appeared
+        /// in its own rustdoc, so anyone who copied from there keeps working.
+        #[test]
+        fn bare_names_still_work_as_aliases() {
+            let pool = pool_of(&with_pool("idle-timeout 45\nmax-lifetime 300"));
+            assert_eq!(pool.idle_timeout_secs, 45);
+            assert_eq!(pool.max_lifetime_secs, Some(300));
+        }
+
+        #[test]
+        fn documented_name_wins_when_both_are_present() {
+            let pool = pool_of(&with_pool(
+                "idle-timeout-secs 45\nidle-timeout 99\nmax-lifetime-secs 300\nmax-lifetime 999",
+            ));
+            assert_eq!(pool.idle_timeout_secs, 45);
+            assert_eq!(pool.max_lifetime_secs, Some(300));
+        }
+
+        #[test]
+        fn absent_lifetime_stays_unbounded() {
+            let pool = pool_of(&with_pool("max-connections 10"));
+            assert_eq!(pool.idle_timeout_secs, 60);
+            assert_eq!(pool.max_lifetime_secs, None);
+        }
+
+        /// Pins the regression to the file it actually broke: the shipped
+        /// default config asks for a 300s lifetime cap and used to get none.
+        #[test]
+        fn shipped_default_config_gets_the_lifetime_it_asks_for() {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/zentinel.kdl");
+            let text = std::fs::read_to_string(path).expect("shipped config should be readable");
+            let config = crate::Config::from_kdl(&text).expect("shipped config should parse");
+
+            // Only `api-backend` declares a connection-pool in the shipped
+            // config; the rest take pool defaults, where an absent lifetime
+            // legitimately means unbounded.
+            let api = config
+                .upstreams
+                .get("api-backend")
+                .expect("shipped config should define the api-backend upstream");
+
+            assert_eq!(
+                api.connection_pool.max_lifetime_secs,
+                Some(300),
+                "api-backend asks for max-lifetime-secs 300 and must get it"
+            );
+            assert_eq!(api.connection_pool.idle_timeout_secs, 60);
+        }
     }
 
     #[test]

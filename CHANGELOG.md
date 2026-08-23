@@ -66,10 +66,11 @@ for details.
 
 ## [Unreleased]
 
-> **Two behaviour changes to check before upgrading.** `retry-policy.max-attempts`
-> now retries requests rather than backend selection, and host matching in routes
-> is now case-insensitive — a route written `host "Example.com"` previously
-> matched nothing and now matches `example.com`. Both are detailed below.
+> **Three behaviour changes to check before upgrading.** `retry-policy.max-attempts`
+> now retries requests rather than backend selection, host matching in routes is
+> now case-insensitive — a route written `host "Example.com"` previously matched
+> nothing and now matches `example.com` — and `connection-pool.max-lifetime-secs`
+> now takes effect, where it was previously ignored. All three are detailed below.
 
 ### Added
 - **Certificate folders.** An `sni-certs` block points at a directory, and every
@@ -111,6 +112,16 @@ for details.
   nothing will now start matching. (#113)
 
 ### Fixed
+- **`connection-pool.idle-timeout-secs` and `max-lifetime-secs` are read.** The
+  parser looked for `idle-timeout` and `max-lifetime` — names that appear in no
+  config anywhere, including this repo's own. The documented `-secs` spellings,
+  used by `config/zentinel.kdl` and four shipped examples, were discarded. The
+  visible effect was that `max-lifetime-secs 300` produced *no* lifetime cap, so
+  pooled connections were never retired by age; `idle-timeout-secs` appeared to
+  work only because 60 is also the default. **Deployments using the shipped
+  config or those examples will now cap connection lifetime at 300s where they
+  previously had none.** The bare names remain accepted as aliases. Found via
+  #365. (#365)
 - **Route cache poisoning across query parameters.** The cache key was built
   from method, host, path and headers, and `path` carries no query string — so
   `/api?version=v2` and `/api?version=v1` shared an entry and the second request
