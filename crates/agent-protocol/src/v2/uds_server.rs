@@ -470,31 +470,94 @@ async fn write_response<W: tokio::io::AsyncWriteExt + Unpin>(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Best-effort extraction of `correlation_id` from a payload (for error paths).
+///
+/// Returns an empty string only when the payload holds no usable id at all.
+/// That outcome is expensive: a response carrying an empty correlation id can
+/// never be matched to the request waiting for it, so the client blocks until
+/// its timeout expires. Every reasonable effort to find an id is worth making.
 fn extract_correlation_id(encoding: &UdsEncoding, payload: &[u8]) -> String {
-    #[derive(serde::Deserialize)]
-    struct CidOnly {
-        #[serde(default)]
-        correlation_id: String,
-        #[serde(default)]
-        metadata: Option<MetaCid>,
-    }
-    #[derive(serde::Deserialize)]
-    struct MetaCid {
-        #[serde(default)]
-        correlation_id: String,
-    }
-
     if let Ok(parsed) = encoding.deserialize::<CidOnly>(payload) {
-        if !parsed.correlation_id.is_empty() {
-            return parsed.correlation_id;
-        }
-        if let Some(meta) = parsed.metadata {
-            if !meta.correlation_id.is_empty() {
-                return meta.correlation_id;
-            }
-        }
+        return parsed.0;
     }
     String::new()
+}
+
+/// A payload reduced to just its correlation id, taken either from the top
+/// level or from a nested `metadata` object.
+///
+/// The `Deserialize` implementation is written out by hand rather than derived
+/// because this type runs *after* a derived implementation has already failed
+/// on the same bytes. A derived one shares too many of its failure modes to be
+/// a useful fallback — notably, it rejects a duplicate key outright, and a
+/// payload with two `correlation_id` entries is precisely the sort this needs
+/// to salvage an id from. Unrecognised fields are skipped without being
+/// interpreted.
+struct CidOnly(String);
+
+impl<'de> serde::Deserialize<'de> for CidOnly {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{IgnoredAny, MapAccess, Visitor};
+
+        struct CidVisitor;
+
+        impl<'de> Visitor<'de> for CidVisitor {
+            type Value = CidOnly;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an agent event payload")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<CidOnly, A::Error> {
+                let mut direct: Option<String> = None;
+                let mut nested: Option<String> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        // First writer wins, so a duplicate key cannot
+                        // overwrite an id already found with a later empty one.
+                        "correlation_id" => {
+                            let value: String = map.next_value()?;
+                            if direct.is_none() && !value.is_empty() {
+                                direct = Some(value);
+                            }
+                        }
+                        // `metadata` is itself a map with a correlation id in
+                        // it, so the same visitor handles it one level down.
+                        "metadata" => {
+                            let inner: CidOnly = map.next_value()?;
+                            if nested.is_none() && !inner.0.is_empty() {
+                                nested = Some(inner.0);
+                            }
+                        }
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                Ok(CidOnly(direct.or(nested).unwrap_or_default()))
+            }
+
+            // `metadata` is optional; absent or null is not an error here, it
+            // just means there is no id to be had at that level.
+            fn visit_unit<E>(self) -> Result<CidOnly, E> {
+                Ok(CidOnly(String::new()))
+            }
+
+            fn visit_none<E>(self) -> Result<CidOnly, E> {
+                Ok(CidOnly(String::new()))
+            }
+
+            fn visit_some<D: serde::Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<CidOnly, D::Error> {
+                deserializer.deserialize_any(CidVisitor)
+            }
+        }
+
+        deserializer.deserialize_any(CidVisitor)
+    }
 }
 
 #[cfg(test)]
@@ -518,6 +581,285 @@ mod tests {
                 name: "x-test-agent".to_string(),
                 value: event.metadata.correlation_id.clone(),
             })
+        }
+    }
+
+    /// Every event type, driven through a real client and server over the
+    /// negotiated encoding.
+    ///
+    /// The bug this guards against (#360) reached only one event type through
+    /// its test: `RequestHeadersEvent` is the sole event that keeps its
+    /// correlation id in a nested `metadata` object, and so the sole one that
+    /// survived a client which emitted the key a second time at the top level.
+    /// The other six carry the id directly, ended up with it twice under
+    /// MessagePack, and were rejected by the server as a duplicate field —
+    /// every call hanging until it timed out.
+    ///
+    /// Asserting `Ok` is not enough on its own: the server answers malformed
+    /// payloads too, and a good enough correlation-id fallback would make a
+    /// broken client look healthy. So the handler records what it was actually
+    /// handed, and the test checks that every event arrived decoded.
+    mod every_event_type {
+        use super::*;
+        use crate::v2::uds::AgentClientV2Uds;
+        use std::sync::Mutex;
+        use std::time::Duration;
+
+        #[derive(Default)]
+        struct RecordingHandler {
+            seen: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl RecordingHandler {
+            fn record(&self, what: &str, cid: &str) {
+                self.seen
+                    .lock()
+                    .expect("recording handler lock")
+                    .push(format!("{what}:{cid}"));
+            }
+        }
+
+        #[async_trait]
+        impl AgentHandlerV2 for RecordingHandler {
+            fn capabilities(&self) -> AgentCapabilities {
+                AgentCapabilities::new("recording", "Recording Agent", "1.0.0")
+                    .with_event(crate::EventType::RequestHeaders)
+                    .with_event(crate::EventType::RequestBodyChunk)
+                    .with_event(crate::EventType::ResponseHeaders)
+                    .with_event(crate::EventType::ResponseBodyChunk)
+                    .with_event(crate::EventType::RequestComplete)
+                    .with_event(crate::EventType::WebSocketFrame)
+            }
+
+            async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
+                self.record("request_headers", &event.metadata.correlation_id);
+                AgentResponse::default_allow()
+            }
+
+            async fn on_request_body_chunk(
+                &self,
+                event: crate::RequestBodyChunkEvent,
+            ) -> AgentResponse {
+                self.record("request_body_chunk", &event.correlation_id);
+                AgentResponse::default_allow()
+            }
+
+            async fn on_response_headers(
+                &self,
+                event: crate::ResponseHeadersEvent,
+            ) -> AgentResponse {
+                self.record("response_headers", &event.correlation_id);
+                AgentResponse::default_allow()
+            }
+
+            async fn on_response_body_chunk(
+                &self,
+                event: crate::ResponseBodyChunkEvent,
+            ) -> AgentResponse {
+                self.record("response_body_chunk", &event.correlation_id);
+                AgentResponse::default_allow()
+            }
+
+            async fn on_request_complete(
+                &self,
+                event: crate::RequestCompleteEvent,
+            ) -> AgentResponse {
+                self.record("request_complete", &event.correlation_id);
+                AgentResponse::default_allow()
+            }
+
+            async fn on_websocket_frame(&self, event: WebSocketFrameEvent) -> AgentResponse {
+                self.record("websocket_frame", &event.correlation_id);
+                AgentResponse::websocket_allow()
+            }
+
+            // A configure payload is an envelope: the correlation id sits
+            // beside the config rather than inside it, so what is recorded
+            // here is the config itself — enough to show it arrived decoded.
+            async fn on_configure(
+                &self,
+                config: serde_json::Value,
+                _version: Option<String>,
+            ) -> bool {
+                let setting = config
+                    .get("some-setting")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<missing>");
+                self.record("configure", setting);
+                true
+            }
+        }
+
+        fn metadata(cid: &str) -> RequestMetadata {
+            RequestMetadata {
+                correlation_id: cid.to_string(),
+                request_id: "req-1".to_string(),
+                client_ip: "127.0.0.1".to_string(),
+                client_port: 12345,
+                server_name: None,
+                protocol: "HTTP/1.1".to_string(),
+                tls_version: None,
+                tls_cipher: None,
+                route_id: None,
+                upstream_id: None,
+                timestamp: "0".to_string(),
+                traceparent: None,
+            }
+        }
+
+        /// Sends one of every event and returns what the handler saw.
+        async fn exercise_every_event(socket_suffix: &str) -> Vec<String> {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let handler = RecordingHandler {
+                seen: Arc::clone(&seen),
+            };
+
+            let socket_path = format!(
+                "/tmp/zentinel-every-event-{}-{}.sock",
+                std::process::id(),
+                socket_suffix
+            );
+            let _ = std::fs::remove_file(&socket_path);
+
+            let server = UdsAgentServerV2::new("every-event", &socket_path, Box::new(handler));
+            let server_handle = tokio::spawn(async move {
+                let _ = server.run().await;
+            });
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            let client = AgentClientV2Uds::new("client", &socket_path, Duration::from_secs(5))
+                .await
+                .expect("client connects");
+            client.connect().await.expect("handshake succeeds");
+
+            // Each call blocks until the server's reply is matched back to it
+            // by correlation id, so a mismatched id shows up as a timeout.
+            client
+                .send_request_headers(
+                    "cid-headers",
+                    &RequestHeadersEvent {
+                        metadata: metadata("cid-headers"),
+                        method: "GET".to_string(),
+                        uri: "/test".to_string(),
+                        headers: std::collections::HashMap::new(),
+                    },
+                )
+                .await
+                .expect("request headers");
+
+            client
+                .send_request_body_chunk(
+                    "cid-req-body",
+                    &crate::RequestBodyChunkEvent {
+                        correlation_id: "cid-req-body".to_string(),
+                        data: "aGk=".to_string(),
+                        is_last: true,
+                        total_size: Some(2),
+                        chunk_index: 0,
+                        bytes_received: 2,
+                    },
+                )
+                .await
+                .expect("request body chunk");
+
+            client
+                .send_response_headers(
+                    "cid-resp-headers",
+                    &crate::ResponseHeadersEvent {
+                        correlation_id: "cid-resp-headers".to_string(),
+                        status: 200,
+                        headers: std::collections::HashMap::new(),
+                    },
+                )
+                .await
+                .expect("response headers");
+
+            client
+                .send_response_body_chunk(
+                    "cid-resp-body",
+                    &crate::ResponseBodyChunkEvent {
+                        correlation_id: "cid-resp-body".to_string(),
+                        data: "aGk=".to_string(),
+                        is_last: true,
+                        total_size: Some(2),
+                        chunk_index: 0,
+                        bytes_sent: 2,
+                    },
+                )
+                .await
+                .expect("response body chunk");
+
+            client
+                .send_request_complete(
+                    "cid-complete",
+                    &crate::RequestCompleteEvent {
+                        correlation_id: "cid-complete".to_string(),
+                        status: 200,
+                        duration_ms: 1,
+                        request_body_size: 2,
+                        response_body_size: 2,
+                        upstream_attempts: 1,
+                        error: None,
+                    },
+                )
+                .await
+                .expect("request complete");
+
+            client
+                .send_websocket_frame(
+                    "cid-ws",
+                    &WebSocketFrameEvent {
+                        correlation_id: "cid-ws".to_string(),
+                        opcode: "text".to_string(),
+                        data: "aGk=".to_string(),
+                        client_to_server: true,
+                        frame_index: 0,
+                        fin: true,
+                        route_id: None,
+                        client_ip: "127.0.0.1".to_string(),
+                    },
+                )
+                .await
+                .expect("websocket frame");
+
+            client
+                .send_configure(
+                    "cid-configure",
+                    &serde_json::json!({ "config": { "some-setting": "value" } }),
+                )
+                .await
+                .expect("configure");
+
+            server_handle.abort();
+            let _ = std::fs::remove_file(&socket_path);
+
+            let recorded = seen.lock().expect("recording handler lock").clone();
+            recorded
+        }
+
+        fn expected() -> Vec<String> {
+            vec![
+                "request_headers:cid-headers".to_string(),
+                "request_body_chunk:cid-req-body".to_string(),
+                "response_headers:cid-resp-headers".to_string(),
+                "response_body_chunk:cid-resp-body".to_string(),
+                "request_complete:cid-complete".to_string(),
+                "websocket_frame:cid-ws".to_string(),
+                "configure:value".to_string(),
+            ]
+        }
+
+        #[tokio::test]
+        async fn every_event_type_round_trips_over_json() {
+            assert_eq!(exercise_every_event("json").await, expected());
+        }
+
+        /// The regression test for #360. Without the fix this hangs on the
+        /// second event and fails on the first `expect` after it.
+        #[cfg(feature = "binary-uds")]
+        #[tokio::test]
+        async fn every_event_type_round_trips_over_messagepack() {
+            assert_eq!(exercise_every_event("msgpack").await, expected());
         }
     }
 

@@ -116,10 +116,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
+      # --all-features here too: without it, docs on feature-gated items are
+      # never rendered and their broken links go unnoticed.
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps --all-features
 
   test:
     name: Unit Tests
@@ -159,5 +161,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
+      # --all-features matches the clippy job above. Without it, optional
+      # features are compiled by clippy but executed by nothing, which is how
+      # `binary-uds` shipped hanging every agent call but one (#359, #360).
       - name: Run unit tests
-        run: cargo test --workspace --lib
+        run: cargo test --workspace --lib --all-features
