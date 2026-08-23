@@ -54,8 +54,18 @@ pub struct ReverseConnectionConfig {
     pub max_connections_per_agent: usize,
     /// Allowed agent IDs (empty = allow all)
     pub allowed_agents: HashSet<String>,
-    /// Whether to require agent authentication
+    /// Whether to require agent authentication.
+    ///
+    /// When true, [`Self::auth_tokens`] must be non-empty — binding fails
+    /// otherwise, rather than accepting every connection. A registering agent
+    /// must present a token in that set.
     pub require_auth: bool,
+    /// Tokens accepted from registering agents.
+    ///
+    /// Only consulted when [`Self::require_auth`] is set. Compared in constant
+    /// time: registration is a policy decision, and an attacker who can time
+    /// it can otherwise recover the token a byte at a time.
+    pub auth_tokens: HashSet<String>,
     /// Request timeout for accepted connections
     pub request_timeout: Duration,
 }
@@ -68,6 +78,7 @@ impl Default for ReverseConnectionConfig {
             max_connections_per_agent: 4,
             allowed_agents: HashSet::new(),
             require_auth: false,
+            auth_tokens: HashSet::new(),
             request_timeout: Duration::from_secs(30),
         }
     }
@@ -119,6 +130,18 @@ impl ReverseConnectionListener {
         let path = path.as_ref();
         let socket_path = path.to_string_lossy().to_string();
 
+        // A listener that requires authentication but has no tokens to check
+        // against would accept everything. Refusing to start is the only safe
+        // reading of that configuration: it is a mistake, and the alternative
+        // is a proxy that reports authentication is on while it is not.
+        if config.require_auth && config.auth_tokens.is_empty() {
+            return Err(AgentProtocolError::ConnectionFailed(format!(
+                "Refusing to bind {socket_path}: require_auth is set but auth_tokens is \
+                 empty, which would authenticate every caller. Configure at least one \
+                 token, or clear require_auth to accept unauthenticated agents knowingly."
+            )));
+        }
+
         // Remove existing socket file if present
         if path.exists() {
             std::fs::remove_file(path).map_err(|e| {
@@ -136,7 +159,28 @@ impl ReverseConnectionListener {
             ))
         })?;
 
-        info!(path = %socket_path, "Reverse connection listener bound");
+        // Connecting to this socket means being trusted as a source of policy
+        // decisions, so the socket itself is the access control. Without this
+        // it lands at whatever the umask allows — commonly world-connectable.
+        //
+        // Set after bind rather than via umask so it holds regardless of the
+        // caller's process state.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = std::fs::Permissions::from_mode(0o600);
+            std::fs::set_permissions(path, permissions).map_err(|e| {
+                AgentProtocolError::ConnectionFailed(format!(
+                    "Bound {socket_path} but could not restrict its permissions to 0600: {e}. \
+                     Refusing to serve on a socket that may be world-connectable."
+                ))
+            })?;
+        }
+
+        info!(
+            path = %socket_path,
+            require_auth = config.require_auth,
+            "Reverse connection listener bound"
+        );
 
         Ok(Self {
             listener,
@@ -339,15 +383,54 @@ impl ReverseConnectionListener {
             )));
         }
 
-        // Check authentication if required
-        if self.config.require_auth && registration.auth_token.is_none() {
-            return Err(AgentProtocolError::InvalidMessage(
-                "Authentication required but no token provided".to_string(),
-            ));
+        // Check authentication if required.
+        //
+        // This used to test only that a token was *present*, never that it was
+        // correct, so any non-empty string authenticated. The token is now
+        // compared against the configured set.
+        if self.config.require_auth {
+            let Some(token) = registration.auth_token.as_deref() else {
+                return Err(AgentProtocolError::InvalidMessage(
+                    "Authentication required but no token provided".to_string(),
+                ));
+            };
+
+            if !token_is_accepted(token, &self.config.auth_tokens) {
+                // Deliberately vague: telling a caller whether the agent ID or
+                // the token was wrong helps them enumerate one of the two.
+                return Err(AgentProtocolError::InvalidMessage(
+                    "Registration rejected".to_string(),
+                ));
+            }
         }
 
         Ok(())
     }
+}
+
+/// Whether `presented` matches any accepted token, in constant time.
+///
+/// Every candidate is compared even after a match is found, so the work done
+/// does not depend on which token matched or on how many were tried.
+///
+/// The comparison is constant-time with respect to token *contents*. Length is
+/// not hidden — `ct_eq` requires equal-length inputs, so a mismatched length
+/// is rejected without a byte comparison. That leaks the length of the
+/// expected token, which is not the secret.
+fn token_is_accepted(presented: &str, accepted: &HashSet<String>) -> bool {
+    use subtle::ConstantTimeEq;
+
+    let presented = presented.as_bytes();
+    let mut matched = subtle::Choice::from(0u8);
+
+    for candidate in accepted {
+        let candidate = candidate.as_bytes();
+        if candidate.len() == presented.len() {
+            matched |= candidate.ct_eq(presented);
+        }
+    }
+
+    bool::from(matched)
 }
 
 impl Drop for ReverseConnectionListener {
@@ -673,6 +756,128 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `require_auth` used to check only that a token was *present*, so any
+    /// non-empty string authenticated. These tests exercise it with a token
+    /// that should fail — which is the case the original had none of, and the
+    /// reason a security control sat inert without anything noticing.
+    mod registration_authentication {
+        use super::*;
+
+        fn config_with_tokens(tokens: &[&str]) -> ReverseConnectionConfig {
+            ReverseConnectionConfig {
+                backlog: 128,
+                handshake_timeout: Duration::from_secs(10),
+                max_connections_per_agent: 4,
+                allowed_agents: HashSet::new(),
+                require_auth: true,
+                auth_tokens: tokens.iter().map(|t| t.to_string()).collect(),
+                request_timeout: Duration::from_secs(30),
+            }
+        }
+
+        #[test]
+        fn the_correct_token_is_accepted() {
+            let accepted = config_with_tokens(&["s3cret"]).auth_tokens;
+            assert!(token_is_accepted("s3cret", &accepted));
+        }
+
+        /// The regression. Before the fix, every one of these authenticated.
+        #[test]
+        fn a_wrong_token_is_rejected() {
+            let accepted = config_with_tokens(&["s3cret"]).auth_tokens;
+            for wrong in ["", "hunter2", "s3cre", "s3cret ", "S3CRET", "s3cretx"] {
+                assert!(
+                    !token_is_accepted(wrong, &accepted),
+                    "{wrong:?} must not authenticate against 's3cret'"
+                );
+            }
+        }
+
+        #[test]
+        fn any_configured_token_is_accepted() {
+            let accepted = config_with_tokens(&["first", "second", "third"]).auth_tokens;
+            assert!(token_is_accepted("first", &accepted));
+            assert!(token_is_accepted("second", &accepted));
+            assert!(token_is_accepted("third", &accepted));
+            assert!(!token_is_accepted("fourth", &accepted));
+        }
+
+        #[test]
+        fn no_configured_tokens_accepts_nothing() {
+            let accepted = HashSet::new();
+            assert!(!token_is_accepted("", &accepted));
+            assert!(!token_is_accepted("anything", &accepted));
+        }
+
+        /// A listener that demands authentication with nothing to check
+        /// against would authenticate everyone. It must not start.
+        #[tokio::test]
+        async fn requiring_auth_without_tokens_refuses_to_bind() {
+            let path = format!("/tmp/zentinel-rev-noauth-{}.sock", std::process::id());
+            let _ = std::fs::remove_file(&path);
+
+            let config = ReverseConnectionConfig {
+                backlog: 128,
+                handshake_timeout: Duration::from_secs(10),
+                max_connections_per_agent: 4,
+                allowed_agents: HashSet::new(),
+                require_auth: true,
+                auth_tokens: HashSet::new(),
+                request_timeout: Duration::from_secs(30),
+            };
+
+            match ReverseConnectionListener::bind_uds(&path, config).await {
+                Ok(_) => panic!("binding with require_auth and no tokens must fail"),
+                Err(err) => assert!(
+                    err.to_string().contains("would authenticate every caller"),
+                    "unexpected error: {err}"
+                ),
+            }
+            assert!(
+                !std::path::Path::new(&path).exists(),
+                "a refused bind should not leave a socket behind"
+            );
+        }
+
+        /// Connecting to this socket means being trusted as a policy source,
+        /// so the socket file is the access control.
+        #[tokio::test]
+        async fn the_socket_is_not_world_connectable() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let path = format!("/tmp/zentinel-rev-perms-{}.sock", std::process::id());
+            let _ = std::fs::remove_file(&path);
+
+            let listener =
+                ReverseConnectionListener::bind_uds(&path, ReverseConnectionConfig::default())
+                    .await
+                    .expect("bind should succeed");
+
+            let mode = std::fs::metadata(&path)
+                .expect("socket should exist")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                "socket mode is {mode:o}, which lets other local users connect"
+            );
+
+            drop(listener);
+            let _ = std::fs::remove_file(&path);
+        }
+
+        /// The permissive defaults are deliberate for a listener nothing
+        /// starts, but they should be a decision rather than a surprise.
+        #[test]
+        fn defaults_do_not_require_auth_and_have_no_tokens() {
+            let config = ReverseConnectionConfig::default();
+            assert!(!config.require_auth);
+            assert!(config.auth_tokens.is_empty());
+            assert!(config.allowed_agents.is_empty());
+        }
+    }
 
     #[test]
     fn test_config_default() {
