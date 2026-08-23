@@ -626,6 +626,24 @@ fn validate_acme_domains(config: &Config, errors: &mut Vec<String>) {
     let mut domain_source: HashMap<String, String> = HashMap::new();
 
     for listener in &config.listeners {
+        // Mutual TLS with nothing to verify against is not mutual TLS. The
+        // proxy used to log a warning and serve without client
+        // authentication, so an operator could configure mTLS, pass
+        // `zentinel validate`, start the proxy, and be accepting
+        // unauthenticated clients while believing otherwise. Rejecting here
+        // means the mistake surfaces before traffic does.
+        if let Some(ref tls) = listener.tls {
+            if tls.client_auth && tls.ca_file.is_none() {
+                errors.push(format!(
+                    "Listener '{}' sets client-auth but no ca-file. Client certificates \
+                     cannot be verified without a CA to verify them against, so this would \
+                     serve ordinary TLS while appearing to require client certificates. \
+                     Add ca-file, or remove client-auth.",
+                    listener.id
+                ));
+            }
+        }
+
         // 1. Root-level ACME for listener
         if let Some(ref tls) = listener.tls {
             if let Some(ref acme) = tls.acme {
@@ -1187,6 +1205,69 @@ mod tests {
         UpstreamConfig, UpstreamTarget, UpstreamTimeouts,
     };
     use zentinel_common::types::LoadBalancingAlgorithm;
+
+    /// mTLS with no CA to verify against is not mTLS. The proxy used to warn
+    /// and serve without client authentication, so a config requesting mutual
+    /// TLS could pass validation, start, and accept unauthenticated clients.
+    mod client_auth_requires_a_ca {
+        use super::*;
+
+        fn config_with_tls(tls_body: &str) -> String {
+            format!(
+                "system {{\n  workers 2\n}}\n\
+                 listeners {{\n  listener \"https\" {{\n    address \"127.0.0.1:8443\"\n\
+                 \x20   tls {{\n{tls_body}\n    }}\n  }}\n}}\n\
+                 upstreams {{\n  upstream \"b\" {{\n    target \"127.0.0.1:9000\"\n  }}\n}}\n\
+                 routes {{\n  route \"r\" {{\n    matches {{\n      path-prefix \"/\"\n    }}\n\
+                 \x20   upstream \"b\"\n  }}\n}}\n"
+            )
+        }
+
+        const CERTS: &str = "      cert-file \"/tmp/x.crt\"\n      key-file \"/tmp/x.key\"";
+
+        #[test]
+        fn client_auth_without_a_ca_file_is_rejected() {
+            let kdl = config_with_tls(&format!("{CERTS}\n      client-auth #true"));
+            let config = Config::from_kdl(&kdl).expect("should parse");
+            let err = config
+                .validate()
+                .expect_err("mTLS without a CA must not validate");
+            let message = err.to_string();
+            assert!(
+                message.contains("client-auth") && message.contains("ca-file"),
+                "error should name both settings, got: {message}"
+            );
+        }
+
+        #[test]
+        fn client_auth_with_a_ca_file_is_accepted() {
+            let kdl = config_with_tls(&format!(
+                "{CERTS}\n      client-auth #true\n      ca-file \"/tmp/ca.crt\""
+            ));
+            let config = Config::from_kdl(&kdl).expect("should parse");
+            assert!(
+                config.validate().is_ok(),
+                "mTLS with a CA should validate: {:?}",
+                config.validate()
+            );
+        }
+
+        /// Ordinary one-way TLS is untouched.
+        #[test]
+        fn tls_without_client_auth_is_accepted() {
+            let kdl = config_with_tls(CERTS);
+            let config = Config::from_kdl(&kdl).expect("should parse");
+            assert!(config.validate().is_ok());
+        }
+
+        /// A CA with no client-auth is harmless — it just goes unused.
+        #[test]
+        fn a_ca_file_without_client_auth_is_accepted() {
+            let kdl = config_with_tls(&format!("{CERTS}\n      ca-file \"/tmp/ca.crt\""));
+            let config = Config::from_kdl(&kdl).expect("should parse");
+            assert!(config.validate().is_ok());
+        }
+    }
 
     #[test]
     fn listener_referencing_unknown_namespace_fails_validation() {
