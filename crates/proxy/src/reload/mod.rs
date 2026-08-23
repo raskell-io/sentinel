@@ -10,6 +10,7 @@
 //! - `validators`: Runtime configuration validators
 
 mod coordinator;
+pub mod diff;
 mod signals;
 mod validators;
 
@@ -565,6 +566,31 @@ impl ConfigManager {
     /// translated Kubernetes resources into the proxy without file I/O.
     ///
     /// Runs the full validation → hooks → atomic swap → hooks pipeline.
+    /// Apply one incremental change to the live configuration.
+    ///
+    /// Clones the current configuration, applies the single change, and hands
+    /// the result to [`apply_config`](Self::apply_config) -- so validation,
+    /// the atomic swap, event emission and rollback all behave exactly as they
+    /// do for a full reload. The difference is only in how the new
+    /// configuration was produced.
+    ///
+    /// The change is rejected before anything is swapped if it does not apply:
+    /// adding a route that exists, removing a target that does not. Reporting
+    /// success for those would tell the caller their proxy is in a state it is
+    /// not in.
+    pub async fn apply_change(&self, change: diff::ConfigChange) -> ZentinelResult<()> {
+        let summary = change.summary();
+        let mut next = (*self.current()).clone();
+
+        if let Err(e) = change.apply_to(&mut next) {
+            warn!(change = %summary, error = %e, "Rejected configuration change");
+            return Err(e);
+        }
+
+        info!(change = %summary, "Applying configuration change");
+        self.apply_config(next, ReloadTrigger::Manual).await
+    }
+
     pub async fn apply_config(
         &self,
         new_config: Config,
