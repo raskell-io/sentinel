@@ -9,7 +9,9 @@ use zentinel_common::budget::{
     BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig,
 };
 
+use crate::filters::RateLimitKey;
 use crate::{kdl::retrypolicy_helper::parse_retry_policy, routes::*};
+use zentinel_common::types::ByteSize;
 
 use super::helpers::{
     get_bool_entry, get_first_arg_string, get_float_entry, get_int_entry, get_string_entry,
@@ -143,12 +145,26 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     }
                 }
 
-                // Build route policies with optional cache config
+                // Every field is spelled out. This used to end in
+                // `..RoutePolicies::default()`, which quietly left six of the
+                // nine fields at their defaults no matter what the config
+                // said — `failure-mode "open"` ran fail-closed, per-route
+                // timeouts and rate limits never applied. Adding a field to
+                // RoutePolicies should break this line, not slip through it.
+                let settings = parse_route_policy_settings(child)?;
                 let policies = RoutePolicies {
                     request_headers,
                     response_headers,
                     cache: cache_config,
-                    ..RoutePolicies::default()
+                    timeout_secs: settings.timeout_secs,
+                    max_body_size: settings.max_body_size,
+                    rate_limit: settings.rate_limit,
+                    failure_mode: settings.failure_mode,
+                    // Not parsed: nothing in the proxy reads these, and there
+                    // is no KDL key for them. See #366 — they want either
+                    // implementing or removing, not wiring to a dead end.
+                    buffer_requests: false,
+                    buffer_responses: false,
                 };
 
                 routes.push(RouteConfig {
@@ -420,6 +436,119 @@ fn parse_route_filter_refs(node: &kdl::KdlNode) -> Result<Vec<String>> {
 ///     }
 /// }
 /// ```
+/// The settings a `policies` block can carry beyond header rewriting and
+/// caching, which are parsed separately.
+struct RoutePolicySettings {
+    timeout_secs: Option<u64>,
+    max_body_size: Option<ByteSize>,
+    rate_limit: Option<RateLimitPolicy>,
+    failure_mode: FailureMode,
+}
+
+/// Parse the `policies` block of a route.
+///
+/// Absent `policies`, or a `policies` block that sets none of these, yields
+/// defaults — notably `failure_mode: Closed`, which is the safe direction: a
+/// route only becomes fail-open when its config asks for it in as many words.
+fn parse_route_policy_settings(route: &kdl::KdlNode) -> Result<RoutePolicySettings> {
+    let Some(policies) = route
+        .children()
+        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "policies"))
+    else {
+        return Ok(RoutePolicySettings {
+            timeout_secs: None,
+            max_body_size: None,
+            rate_limit: None,
+            failure_mode: FailureMode::default(),
+        });
+    };
+
+    let timeout_secs = get_int_entry(policies, "timeout-secs").map(|v| v as u64);
+
+    // Accepts both `max-body-size "10MB"` and a plain byte count.
+    let max_body_size = match get_string_entry(policies, "max-body-size") {
+        Some(s) => Some(
+            s.parse::<ByteSize>()
+                .map_err(|e| anyhow::anyhow!("Invalid max-body-size '{s}': {e}"))?,
+        ),
+        None => get_int_entry(policies, "max-body-size").map(|v| ByteSize(v as usize)),
+    };
+
+    let failure_mode = match get_string_entry(policies, "failure-mode").as_deref() {
+        Some("open") => FailureMode::Open,
+        Some("closed") => FailureMode::Closed,
+        None => FailureMode::default(),
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown failure-mode '{other}'. Valid modes: open, closed"
+            ))
+        }
+    };
+
+    let rate_limit = policies
+        .children()
+        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "rate-limit"))
+        .map(parse_route_rate_limit)
+        .transpose()?;
+
+    Ok(RoutePolicySettings {
+        timeout_secs,
+        max_body_size,
+        rate_limit,
+        failure_mode,
+    })
+}
+
+/// Parse a route-level `rate-limit` block.
+fn parse_route_rate_limit(node: &kdl::KdlNode) -> Result<RateLimitPolicy> {
+    let requests_per_second = get_int_entry(node, "requests-per-second")
+        .map(|v| v as u32)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Route rate-limit requires 'requests-per-second', e.g. requests-per-second 100"
+            )
+        })?;
+
+    // A burst below the sustained rate would throttle below the configured
+    // rate, which is never what an operator means by "burst".
+    let burst = get_int_entry(node, "burst")
+        .map(|v| v as u32)
+        .unwrap_or(requests_per_second);
+
+    let key = match get_string_entry(node, "key").as_deref() {
+        None => RateLimitKey::default(),
+        // Both separators are accepted: the shipped config writes
+        // `key "client_ip"` while the filter-level parser documents
+        // `client-ip`, and silently resolving a mismatch to the default is
+        // how these settings go missing in the first place.
+        Some("client-ip") | Some("client_ip") => RateLimitKey::ClientIp,
+        Some("path") => RateLimitKey::Path,
+        Some("route") => RateLimitKey::Route,
+        Some("client-ip-and-path") | Some("client_ip_and_path") => RateLimitKey::ClientIpAndPath,
+        Some(header) if header.starts_with("header:") => {
+            let name = header.trim_start_matches("header:").trim();
+            if name.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "Rate limit key 'header:' needs a header name, e.g. key \"header:X-API-Key\""
+                ));
+            }
+            RateLimitKey::Header(name.to_string())
+        }
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown rate limit key '{other}'. Valid keys: client-ip, path, route, \
+                 client-ip-and-path, or header:<name>"
+            ))
+        }
+    };
+
+    Ok(RateLimitPolicy {
+        requests_per_second,
+        burst,
+        key,
+    })
+}
+
 fn parse_route_header_policies(
     node: &kdl::KdlNode,
 ) -> Result<(HeaderModifications, HeaderModifications)> {
@@ -1763,6 +1892,190 @@ fn parse_pii_detection_config(node: &kdl::KdlNode) -> Result<PiiDetectionConfig>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Six of these nine fields used to sit behind `..RoutePolicies::default()`
+    /// and hold their defaults no matter what the config said. Each test below
+    /// uses a value that differs from the default, so a field falling back to
+    /// its default fails the test rather than passing by coincidence.
+    mod route_policies_are_parsed {
+        use super::*;
+
+        fn policies_of(body: &str) -> RoutePolicies {
+            let kdl = format!(
+                "routes {{\n  route \"api\" {{\n    matches {{ path-prefix \"/api\" }}\n    upstream \"backend\"\n    policies {{\n      {body}\n    }}\n  }}\n}}\n"
+            );
+            let doc: kdl::KdlDocument = kdl.parse().expect("kdl should parse");
+            let node = doc.nodes().first().expect("routes node");
+            parse_routes(node)
+                .expect("routes should parse")
+                .remove(0)
+                .policies
+        }
+
+        #[test]
+        fn timeout_secs_is_read() {
+            assert_eq!(policies_of("timeout-secs 7").timeout_secs, Some(7));
+        }
+
+        #[test]
+        fn max_body_size_accepts_a_suffixed_string() {
+            let p = policies_of("max-body-size \"5MB\"");
+            assert_eq!(p.max_body_size.map(|b| b.0), Some(5 * 1024 * 1024));
+        }
+
+        #[test]
+        fn max_body_size_accepts_a_plain_byte_count() {
+            assert_eq!(
+                policies_of("max-body-size 4096").max_body_size.map(|b| b.0),
+                Some(4096)
+            );
+        }
+
+        /// The one that mattered: the proxy consumes this to decide whether to
+        /// block a request when an agent fails, and it was pinned to Closed.
+        #[test]
+        fn failure_mode_open_is_honoured() {
+            assert_eq!(
+                policies_of("failure-mode \"open\"").failure_mode,
+                FailureMode::Open
+            );
+        }
+
+        #[test]
+        fn failure_mode_closed_is_honoured() {
+            assert_eq!(
+                policies_of("failure-mode \"closed\"").failure_mode,
+                FailureMode::Closed
+            );
+        }
+
+        /// Absent configuration stays fail-closed: a route becomes fail-open
+        /// only by asking for it.
+        #[test]
+        fn failure_mode_defaults_to_closed() {
+            assert_eq!(
+                policies_of("timeout-secs 1").failure_mode,
+                FailureMode::Closed
+            );
+        }
+
+        #[test]
+        fn an_unknown_failure_mode_is_rejected() {
+            let kdl = "routes {\n  route \"api\" {\n    matches { path-prefix \"/api\" }\n    upstream \"backend\"\n    policies {\n      failure-mode \"fail-open\"\n    }\n  }\n}\n";
+            let doc: kdl::KdlDocument = kdl.parse().unwrap();
+            let err = parse_routes(doc.nodes().first().unwrap())
+                .expect_err("an unknown failure-mode should not be silently ignored");
+            assert!(err.to_string().contains("Unknown failure-mode"));
+        }
+
+        #[test]
+        fn rate_limit_is_read() {
+            let p = policies_of(
+                "rate-limit {\n        requests-per-second 100\n        burst 200\n        key \"client-ip\"\n      }",
+            );
+            let rl = p.rate_limit.expect("rate limit should be parsed");
+            assert_eq!(rl.requests_per_second, 100);
+            assert_eq!(rl.burst, 200);
+            assert_eq!(rl.key, RateLimitKey::ClientIp);
+        }
+
+        /// The shipped config writes the underscore form.
+        #[test]
+        fn rate_limit_key_accepts_either_separator() {
+            for spelling in ["client_ip", "client-ip"] {
+                let body = format!(
+                    "rate-limit {{\n        requests-per-second 10\n        key \"{spelling}\"\n      }}"
+                );
+                let rl = policies_of(&body).rate_limit.expect("parsed");
+                assert_eq!(rl.key, RateLimitKey::ClientIp, "for {spelling}");
+            }
+        }
+
+        #[test]
+        fn rate_limit_key_supports_headers() {
+            let rl = policies_of(
+                "rate-limit {\n        requests-per-second 10\n        key \"header:X-API-Key\"\n      }",
+            )
+            .rate_limit
+            .expect("parsed");
+            assert_eq!(rl.key, RateLimitKey::Header("X-API-Key".to_string()));
+        }
+
+        /// A burst below the sustained rate would throttle below the rate the
+        /// operator configured, so it defaults to the rate rather than to a
+        /// smaller constant.
+        #[test]
+        fn burst_defaults_to_the_configured_rate() {
+            let rl = policies_of("rate-limit {\n        requests-per-second 42\n      }")
+                .rate_limit
+                .expect("parsed");
+            assert_eq!(rl.burst, 42);
+        }
+
+        #[test]
+        fn a_rate_limit_without_a_rate_is_rejected() {
+            let kdl = "routes {\n  route \"api\" {\n    matches { path-prefix \"/api\" }\n    upstream \"backend\"\n    policies {\n      rate-limit {\n        burst 10\n      }\n    }\n  }\n}\n";
+            let doc: kdl::KdlDocument = kdl.parse().unwrap();
+            let err = parse_routes(doc.nodes().first().unwrap())
+                .expect_err("a rate-limit with no rate should be rejected");
+            assert!(err.to_string().contains("requests-per-second"));
+        }
+
+        #[test]
+        fn an_unknown_rate_limit_key_is_rejected() {
+            let kdl = "routes {\n  route \"api\" {\n    matches { path-prefix \"/api\" }\n    upstream \"backend\"\n    policies {\n      rate-limit {\n        requests-per-second 10\n        key \"whatever\"\n      }\n    }\n  }\n}\n";
+            let doc: kdl::KdlDocument = kdl.parse().unwrap();
+            let err = parse_routes(doc.nodes().first().unwrap())
+                .expect_err("an unknown rate limit key should not resolve to the default");
+            assert!(err.to_string().contains("Unknown rate limit key"));
+        }
+
+        #[test]
+        fn a_route_without_a_policies_block_gets_defaults() {
+            let kdl = "routes {\n  route \"api\" {\n    matches { path-prefix \"/api\" }\n    upstream \"backend\"\n  }\n}\n";
+            let doc: kdl::KdlDocument = kdl.parse().unwrap();
+            let p = parse_routes(doc.nodes().first().unwrap())
+                .expect("should parse")
+                .remove(0)
+                .policies;
+            assert_eq!(p.timeout_secs, None);
+            assert_eq!(p.max_body_size, None);
+            assert!(p.rate_limit.is_none());
+            assert_eq!(p.failure_mode, FailureMode::Closed);
+        }
+
+        /// Pins the regression to the shipped config, whose api-v1 route
+        /// declares four policies and used to get none of them.
+        #[test]
+        fn shipped_config_route_policies_take_effect() {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/zentinel.kdl");
+            let text = std::fs::read_to_string(path).expect("shipped config readable");
+            let config = crate::Config::from_kdl(&text).expect("shipped config parses");
+
+            let api = config
+                .routes
+                .iter()
+                .find(|r| r.id == "api-v1")
+                .expect("api-v1 route");
+
+            assert_eq!(api.policies.timeout_secs, Some(30));
+            assert_eq!(
+                api.policies.max_body_size.map(|b| b.0),
+                Some(10 * 1024 * 1024)
+            );
+            assert_eq!(api.policies.failure_mode, FailureMode::Closed);
+
+            let rl = api
+                .policies
+                .rate_limit
+                .as_ref()
+                .expect("api-v1 declares a rate limit and should get one");
+            assert_eq!(rl.requests_per_second, 100);
+            assert_eq!(rl.burst, 200);
+            assert_eq!(rl.key, RateLimitKey::ClientIp);
+        }
+    }
+
     use zentinel_common::types::Priority;
 
     /// Parse a KDL fragment like `route "test" { priority ... }` and return

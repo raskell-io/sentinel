@@ -66,12 +66,13 @@ for details.
 
 ## [Unreleased]
 
-> **Four behaviour changes to check before upgrading.** `retry-policy.max-attempts`
+> **Five behaviour changes to check before upgrading.** `retry-policy.max-attempts`
 > now retries requests rather than backend selection, host matching in routes is
 > now case-insensitive — a route written `host "Example.com"` previously matched
 > nothing and now matches `example.com` — and `connection-pool.max-lifetime-secs`
 > now takes effect, where it was previously ignored, as do the four
-> `upstream.timeouts` settings. All four are detailed below.
+> `upstream.timeouts` settings, and route `policies` — including
+> `failure-mode` — are now read at all. All five are detailed below.
 
 ### Added
 - **Certificate folders.** An `sni-certs` block points at a directory, and every
@@ -113,6 +114,24 @@ for details.
   nothing will now start matching. (#113)
 
 ### Fixed
+- **Route `policies` are read.** Six of the nine fields on `RoutePolicies` were
+  never populated: the parser set header rewriting and caching and left the rest
+  behind a `..Default::default()`. `timeout-secs`, `max-body-size`,
+  `failure-mode` and `rate-limit` are now parsed.
+
+  **`failure-mode` is the one to check before upgrading.** The proxy reads it to
+  decide whether to block a request when an agent fails, and it was pinned to
+  `closed` regardless of configuration. A route written `failure-mode "open"`
+  ran fail-closed, so an agent crash blocked that route's traffic rather than
+  letting it through. Those routes will now fail open, as their config asked.
+  Routes that say nothing are unaffected — the default is still `closed`, and a
+  route only becomes fail-open by naming it. An unrecognised value is now an
+  error rather than a silent fall back to `closed`.
+
+  Per-route `timeout-secs` and `rate-limit` also take effect for the first time,
+  so routes carrying them will start enforcing limits they previously declared
+  but did not apply. `buffer-requests` and `buffer-responses` are deliberately
+  still not parsed — nothing reads them (#366). (#368)
 - **Upstream timeouts are read.** `timeouts` accepted `connect`, `request`,
   `read` and `write`, while every shipped config and the documentation write
   `connect-secs`, `request-secs`, `read-secs` and `write-secs`. Every timeout in
