@@ -175,6 +175,10 @@ pub(super) fn parse_route(node: &KdlNode) -> Result<RouteConfig> {
         static_files: None,
         api_schema: None,
         inference: None,
+        // Multi-file routes do not yet carry agentic policy; the single-file
+        // parser is the one that reads these blocks.
+        mcp: None,
+        a2a: None,
         error_pages: None,
         websocket: get_bool_entry(node, "websocket").unwrap_or(false),
         websocket_inspection: get_bool_entry(node, "websocket-inspection").unwrap_or(false),

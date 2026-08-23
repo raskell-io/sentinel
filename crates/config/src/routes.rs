@@ -70,6 +70,17 @@ pub struct RouteConfig {
     #[serde(default)]
     pub inference: Option<InferenceConfig>,
 
+    /// Model Context Protocol policy for this route.
+    ///
+    /// Present means the route carries MCP traffic and the proxy inspects the
+    /// JSON-RPC envelope. Absent means it is forwarded as ordinary HTTP.
+    #[serde(default)]
+    pub mcp: Option<crate::agentic::McpConfig>,
+
+    /// Agent2Agent policy for this route.
+    #[serde(default)]
+    pub a2a: Option<crate::agentic::A2aConfig>,
+
     /// Error page configuration
     #[serde(default)]
     pub error_pages: Option<ErrorPageConfig>,

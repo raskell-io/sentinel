@@ -818,7 +818,11 @@ fn run_server(
                 proxy_service.add_tcp(&listener.address);
                 info!("HTTP listening on: {}", listener.address);
             }
-            zentinel_config::ListenerProtocol::Https => {
+            // `h2` is served by the HTTPS path: that listener already
+            // advertises h2 through ALPN, so the two are the same socket setup.
+            // They used to differ only in that `h2` fell through to a catch-all
+            // and bound nothing at all (#377).
+            zentinel_config::ListenerProtocol::Https | zentinel_config::ListenerProtocol::Http2 => {
                 match &listener.tls {
                     Some(tls_config) => {
                         // Determine certificate paths: manual or ACME-managed
@@ -980,8 +984,22 @@ fn run_server(
                     }
                 }
             }
-            _ => {
-                warn!("Unsupported protocol: {:?}", listener.protocol);
+            // Config validation rejects h3 before startup, so this is
+            // unreachable for a parsed config. Erroring rather than warning
+            // means a Config built in code cannot silently produce a listener
+            // that binds nothing — which is what the old catch-all did.
+            zentinel_config::ListenerProtocol::Http3 => {
+                error!(
+                    listener_id = %listener.id,
+                    address = %listener.address,
+                    "HTTP/3 is not implemented; refusing to start rather than \
+                     binding nothing. Use protocol \"https\" (which negotiates \
+                     HTTP/2 via ALPN) until QUIC support lands."
+                );
+                return Err(anyhow::anyhow!(
+                    "Listener '{}' requests HTTP/3, which is not implemented",
+                    listener.id
+                ));
             }
         }
     }

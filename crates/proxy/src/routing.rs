@@ -890,6 +890,8 @@ mod tests {
             websocket: false,
             websocket_inspection: false,
             inference: None,
+            mcp: None,
+            a2a: None,
             shadow: None,
             fallback: None,
         }
@@ -1075,6 +1077,8 @@ mod probe_113 {
             websocket: false,
             websocket_inspection: false,
             inference: None,
+            mcp: None,
+            a2a: None,
             shadow: None,
             fallback: None,
         }
@@ -1171,6 +1175,8 @@ mod route_cache_correctness {
             websocket: false,
             websocket_inspection: false,
             inference: None,
+            mcp: None,
+            a2a: None,
             shadow: None,
             fallback: None,
         }
@@ -1385,6 +1391,8 @@ mod route_matching_edges {
             websocket: false,
             websocket_inspection: false,
             inference: None,
+            mcp: None,
+            a2a: None,
             shadow: None,
             fallback: None,
         }
