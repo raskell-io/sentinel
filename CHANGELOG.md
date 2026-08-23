@@ -66,7 +66,7 @@ for details.
 
 ## [Unreleased]
 
-> **Five behaviour changes to check before upgrading.** `retry-policy.max-attempts`
+> **Six behaviour changes to check before upgrading.** `retry-policy.max-attempts`
 > now retries requests rather than backend selection, host matching in routes is
 > now case-insensitive — a route written `host "Example.com"` previously matched
 > nothing and now matches `example.com` — and `connection-pool.max-lifetime-secs`
@@ -124,6 +124,16 @@ for details.
   nothing will now start matching. (#113)
 
 ### Fixed
+- **`client-auth` without `ca-file` is now rejected instead of silently serving
+  ordinary TLS.** Client certificates cannot be verified without a CA to verify
+  them against, and the proxy logged a warning and carried on with client
+  authentication disabled. An operator could configure mutual TLS, pass
+  `zentinel test` and `zentinel validate`, start the proxy, and be accepting
+  unauthenticated clients — with one startup warning as the only signal. For
+  internal traffic where mTLS is often the only authentication, that is the
+  whole control. **A config with `client-auth` and no `ca-file` will now fail
+  to start**; it was never getting mutual TLS, so the failure reveals a
+  misconfiguration rather than creating one.
 - **`ReverseConnectionConfig::require_auth` now authenticates.** It checked that
   a registering agent sent *a* token, never that the token was correct, so any
   non-empty string authenticated. Tokens are now compared in constant time
