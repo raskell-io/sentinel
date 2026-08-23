@@ -69,6 +69,18 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         ],
     },
     ClosedBlock {
+        name: "ruleset",
+        keys: &[
+            "crs-version",
+            "custom-rules-dir",
+            "paranoia-level",
+            "anomaly-threshold",
+            // Exclusions are accepted grouped in a wrapper or listed directly.
+            "exclusions",
+            "exclusion",
+        ],
+    },
+    ClosedBlock {
         name: "policies",
         keys: &[
             "request-headers",
