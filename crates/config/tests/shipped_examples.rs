@@ -9,19 +9,46 @@ use std::path::{Path, PathBuf};
 
 use zentinel_config::Config;
 
-/// `config/examples`, resolved relative to this crate.
-fn examples_dir() -> PathBuf {
+/// Repository root, resolved relative to this crate.
+fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../config/examples")
+        .join("../..")
         .canonicalize()
-        .expect("config/examples should exist")
+        .expect("repository root should exist")
+}
+
+/// `config/examples`, the canonical example directory.
+fn examples_dir() -> PathBuf {
+    repo_root().join("config/examples")
+}
+
+/// Every directory that ships example configurations.
+///
+/// `config/examples` is the canonical one. The repository root also had an
+/// `examples/` directory, holding two files that had not parsed for some time
+/// (issue #353); this sweep only checked `config/examples`, so nothing
+/// noticed. Both are checked now, and a root `examples/` is tolerated rather
+/// than required, so re-adding one puts it under the same check rather than
+/// outside it.
+fn example_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![examples_dir()];
+    let root_examples = repo_root().join("examples");
+    if root_examples.is_dir() {
+        dirs.push(root_examples);
+    }
+    dirs
 }
 
 fn example_files() -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
-        .expect("config/examples should be readable")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
+    let mut files: Vec<PathBuf> = example_dirs()
+        .into_iter()
+        .flat_map(|dir| {
+            std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("{} should be readable: {e}", dir.display()))
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>()
+        })
         .filter(|path| path.extension().is_some_and(|ext| ext == "kdl"))
         .collect();
     files.sort();
