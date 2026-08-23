@@ -335,7 +335,21 @@ fn lint_config(config_path: Option<&str>) -> Result<()> {
         .context("Configuration schema validation failed")?;
 
     // Lint for best practices
-    let result = zentinel_config::validate::lint::lint_config(&config);
+    let mut result = zentinel_config::validate::lint::lint_config(&config);
+
+    // Unknown-key checking needs the source text, not the parsed config: by
+    // the time a Config exists, keys no parser recognised have already been
+    // dropped. Only meaningful for a config read from a file.
+    if let Some(path) = config_path {
+        match std::fs::read_to_string(path) {
+            Ok(source) => {
+                zentinel_config::validate::unknown_keys::check_unknown_keys(&source, &mut result)
+            }
+            Err(e) => {
+                warn!(path = %path, error = %e, "Could not re-read config to check for unknown keys")
+            }
+        }
+    }
 
     // Print results
     if result.warnings.is_empty() {
