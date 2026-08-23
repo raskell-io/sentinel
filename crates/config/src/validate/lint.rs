@@ -95,7 +95,132 @@ pub fn lint_config(config: &Config) -> ValidationResult {
         }
     }
 
+    check_resource_bounds(config, &mut result);
+
     result
+}
+
+/// Bounds above which a limit is more likely a typo than a decision.
+///
+/// These are not enforcement thresholds. A lint asks a question; it does not
+/// refuse the config. They sit far enough above realistic values that crossing
+/// one usually means a unit was misread or a zero slipped in.
+mod bound_thresholds {
+    /// Roughly a file descriptor per connection, well past a default ulimit.
+    pub const GENEROUS_MAX_CONNECTIONS: usize = 100_000;
+    /// Per upstream target, not in total.
+    pub const GENEROUS_UPSTREAM_CONNECTIONS: usize = 10_000;
+    /// Each entry is a route ID keyed by method, host, path, and any matched
+    /// headers and query parameters.
+    pub const GENEROUS_ROUTE_CACHE: usize = 1_000_000;
+    /// A buffered body is held in memory for the life of the request.
+    pub const GENEROUS_BODY_SIZE: usize = 128 * 1024 * 1024;
+    /// In-flight calls to a single agent.
+    pub const GENEROUS_AGENT_CONCURRENCY: usize = 10_000;
+}
+
+/// Warn about resource limits that are missing, disabled, or generous enough
+/// to be indistinguishable from unbounded.
+///
+/// The proxy should refuse traffic under load rather than grow until it is
+/// killed. Most of that is enforced at runtime, and most of it already is;
+/// what runtime enforcement cannot help with is a configuration that removes
+/// the bound in the first place.
+fn check_resource_bounds(config: &Config, result: &mut ValidationResult) {
+    use bound_thresholds::*;
+
+    if config.server.max_connections == 0 {
+        result.add_warning(ValidationWarning::new(
+            "server.max-connections is 0, which accepts connections without limit. \
+             Set a value the host can actually serve, so the proxy refuses traffic \
+             under load rather than growing until it is killed."
+                .to_string(),
+        ));
+    } else if config.server.max_connections > GENEROUS_MAX_CONNECTIONS {
+        result.add_warning(ValidationWarning::new(format!(
+            "server.max-connections is {}, high enough that the file descriptor \
+             limit will be reached first. Check `ulimit -n`.",
+            config.server.max_connections
+        )));
+    }
+
+    if config.server.route_cache_size > GENEROUS_ROUTE_CACHE {
+        result.add_warning(ValidationWarning::new(format!(
+            "server.route-cache-size is {}. Each entry is keyed by method, host, \
+             path and any matched headers or query parameters, so a large cache on \
+             varied traffic holds a lot of memory for little hit rate.",
+            config.server.route_cache_size
+        )));
+    }
+
+    for (name, upstream) in &config.upstreams {
+        let pool = &upstream.connection_pool;
+
+        if pool.max_connections == 0 {
+            result.add_warning(ValidationWarning::new(format!(
+                "Upstream '{name}' has connection-pool max-connections 0, so the pool \
+                 is unbounded. A slow upstream will accumulate connections until the \
+                 process runs out of them."
+            )));
+        } else if pool.max_connections > GENEROUS_UPSTREAM_CONNECTIONS {
+            result.add_warning(ValidationWarning::new(format!(
+                "Upstream '{name}' allows {} connections per target, more than most \
+                 origins accept. The effective limit will be the origin's, and it \
+                 will surface as errors rather than as backpressure.",
+                pool.max_connections
+            )));
+        }
+
+        if pool.max_connections > 0 && pool.max_idle > pool.max_connections {
+            result.add_warning(ValidationWarning::new(format!(
+                "Upstream '{name}' has max-idle ({}) greater than max-connections \
+                 ({}), so the idle bound can never be reached.",
+                pool.max_idle, pool.max_connections
+            )));
+        }
+    }
+
+    for route in &config.routes {
+        let policies = &route.policies;
+
+        // A buffered body is held in memory for the life of the request, so an
+        // unbounded one is a per-request allocation the client chooses.
+        if (policies.buffer_requests || policies.buffer_responses)
+            && policies.max_body_size.is_none()
+        {
+            result.add_warning(ValidationWarning::new(format!(
+                "Route '{}' buffers bodies but sets no max-body-size, so one request \
+                 can allocate as much memory as it asks for.",
+                route.id
+            )));
+        }
+
+        if let Some(max_body) = policies.max_body_size {
+            if max_body.0 > GENEROUS_BODY_SIZE {
+                result.add_warning(ValidationWarning::new(format!(
+                    "Route '{}' allows a {} byte body. With buffering enabled that is \
+                     held in memory for each concurrent request.",
+                    route.id, max_body.0
+                )));
+            }
+        }
+    }
+
+    for agent in &config.agents {
+        if agent.max_concurrent_calls == 0 {
+            result.add_warning(ValidationWarning::new(format!(
+                "Agent '{}' has max-concurrent-calls 0, so calls to it are unbounded. \
+                 A slow agent will hold every in-flight request.",
+                agent.id
+            )));
+        } else if agent.max_concurrent_calls > GENEROUS_AGENT_CONCURRENCY {
+            result.add_warning(ValidationWarning::new(format!(
+                "Agent '{}' allows {} concurrent calls, which is unlikely to be a \
+                 limit the agent itself can honour.",
+                agent.id, agent.max_concurrent_calls
+            )));
+        }
+    }
 }
 
 /// HSTS header name (case-insensitive comparison should be used)
@@ -400,5 +525,126 @@ mod tests {
             !result.warnings.iter().any(|w| w.message.contains("HSTS")),
             "Should not warn about HSTS when there's no TLS listener"
         );
+    }
+}
+
+#[cfg(test)]
+mod resource_bound_tests {
+    use super::*;
+    use crate::Config;
+    use zentinel_common::types::ByteSize;
+
+    fn warnings(config: &Config) -> Vec<String> {
+        lint_config(config)
+            .warnings
+            .iter()
+            .map(|w| w.message.clone())
+            .collect()
+    }
+
+    fn mentions(config: &Config, needle: &str) -> bool {
+        warnings(config).iter().any(|w| w.contains(needle))
+    }
+
+    /// A limit of zero reads as "no limit", which is the one value that turns a
+    /// bound into its opposite.
+    #[test]
+    fn a_zero_connection_limit_is_reported() {
+        let mut config = Config::default_for_testing();
+        config.server.max_connections = 0;
+        assert!(mentions(&config, "server.max-connections is 0"));
+    }
+
+    #[test]
+    fn an_implausibly_large_connection_limit_is_reported() {
+        let mut config = Config::default_for_testing();
+        config.server.max_connections = 5_000_000;
+        assert!(mentions(&config, "file descriptor"));
+    }
+
+    /// The defaults must be quiet. A lint that fires on a stock config gets
+    /// switched off, and then it protects nothing.
+    #[test]
+    fn a_default_config_produces_no_resource_bound_warnings() {
+        let config = Config::default_for_testing();
+        let bound_warnings: Vec<_> = warnings(&config)
+            .into_iter()
+            .filter(|w| {
+                w.contains("max-connections")
+                    || w.contains("route-cache-size")
+                    || w.contains("max-body-size")
+                    || w.contains("max-concurrent-calls")
+                    || w.contains("max-idle")
+            })
+            .collect();
+        assert!(
+            bound_warnings.is_empty(),
+            "defaults should not trip the bounds lint: {bound_warnings:?}"
+        );
+    }
+
+    #[test]
+    fn an_unbounded_upstream_pool_is_reported() {
+        let mut config = Config::default_for_testing();
+        for upstream in config.upstreams.values_mut() {
+            upstream.connection_pool.max_connections = 0;
+        }
+        assert!(mentions(&config, "connection-pool max-connections 0"));
+    }
+
+    /// An idle bound above the total is unreachable, so it reads as configured
+    /// while doing nothing.
+    #[test]
+    fn an_unreachable_idle_bound_is_reported() {
+        let mut config = Config::default_for_testing();
+        for upstream in config.upstreams.values_mut() {
+            upstream.connection_pool.max_connections = 10;
+            upstream.connection_pool.max_idle = 100;
+        }
+        assert!(mentions(&config, "can never be reached"));
+    }
+
+    /// Buffering without a size limit is the combination that turns one
+    /// request into as much memory as it asks for.
+    #[test]
+    fn buffering_without_a_body_limit_is_reported() {
+        let mut config = Config::default_for_testing();
+        for route in &mut config.routes {
+            route.policies.buffer_requests = true;
+            route.policies.max_body_size = None;
+        }
+        assert!(mentions(
+            &config,
+            "buffers bodies but sets no max-body-size"
+        ));
+    }
+
+    #[test]
+    fn buffering_with_a_body_limit_is_not_reported() {
+        let mut config = Config::default_for_testing();
+        for route in &mut config.routes {
+            route.policies.buffer_requests = true;
+            route.policies.max_body_size = Some(ByteSize::from_mb(10));
+        }
+        assert!(!mentions(
+            &config,
+            "buffers bodies but sets no max-body-size"
+        ));
+    }
+
+    #[test]
+    fn a_very_large_body_limit_is_reported() {
+        let mut config = Config::default_for_testing();
+        for route in &mut config.routes {
+            route.policies.max_body_size = Some(ByteSize::from_mb(512));
+        }
+        assert!(mentions(&config, "held in memory"));
+    }
+
+    #[test]
+    fn an_oversized_route_cache_is_reported() {
+        let mut config = Config::default_for_testing();
+        config.server.route_cache_size = 50_000_000;
+        assert!(mentions(&config, "route-cache-size"));
     }
 }
