@@ -7,8 +7,9 @@
 //!
 //! A [`ConfigChange`] names one mutation. Applying it clones the live
 //! configuration, makes that single change, and hands the result to
-//! [`ConfigManager::apply_config`], which already validates, swaps atomically,
-//! emits events and rolls back on failure. Nothing here re-implements any of
+//! [`super::ConfigManager::apply_config`], which already validates, swaps
+//! atomically, emits events and rolls back on failure. Nothing here
+//! re-implements any of
 //! that — the value is in describing the change precisely and refusing the
 //! ones that do not make sense.
 //!
