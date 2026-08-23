@@ -66,11 +66,12 @@ for details.
 
 ## [Unreleased]
 
-> **Three behaviour changes to check before upgrading.** `retry-policy.max-attempts`
+> **Four behaviour changes to check before upgrading.** `retry-policy.max-attempts`
 > now retries requests rather than backend selection, host matching in routes is
 > now case-insensitive — a route written `host "Example.com"` previously matched
 > nothing and now matches `example.com` — and `connection-pool.max-lifetime-secs`
-> now takes effect, where it was previously ignored. All three are detailed below.
+> now takes effect, where it was previously ignored, as do the four
+> `upstream.timeouts` settings. All four are detailed below.
 
 ### Added
 - **Certificate folders.** An `sni-certs` block points at a directory, and every
@@ -112,6 +113,16 @@ for details.
   nothing will now start matching. (#113)
 
 ### Fixed
+- **Upstream timeouts are read.** `timeouts` accepted `connect`, `request`,
+  `read` and `write`, while every shipped config and the documentation write
+  `connect-secs`, `request-secs`, `read-secs` and `write-secs`. Every timeout in
+  every shipped config was therefore discarded in favour of its default. The
+  worst case was an upstream asking for `request-secs 300` — the inference
+  examples do — and being cut off at the 60s default, a fifth of what it asked
+  for; `connect-secs 2` likewise waited 10s. **Timeouts will now take the values
+  your config specifies**, which for existing deployments means both shorter
+  connect timeouts and longer request timeouts than they have been running with.
+  The unsuffixed names remain accepted as aliases. (#365)
 - **`connection-pool.idle-timeout-secs` and `max-lifetime-secs` are read.** The
   parser looked for `idle-timeout` and `max-lifetime` — names that appear in no
   config anywhere, including this repo's own. The documented `-secs` spellings,

@@ -392,24 +392,32 @@ fn parse_connection_pool(node: &kdl::KdlNode) -> ConnectionPoolConfig {
 /// Example KDL:
 /// ```kdl
 /// timeouts {
-///     connect 10
-///     request 60
-///     read 30
-///     write 30
+///     connect-secs 10
+///     request-secs 60
+///     read-secs 30
+///     write-secs 30
 /// }
 /// ```
+///
+/// The unsuffixed names (`connect`, `request`, `read`, `write`) are accepted as
+/// aliases.
 fn parse_upstream_timeouts(node: &kdl::KdlNode) -> UpstreamTimeouts {
-    let connect_secs = get_int_entry(node, "connect")
-        .map(|v| v as u64)
-        .unwrap_or(10);
+    // As with the connection pool above, the `-secs` spellings are what every
+    // config and the documentation use, and the unsuffixed ones are what this
+    // parser used to read. Reading only the latter meant every timeout in
+    // every shipped config was discarded in favour of the default — an
+    // upstream asking for `request-secs 300` was cut off at 60.
+    let timeout = |suffixed: &str, bare: &str, default: u64| {
+        get_int_entry(node, suffixed)
+            .or_else(|| get_int_entry(node, bare))
+            .map(|v| v as u64)
+            .unwrap_or(default)
+    };
 
-    let request_secs = get_int_entry(node, "request")
-        .map(|v| v as u64)
-        .unwrap_or(60);
-
-    let read_secs = get_int_entry(node, "read").map(|v| v as u64).unwrap_or(30);
-
-    let write_secs = get_int_entry(node, "write").map(|v| v as u64).unwrap_or(30);
+    let connect_secs = timeout("connect-secs", "connect", 10);
+    let request_secs = timeout("request-secs", "request", 60);
+    let read_secs = timeout("read-secs", "read", 30);
+    let write_secs = timeout("write-secs", "write", 30);
 
     UpstreamTimeouts {
         connect_secs,
@@ -817,6 +825,96 @@ mod tests {
                 "api-backend asks for max-lifetime-secs 300 and must get it"
             );
             assert_eq!(api.connection_pool.idle_timeout_secs, 60);
+        }
+    }
+
+    /// Same defect as the connection-pool names above, with a sharper edge:
+    /// every timeout in every shipped config was being replaced by a default.
+    mod upstream_timeout_key_names {
+        use super::*;
+
+        fn timeouts_of(body: &str) -> UpstreamTimeouts {
+            let kdl = format!(
+                r#"upstreams {{
+                    upstream "backend" {{
+                        target "127.0.0.1:9000"
+                        timeouts {{ {body} }}
+                    }}
+                }}"#
+            );
+            parse_kdl_upstreams(&kdl)
+                .unwrap()
+                .get("backend")
+                .unwrap()
+                .timeouts
+                .clone()
+        }
+
+        #[test]
+        fn documented_secs_names_are_read() {
+            let t = timeouts_of("connect-secs 2\nrequest-secs 300\nread-secs 120\nwrite-secs 15");
+            assert_eq!(t.connect_secs, 2);
+            assert_eq!(t.request_secs, 300);
+            assert_eq!(t.read_secs, 120);
+            assert_eq!(t.write_secs, 15);
+        }
+
+        #[test]
+        fn bare_names_still_work_as_aliases() {
+            let t = timeouts_of("connect 2\nrequest 300\nread 120\nwrite 15");
+            assert_eq!(t.connect_secs, 2);
+            assert_eq!(t.request_secs, 300);
+            assert_eq!(t.read_secs, 120);
+            assert_eq!(t.write_secs, 15);
+        }
+
+        #[test]
+        fn documented_name_wins_when_both_are_present() {
+            let t = timeouts_of("connect-secs 2\nconnect 99\nrequest-secs 300\nrequest 999");
+            assert_eq!(t.connect_secs, 2);
+            assert_eq!(t.request_secs, 300);
+        }
+
+        #[test]
+        fn defaults_apply_when_absent() {
+            let t = timeouts_of("connect-secs 5");
+            assert_eq!(t.connect_secs, 5);
+            assert_eq!(t.request_secs, 60);
+            assert_eq!(t.read_secs, 30);
+            assert_eq!(t.write_secs, 30);
+        }
+
+        /// The case that made this expensive: an inference upstream asking for
+        /// a 300s request timeout was silently cut off at the 60s default.
+        #[test]
+        fn a_long_request_timeout_is_not_replaced_by_the_default() {
+            let t = timeouts_of("request-secs 300");
+            assert_eq!(
+                t.request_secs, 300,
+                "a configured 300s request timeout must not fall back to 60s"
+            );
+        }
+
+        /// Pins it to the shipped config, which asks for a 30s request timeout
+        /// and used to run with 60.
+        #[test]
+        fn shipped_default_config_gets_the_timeouts_it_asks_for() {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/zentinel.kdl");
+            let text = std::fs::read_to_string(path).expect("shipped config should be readable");
+            let config = crate::Config::from_kdl(&text).expect("shipped config should parse");
+
+            let api = config
+                .upstreams
+                .get("api-backend")
+                .expect("shipped config should define the api-backend upstream");
+
+            assert_eq!(api.timeouts.connect_secs, 10);
+            assert_eq!(
+                api.timeouts.request_secs, 30,
+                "api-backend asks for request-secs 30 and must get it, not the 60s default"
+            );
+            assert_eq!(api.timeouts.read_secs, 30);
+            assert_eq!(api.timeouts.write_secs, 30);
         }
     }
 
