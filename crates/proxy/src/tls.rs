@@ -1787,10 +1787,18 @@ pub fn build_server_config_with_resolver(
                 .with_client_cert_verifier(verifier)
                 .with_cert_resolver(resolver.clone())
         } else {
-            warn!("client_auth enabled but no ca_file specified, disabling client auth");
-            builder
-                .with_no_client_auth()
-                .with_cert_resolver(resolver.clone())
+            // Config validation rejects this combination, so reaching here
+            // means a Config was built in code rather than parsed. Failing is
+            // still the right answer: quietly serving without client
+            // authentication is the outcome an operator asking for mTLS would
+            // least expect, and a warning in the startup log is not a
+            // proportionate signal for it.
+            return Err(TlsError::ConfigBuild(
+                "client_auth is enabled but no ca_file is configured. Client certificates \
+                 cannot be verified without a CA, and serving without client authentication \
+                 would contradict the configuration."
+                    .to_string(),
+            ));
         }
     } else {
         builder
