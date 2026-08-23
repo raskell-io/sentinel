@@ -13,7 +13,9 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tracing::{debug, trace, warn};
 
-use crate::{Config, Filter, NamespaceConfig, ServiceConfig, ServiceType, WafMode};
+use crate::{
+    Config, Filter, ListenerProtocol, NamespaceConfig, ServiceConfig, ServiceType, WafMode,
+};
 use zentinel_common::ids::Scope;
 use zentinel_common::types::{Priority, TlsVersion};
 
@@ -632,6 +634,20 @@ fn validate_acme_domains(config: &Config, errors: &mut Vec<String>) {
         // `zentinel validate`, start the proxy, and be accepting
         // unauthenticated clients while believing otherwise. Rejecting here
         // means the mistake surfaces before traffic does.
+        // HTTP/3 parses but there is no QUIC in the runtime. This used to fall
+        // through to a catch-all that logged a warning and bound no socket, so
+        // the proxy started, reported healthy, and served nothing on that
+        // address (#377). A config naming a transport the proxy does not have
+        // should fail before it is deployed, not after.
+        if listener.protocol == ListenerProtocol::Http3 {
+            errors.push(format!(
+                "Listener '{}' requests protocol \"h3\", which is not implemented — \
+                 there is no QUIC support in the proxy. Previously this bound no \
+                 socket at all. Use \"https\", which negotiates HTTP/2 via ALPN.",
+                listener.id
+            ));
+        }
+
         if let Some(ref tls) = listener.tls {
             if tls.client_auth && tls.ca_file.is_none() {
                 errors.push(format!(
@@ -1200,6 +1216,67 @@ fn build_validation_result(errors: Vec<String>) -> Result<(), validator::Validat
 mod tests {
     use super::*;
     use crate::namespace::{ExportConfig, NamespaceConfig, ServiceConfig};
+
+    /// `h2` and `h3` used to fall into a catch-all that logged a warning and
+    /// bound no socket, while the documentation marked both supported. `h2` is
+    /// now the same setup as `https` (which already negotiates h2 via ALPN);
+    /// `h3` is rejected, because there is no QUIC in the runtime (#377).
+    mod listener_protocol_support {
+        use super::*;
+
+        fn config_with_protocol(protocol: &str) -> String {
+            format!(
+                "system {{\n  workers 2\n}}\n\
+                 listeners {{\n  listener \"edge\" {{\n    address \"127.0.0.1:8443\"\n\
+                 \x20   protocol \"{protocol}\"\n    tls {{\n      cert-file \"/tmp/x.crt\"\n\
+                 \x20     key-file \"/tmp/x.key\"\n    }}\n  }}\n}}\n\
+                 upstreams {{\n  upstream \"b\" {{\n    target \"127.0.0.1:9000\"\n  }}\n}}\n\
+                 routes {{\n  route \"r\" {{\n    matches {{\n      path-prefix \"/\"\n    }}\n\
+                 \x20   upstream \"b\"\n  }}\n}}\n"
+            )
+        }
+
+        #[test]
+        fn h3_is_rejected_because_there_is_no_quic() {
+            let config = Config::from_kdl(&config_with_protocol("h3")).expect("should parse");
+            let err = config
+                .validate()
+                .expect_err("h3 must not validate while unimplemented");
+            let message = err.to_string();
+            assert!(
+                message.contains("h3") && message.contains("not implemented"),
+                "error should say h3 is unimplemented, got: {message}"
+            );
+        }
+
+        /// The failure this replaces was silent, so the test asserts the
+        /// operator is pointed somewhere that works.
+        #[test]
+        fn the_h3_rejection_suggests_https() {
+            let config = Config::from_kdl(&config_with_protocol("h3")).expect("should parse");
+            let message = config.validate().expect_err("rejected").to_string();
+            assert!(
+                message.contains("https"),
+                "error should point at a working alternative, got: {message}"
+            );
+        }
+
+        #[test]
+        fn h2_is_accepted() {
+            let config = Config::from_kdl(&config_with_protocol("h2")).expect("should parse");
+            assert!(
+                config.validate().is_ok(),
+                "h2 should validate: {:?}",
+                config.validate()
+            );
+        }
+
+        #[test]
+        fn https_is_unaffected() {
+            let config = Config::from_kdl(&config_with_protocol("https")).expect("should parse");
+            assert!(config.validate().is_ok());
+        }
+    }
     use crate::{
         ConnectionPoolConfig, HttpVersionConfig, MatchCondition, RouteConfig, RoutePolicies,
         UpstreamConfig, UpstreamTarget, UpstreamTimeouts,
@@ -1379,6 +1456,8 @@ mod tests {
             websocket: false,
             websocket_inspection: false,
             inference: None,
+            mcp: None,
+            a2a: None,
             shadow: None,
             fallback: None,
         }
@@ -2083,6 +2162,8 @@ mod tests {
             static_files: None,
             api_schema: None,
             inference: None,
+            mcp: None,
+            a2a: None,
             error_pages: None,
             websocket: false,
             websocket_inspection: false,

@@ -56,6 +56,7 @@ pub mod hybrid_cache;
 pub mod memcached_rate_limit;
 
 // Kubernetes kubeconfig parsing (requires kubernetes feature)
+pub mod agentic;
 pub mod geo_filter;
 pub mod grpc_health;
 pub mod health;

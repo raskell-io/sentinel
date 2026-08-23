@@ -313,6 +313,8 @@ mod tests {
             websocket: false,
             websocket_inspection: false,
             inference: None,
+            mcp: None,
+            a2a: None,
             shadow: None,
             fallback: None,
         }

@@ -38,6 +38,7 @@ use zentinel_common::{
 // Module Declarations
 // ============================================================================
 
+pub mod agentic;
 pub mod agents;
 mod defaults;
 pub mod filters;
@@ -851,6 +852,8 @@ impl Config {
                 static_files: None,
                 api_schema: None,
                 inference: None,
+                mcp: None,
+                a2a: None,
                 error_pages: None,
                 websocket: false,
                 websocket_inspection: false,

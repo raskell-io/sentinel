@@ -9,6 +9,7 @@ use zentinel_common::budget::{
     BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig,
 };
 
+use crate::agentic::{A2aConfig, McpConfig, UninspectableBody, UnknownMethods};
 use crate::filters::RateLimitKey;
 use crate::{kdl::retrypolicy_helper::parse_retry_policy, routes::*};
 use zentinel_common::types::ByteSize;
@@ -37,6 +38,8 @@ const RECOGNIZED_ROUTE_CHILDREN: &[&str] = &[
     "policies",
     "service-type",
     "retry-policy",
+    "mcp",
+    "a2a",
 ];
 
 /// Parse routes configuration block
@@ -181,6 +184,8 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     static_files,
                     api_schema,
                     inference,
+                    mcp: parse_optional_block(child, "mcp", parse_mcp_config)?,
+                    a2a: parse_optional_block(child, "a2a", parse_a2a_config)?,
                     error_pages: None,
                     websocket: get_bool_entry(child, "websocket").unwrap_or(false),
                     websocket_inspection: get_bool_entry(child, "websocket-inspection")
@@ -450,6 +455,191 @@ struct RoutePolicySettings {
 /// Absent `policies`, or a `policies` block that sets none of these, yields
 /// defaults — notably `failure_mode: Closed`, which is the safe direction: a
 /// route only becomes fail-open when its config asks for it in as many words.
+/// Parse an optional named child block through a parser function.
+fn parse_optional_block<T>(
+    node: &kdl::KdlNode,
+    name: &str,
+    parse: impl Fn(&kdl::KdlNode) -> Result<T>,
+) -> Result<Option<T>> {
+    node.children()
+        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == name))
+        .map(parse)
+        .transpose()
+}
+
+/// Parse a route's `mcp` block.
+///
+/// ```kdl
+/// mcp {
+///     require-validated-version #true
+///     on-uninspectable-body "deny"
+///     methods {
+///         allow "tools/call" "tools/list"
+///         deny "resources/read"
+///     }
+///     tools {
+///         allow "get_weather" "search_docs"
+///         deny "execute_sql"
+///     }
+/// }
+/// ```
+fn parse_mcp_config(node: &kdl::KdlNode) -> Result<McpConfig> {
+    let mut config = McpConfig::default();
+
+    if let Some(value) = get_bool_entry(node, "require-validated-version") {
+        config.require_validated_version = value;
+    }
+
+    if let Some(value) = get_bool_entry(node, "validate-param-headers") {
+        config.validate_param_headers = value;
+    }
+
+    config.on_uninspectable_body = match get_string_entry(node, "on-uninspectable-body").as_deref()
+    {
+        None => UninspectableBody::default(),
+        Some("deny") => UninspectableBody::Deny,
+        Some("allow") => UninspectableBody::Allow,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown on-uninspectable-body '{other}'. Valid values: deny, allow"
+            ))
+        }
+    };
+
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "methods" => {
+                    let (allow, deny) = parse_allow_deny(child)?;
+                    config.allowed_methods = allow;
+                    config.denied_methods = deny;
+                }
+                "tools" => {
+                    let (allow, deny) = parse_allow_deny(child)?;
+                    config.allowed_tools = allow;
+                    config.denied_tools = deny;
+                }
+                // Scalars already read above; anything else is a mistake worth
+                // naming, since a silently ignored key in a security policy is
+                // how a policy stops applying without anyone noticing.
+                "require-validated-version"
+                | "validate-param-headers"
+                | "on-uninspectable-body" => {}
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown setting '{other}' in mcp block. Valid settings: \
+                         require-validated-version, validate-param-headers, on-uninspectable-body, \
+                         methods, tools"
+                    ))
+                }
+            }
+        }
+    }
+
+    Ok(config)
+}
+
+/// Parse a route's `a2a` block.
+///
+/// ```kdl
+/// a2a {
+///     unknown-methods "allow"
+///     deny-uninspectable-body #true
+///     methods {
+///         allow "GetTask" "ListTasks"
+///         deny "CancelTask"
+///     }
+/// }
+/// ```
+fn parse_a2a_config(node: &kdl::KdlNode) -> Result<A2aConfig> {
+    let mut config = A2aConfig::default();
+
+    if let Some(value) = get_bool_entry(node, "deny-uninspectable-body") {
+        config.deny_uninspectable_body = value;
+    }
+
+    config.unknown_methods = match get_string_entry(node, "unknown-methods").as_deref() {
+        None => UnknownMethods::default(),
+        Some("allow") => UnknownMethods::Allow,
+        Some("deny") => UnknownMethods::Deny,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "Unknown unknown-methods '{other}'. Valid values: allow, deny"
+            ))
+        }
+    };
+
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "methods" => {
+                    let (allow, deny) = parse_allow_deny(child)?;
+                    config.allowed_methods = allow;
+                    config.denied_methods = deny;
+                }
+                "unknown-methods" | "deny-uninspectable-body" => {}
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown setting '{other}' in a2a block. Valid settings: \
+                         unknown-methods, deny-uninspectable-body, methods"
+                    ))
+                }
+            }
+        }
+    }
+
+    Ok(config)
+}
+
+/// Read `allow` and `deny` lists from a block.
+///
+/// Both take any number of string arguments. An `allow` with no entries is an
+/// error rather than an empty allowlist: an empty allowlist means "unrestricted"
+/// everywhere else in this config, so writing `allow` and getting the opposite
+/// of a restriction is precisely the surprise worth refusing.
+fn parse_allow_deny(node: &kdl::KdlNode) -> Result<(Vec<String>, Vec<String>)> {
+    let mut allow = Vec::new();
+    let mut deny = Vec::new();
+
+    let Some(children) = node.children() else {
+        return Ok((allow, deny));
+    };
+
+    for child in children.nodes() {
+        let values: Vec<String> = child
+            .entries()
+            .iter()
+            .filter(|entry| entry.name().is_none())
+            .filter_map(|entry| entry.value().as_string().map(str::to_string))
+            .collect();
+
+        match child.name().value() {
+            "allow" => {
+                if values.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "'allow' with no entries would be read as no allowlist at all, \
+                         permitting everything. Remove the line, or list what is permitted."
+                    ));
+                }
+                allow.extend(values);
+            }
+            "deny" => {
+                if values.is_empty() {
+                    return Err(anyhow::anyhow!("'deny' needs at least one entry"));
+                }
+                deny.extend(values);
+            }
+            other => {
+                return Err(anyhow::anyhow!(
+                    "Unknown entry '{other}'; expected 'allow' or 'deny'"
+                ))
+            }
+        }
+    }
+
+    Ok((allow, deny))
+}
+
 fn parse_route_policy_settings(route: &kdl::KdlNode) -> Result<RoutePolicySettings> {
     let Some(policies) = route
         .children()
@@ -1925,6 +2115,173 @@ mod tests {
             config.routes.iter().any(|r| r.websocket_inspection),
             "the example advertises frame inspection and should enable it on at least one route"
         );
+    }
+
+    /// The whole point of this week: a config block that parses but never
+    /// reaches the struct is worse than no config block. Every setting below is
+    /// asserted against a value that differs from its default, so a field that
+    /// silently falls back fails the test rather than passing by coincidence.
+    mod agentic_blocks_are_parsed {
+        use super::*;
+        use crate::agentic::{UninspectableBody, UnknownMethods};
+
+        fn route_with(body: &str) -> crate::RouteConfig {
+            let kdl = format!(
+                "routes {{\n  route \"agentic\" {{\n    matches {{\n      path-prefix \"/mcp\"\n    }}\n\
+                 \x20   upstream \"backend\"\n{body}\n  }}\n}}\n"
+            );
+            let doc: kdl::KdlDocument = kdl.parse().expect("kdl should parse");
+            parse_routes(doc.nodes().first().expect("routes node"))
+                .expect("routes should parse")
+                .remove(0)
+        }
+
+        #[test]
+        fn a_route_without_an_mcp_block_has_no_mcp_policy() {
+            assert!(route_with("").mcp.is_none());
+            assert!(route_with("").a2a.is_none());
+        }
+
+        #[test]
+        fn mcp_tool_lists_are_read() {
+            let route = route_with(
+                "    mcp {\n      tools {\n        allow \"get_weather\" \"search_docs\"\n\
+                 \x20       deny \"execute_sql\"\n      }\n    }",
+            );
+            let mcp = route.mcp.expect("mcp block should be parsed");
+            assert_eq!(mcp.allowed_tools, ["get_weather", "search_docs"]);
+            assert_eq!(mcp.denied_tools, ["execute_sql"]);
+        }
+
+        #[test]
+        fn mcp_method_lists_are_read() {
+            let route = route_with(
+                "    mcp {\n      methods {\n        allow \"tools/call\"\n        deny \"resources/read\"\n      }\n    }",
+            );
+            let mcp = route.mcp.expect("parsed");
+            assert_eq!(mcp.allowed_methods, ["tools/call"]);
+            assert_eq!(mcp.denied_methods, ["resources/read"]);
+        }
+
+        /// Defaults to true, so the test uses false to prove it is read.
+        #[test]
+        fn require_validated_version_is_read() {
+            let route = route_with("    mcp {\n      require-validated-version #false\n    }");
+            assert!(!route.mcp.expect("parsed").require_validated_version);
+        }
+
+        #[test]
+        fn require_validated_version_defaults_to_true() {
+            let route = route_with("    mcp {\n      tools {\n        deny \"x\"\n      }\n    }");
+            assert!(
+                route.mcp.expect("parsed").require_validated_version,
+                "a route that does not say otherwise must require a validated protocol version"
+            );
+        }
+
+        /// Defaults to Deny, so the test uses allow.
+        /// Defaults to true, so the test uses false to prove it is read.
+        #[test]
+        fn validate_param_headers_is_read() {
+            let route = route_with("    mcp {\n      validate-param-headers #false\n    }");
+            assert!(!route.mcp.expect("parsed").validate_param_headers);
+        }
+
+        #[test]
+        fn validate_param_headers_defaults_to_true() {
+            let route = route_with("    mcp {\n      tools {\n        deny \"x\"\n      }\n    }");
+            assert!(route.mcp.expect("parsed").validate_param_headers);
+        }
+
+        #[test]
+        fn on_uninspectable_body_is_read() {
+            let route = route_with("    mcp {\n      on-uninspectable-body \"allow\"\n    }");
+            assert_eq!(
+                route.mcp.expect("parsed").on_uninspectable_body,
+                UninspectableBody::Allow
+            );
+        }
+
+        #[test]
+        fn on_uninspectable_body_defaults_to_deny() {
+            let route = route_with("    mcp {\n      tools {\n        deny \"x\"\n      }\n    }");
+            assert_eq!(
+                route.mcp.expect("parsed").on_uninspectable_body,
+                UninspectableBody::Deny
+            );
+        }
+
+        #[test]
+        fn a2a_method_lists_are_read() {
+            let route = route_with(
+                "    a2a {\n      methods {\n        allow \"GetTask\" \"ListTasks\"\n\
+                 \x20       deny \"CancelTask\"\n      }\n    }",
+            );
+            let a2a = route.a2a.expect("a2a block should be parsed");
+            assert_eq!(a2a.allowed_methods, ["GetTask", "ListTasks"]);
+            assert_eq!(a2a.denied_methods, ["CancelTask"]);
+        }
+
+        /// Defaults to Allow, so the test uses deny.
+        #[test]
+        fn a2a_unknown_methods_is_read() {
+            let route = route_with("    a2a {\n      unknown-methods \"deny\"\n    }");
+            assert_eq!(
+                route.a2a.expect("parsed").unknown_methods,
+                UnknownMethods::Deny
+            );
+        }
+
+        #[test]
+        fn a2a_deny_uninspectable_body_is_read() {
+            let route = route_with("    a2a {\n      deny-uninspectable-body #false\n    }");
+            assert!(!route.a2a.expect("parsed").deny_uninspectable_body);
+        }
+
+        #[test]
+        fn both_blocks_can_coexist_on_one_route() {
+            let route = route_with(
+                "    mcp {\n      tools {\n        deny \"execute_sql\"\n      }\n    }\n\
+                 \x20   a2a {\n      methods {\n        deny \"CancelTask\"\n      }\n    }",
+            );
+            assert_eq!(route.mcp.expect("mcp").denied_tools, ["execute_sql"]);
+            assert_eq!(route.a2a.expect("a2a").denied_methods, ["CancelTask"]);
+        }
+
+        /// A misspelled key inside a security policy must not be discarded —
+        /// that is the failure mode this whole codebase spent the week on.
+        #[test]
+        fn an_unknown_setting_in_the_mcp_block_is_rejected() {
+            let kdl = "routes {\n  route \"r\" {\n    matches {\n      path-prefix \"/\"\n    }\n\
+                       \x20   upstream \"b\"\n    mcp {\n      allowed_tools \"x\"\n    }\n  }\n}\n";
+            let doc: kdl::KdlDocument = kdl.parse().unwrap();
+            let err = parse_routes(doc.nodes().first().unwrap())
+                .expect_err("a misspelled mcp setting must not be silently ignored");
+            assert!(err.to_string().contains("allowed_tools"), "got: {err}");
+        }
+
+        #[test]
+        fn an_unknown_value_for_on_uninspectable_body_is_rejected() {
+            let kdl = "routes {\n  route \"r\" {\n    matches {\n      path-prefix \"/\"\n    }\n\
+                       \x20   upstream \"b\"\n    mcp {\n      on-uninspectable-body \"maybe\"\n    }\n  }\n}\n";
+            let doc: kdl::KdlDocument = kdl.parse().unwrap();
+            let err = parse_routes(doc.nodes().first().unwrap()).expect_err("rejected");
+            assert!(err.to_string().contains("maybe"), "got: {err}");
+        }
+
+        /// `allow` with nothing after it reads as "no allowlist", which permits
+        /// everything — the opposite of what the word says.
+        #[test]
+        fn an_empty_allow_list_is_rejected_rather_than_read_as_unrestricted() {
+            let kdl = "routes {\n  route \"r\" {\n    matches {\n      path-prefix \"/\"\n    }\n\
+                       \x20   upstream \"b\"\n    mcp {\n      tools {\n        allow\n      }\n    }\n  }\n}\n";
+            let doc: kdl::KdlDocument = kdl.parse().unwrap();
+            let err = parse_routes(doc.nodes().first().unwrap()).expect_err("rejected");
+            assert!(
+                err.to_string().contains("permitting everything"),
+                "the error should explain the trap, got: {err}"
+            );
+        }
     }
 
     mod route_policies_are_parsed {
