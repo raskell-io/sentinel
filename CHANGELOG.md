@@ -100,6 +100,10 @@ for details.
   healthy. A route configured for request resilience was getting extra tries at
   an operation that rarely fails. Peer selection now has its own small fixed
   count. Re-check any route relying on the old meaning. (#279)
+- **CI runs tests with `--all-features`.** Optional features were compiled by
+  the clippy job and executed by no job at all, which is how two `binary-uds`
+  faults (#359, #360) reached main. The documentation job passes it too, so docs
+  on feature-gated items are rendered rather than skipped. (#360)
 - **Host matching is case-insensitive**, per RFC 3986 §3.2.2. This previously
   failed in both directions: a request for `EXAMPLE.COM` missed a route for
   `example.com`, and a route written `host "Example.com"` matched nothing at
@@ -123,13 +127,19 @@ for details.
   positionally, so that partial read failed and the server answered with an empty
   correlation id. The proxy, which matches responses by correlation id, waited
   out its timeout on every request. Structs are now encoded as maps. (#359)
+- **`binary-uds` no longer hangs six of the seven agent event types.** The
+  client added `correlation_id` beside each event with `#[serde(flatten)]`, but
+  every event except `RequestHeadersEvent` already carries one — so the key went
+  out twice. JSON hid it, because that path mutates a `serde_json::Value` and the
+  second insert overwrites the first; a MessagePack map keeps both entries and
+  the server rejected the payload as a duplicate field. The server's fallback for
+  recovering a correlation id from an undecodable payload was derived too, and
+  failed on the same duplicate, so the reply carried an empty id and the caller
+  waited out its timeout. Request bodies, response headers, response bodies,
+  request completion, WebSocket frames and guardrail inspection were all affected;
+  `RequestHeadersEvent` escaped only because it nests its id under `metadata`.
+  (#360)
 
-### Known issues
-- **`binary-uds` still breaks WebSocket agent inspection.** After the fix above,
-  7 of 8 WebSocket frame-inspection tests still time out with that feature
-  enabled. Root cause not yet identified; tracked in #360, along with the reason
-  neither fault was caught — feature-gated code is compiled by the clippy job but
-  runs in no job that executes tests.
 
 ---
 

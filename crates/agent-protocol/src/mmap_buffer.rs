@@ -286,7 +286,7 @@ impl LargeBodyBuffer {
         self.total_written = 0;
     }
 
-    /// Take ownership of the buffer contents as a Vec<u8>.
+    /// Take ownership of the buffer contents as a `Vec<u8>`.
     ///
     /// For mmap storage, this reads the entire file into memory.
     /// Use with caution for large bodies.
