@@ -34,6 +34,15 @@ listeners {
 // =============================================================================
 // Routes - ordered by specificity
 // =============================================================================
+filters {
+    // Serves index.html for any path, so a single-page app can handle
+    // routing on the client.
+    filter "spa-index" {
+        type "url-rewrite"
+        replace-full-path "/index.html"
+    }
+}
+
 routes {
     // Health check
     route "health" {
@@ -133,10 +142,12 @@ routes {
 
         upstream "static-origin"
 
-        // Rewrite all paths to index.html for SPA
+        // Rewrite every path to index.html so client-side routing works.
+        // `rewrite-path` is not a setting; path rewriting is a filter.
+        filters "spa-index"
+
         policies {
             timeout-secs 10
-            rewrite-path "/index.html"
         }
     }
 }
