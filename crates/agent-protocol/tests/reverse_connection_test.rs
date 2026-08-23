@@ -341,6 +341,7 @@ async fn rejects_missing_auth_token_when_required() {
     let socket_path = temp_socket_path("auth-required");
     let config = ReverseConnectionConfig {
         require_auth: true,
+        auth_tokens: ["valid-token-123".to_string()].into_iter().collect(),
         ..Default::default()
     };
     let pool = AgentPool::with_config(AgentPoolConfig::default());
@@ -374,11 +375,49 @@ async fn rejects_missing_auth_token_when_required() {
     assert!(!response.success);
 }
 
+/// The gap between the two tests either side of this one: a token that is
+/// present, but wrong. Neither covered it, and the implementation accepted it —
+/// `require_auth` checked that a token existed and never what it contained.
+#[tokio::test]
+async fn rejects_wrong_auth_token() {
+    let socket_path = temp_socket_path("auth-wrong");
+    let config = ReverseConnectionConfig {
+        require_auth: true,
+        auth_tokens: ["valid-token-123".to_string()].into_iter().collect(),
+        ..Default::default()
+    };
+    let pool = AgentPool::with_config(AgentPoolConfig::default());
+
+    let listener = ReverseConnectionListener::bind_uds(&socket_path, config)
+        .await
+        .unwrap();
+
+    let socket_path_clone = socket_path.clone();
+    tokio::spawn(async move {
+        let mut stream = UnixStream::connect(&socket_path_clone).await.unwrap();
+        let mut request = test_registration_request("impostor");
+        request.auth_token = Some("not-the-right-token".to_string());
+        let _ = perform_handshake(&mut stream, &request).await;
+    });
+
+    let result = listener.accept_one(&pool).await;
+    assert!(
+        result.is_err(),
+        "a registration presenting an unconfigured token must be rejected"
+    );
+
+    let _ = std::fs::remove_file(&socket_path);
+}
+
 #[tokio::test]
 async fn accepts_valid_auth_token() {
     let socket_path = temp_socket_path("auth-valid");
     let config = ReverseConnectionConfig {
         require_auth: true,
+        // The token has to actually be configured. Before, this test set no
+        // tokens at all and still passed, because registration checked only
+        // that *a* token was sent.
+        auth_tokens: ["valid-token-123".to_string()].into_iter().collect(),
         ..Default::default()
     };
     let pool = AgentPool::with_config(AgentPoolConfig::default());

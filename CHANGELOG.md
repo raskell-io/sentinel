@@ -124,6 +124,16 @@ for details.
   nothing will now start matching. (#113)
 
 ### Fixed
+- **`ReverseConnectionConfig::require_auth` now authenticates.** It checked that
+  a registering agent sent *a* token, never that the token was correct, so any
+  non-empty string authenticated. Tokens are now compared in constant time
+  against a configured `auth_tokens` set, and a listener configured to require
+  authentication with no tokens to check against refuses to bind rather than
+  accepting everyone. The reverse-connection socket is also created `0600`;
+  previously it took whatever the umask gave, commonly leaving it
+  world-connectable. Not reachable from any Zentinel configuration — nothing
+  instantiates this listener — but `zentinel-agent-protocol` is published, so
+  anyone building on it inherited the flaw. (#374)
 - **The WebSocket example enables WebSocket.** It wrote `websocket { enabled
   #true … }` as a block, while a route reads `websocket` as a scalar boolean —
   so every route in the example demonstrating WebSocket proxying parsed to
