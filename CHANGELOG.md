@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_4](#26084---2026-08-23) | 0.6.27 | 2026-08-23 | Native MCP and A2A support; settings that were parsed and discarded now take effect (upstream timeouts, route policies, `failure-mode`); agent and mTLS authentication hardening |
 | [26.08_3](#26083---2026-08-22) | 0.6.26 | 2026-08-22 | Per-SNI certificates, mTLS and TLS hardening settings now reach the listener (#303) |
 | [26.08_2](#26082---2026-08-22) | 0.6.25 | 2026-08-22 | ACME DNS-01 idempotency, breaking TLS config schema |
 | [26.08_1](#26081---2026-08-08) | 0.6.24 | 2026-08-08 | Security: rustls 0.23.43 (ticket-age and binder arithmetic hardening); dependency maintenance: pem 4.0, base64 0.23, jsonschema 0.49, validator 0.21, async-memcached 0.7, http 1.5, redis 1.5 |
@@ -66,13 +67,29 @@ for details.
 
 ## [Unreleased]
 
-> **Six behaviour changes to check before upgrading.** `retry-policy.max-attempts`
-> now retries requests rather than backend selection, host matching in routes is
-> now case-insensitive — a route written `host "Example.com"` previously matched
-> nothing and now matches `example.com` — and `connection-pool.max-lifetime-secs`
-> now takes effect, where it was previously ignored, as do the four
-> `upstream.timeouts` settings, and route `policies` — including
-> `failure-mode` — are now read at all. All five are detailed below.
+_Nothing yet._
+
+---
+
+## [26.08_4] - 2026-08-23
+
+**Crate version:** 0.6.27
+
+> **Read this before deploying.** A number of settings in this release were
+> previously parsed and then discarded, and now take effect. Nothing about your
+> configuration files changes — but configurations you have been running will
+> start behaving the way they read, which for some deployments is a change in
+> behaviour even though nothing was edited.
+>
+> Affected: every `upstream.timeouts` setting, `connection-pool.idle-timeout-secs`
+> and `max-lifetime-secs`, route `policies` (including `failure-mode`,
+> `timeout-secs` and `rate-limit`), the distributed rate-limit fallback and TTL
+> settings, and WAF rule exclusions. Separately, `retry-policy.max-attempts`
+> changes meaning, host matching becomes case-insensitive, and two
+> configurations that previously started with a warning now refuse to start:
+> `client-auth` without a `ca-file`, and a listener with `protocol "h3"`.
+>
+> Each is detailed below with what it did before.
 
 ### Added
 - **Native MCP and A2A awareness.** Routes can carry an `mcp` or `a2a` block
@@ -262,9 +279,6 @@ for details.
   request completion, WebSocket frames and guardrail inspection were all affected;
   `RequestHeadersEvent` escaped only because it nests its id under `metadata`.
   (#360)
-
-
----
 
 ## [26.08_3] - 2026-08-22
 
