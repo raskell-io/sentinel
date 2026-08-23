@@ -79,7 +79,12 @@ impl UdsEncoding {
             UdsEncoding::Json => serde_json::to_vec(value)
                 .map_err(|e| AgentProtocolError::Serialization(e.to_string())),
             #[cfg(feature = "binary-uds")]
-            UdsEncoding::MessagePack => rmp_serde::to_vec(value)
+            // `to_vec_named` encodes structs as maps, the way JSON does.
+            // `to_vec` encodes them positionally as arrays, which saves a few
+            // bytes and breaks every reader that deserializes a subset of the
+            // fields -- the server extracts just the correlation id that way,
+            // and positional encoding makes that a LengthMismatch.
+            UdsEncoding::MessagePack => rmp_serde::to_vec_named(value)
                 .map_err(|e| AgentProtocolError::Serialization(e.to_string())),
             #[cfg(not(feature = "binary-uds"))]
             UdsEncoding::MessagePack => {
@@ -1300,5 +1305,83 @@ mod tests {
         // Verify it's valid MessagePack by deserializing
         let parsed: serde_json::Value = rmp_serde::from_slice(&serialized).unwrap();
         assert_eq!(parsed, value);
+    }
+}
+
+#[cfg(all(test, feature = "binary-uds"))]
+mod messagepack_partial_deserialize {
+    use super::*;
+
+    /// The server reads only the correlation id out of an event payload,
+    /// without deserializing the whole event. That works with JSON because a
+    /// map can be read field by field, and it works with MessagePack only if
+    /// structs are encoded as maps too.
+    ///
+    /// `rmp_serde::to_vec` encodes them positionally as arrays, which saves a
+    /// few bytes and makes a subset struct fail with `LengthMismatch`. The
+    /// symptom was not an error anyone saw: the server fell back to an empty
+    /// correlation id, answered with it, and the proxy — which matches
+    /// responses by correlation id — waited until its timeout. Enabling
+    /// `binary-uds` made every agent call hang.
+    ///
+    /// The existing round-trip test did not catch it because it deserializes
+    /// the *whole* struct, which positional encoding handles fine.
+    #[test]
+    fn a_subset_of_fields_can_be_read_from_an_encoded_event() {
+        #[derive(serde::Serialize)]
+        struct FullEvent {
+            correlation_id: String,
+            method: String,
+            uri: String,
+            headers: Vec<(String, String)>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct CorrelationIdOnly {
+            #[serde(default)]
+            correlation_id: String,
+        }
+
+        let event = FullEvent {
+            correlation_id: "cid-42".to_string(),
+            method: "GET".to_string(),
+            uri: "/x".to_string(),
+            headers: vec![("host".to_string(), "example.com".to_string())],
+        };
+
+        let encoded = UdsEncoding::MessagePack
+            .serialize(&event)
+            .expect("event should serialize");
+
+        let partial: CorrelationIdOnly = UdsEncoding::MessagePack
+            .deserialize(&encoded)
+            .expect("a subset of fields must be readable from the encoding");
+
+        assert_eq!(partial.correlation_id, "cid-42");
+    }
+
+    /// The same property for JSON, so the test above is not passing merely
+    /// because both encodings changed together.
+    #[test]
+    fn json_supports_the_same_partial_read() {
+        #[derive(serde::Serialize)]
+        struct FullEvent {
+            correlation_id: String,
+            method: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct CorrelationIdOnly {
+            #[serde(default)]
+            correlation_id: String,
+        }
+
+        let encoded = UdsEncoding::Json
+            .serialize(&FullEvent {
+                correlation_id: "cid-7".to_string(),
+                method: "POST".to_string(),
+            })
+            .unwrap();
+        let partial: CorrelationIdOnly = UdsEncoding::Json.deserialize(&encoded).unwrap();
+        assert_eq!(partial.correlation_id, "cid-7");
     }
 }
