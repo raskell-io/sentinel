@@ -66,6 +66,71 @@ for details.
 
 ## [Unreleased]
 
+> **Two behaviour changes to check before upgrading.** `retry-policy.max-attempts`
+> now retries requests rather than backend selection, and host matching in routes
+> is now case-insensitive — a route written `host "Example.com"` previously
+> matched nothing and now matches `example.com`. Both are detailed below.
+
+### Added
+- **Certificate folders.** An `sni-certs` block points at a directory, and every
+  certificate/key pair found there is registered with the hostnames from its own
+  CN and SANs — no config edit to add or remove one. `reload-mode` selects `off`
+  (SIGHUP only), `interval`, or `watch`; a watcher that cannot be established
+  falls back to the interval and logs why rather than leaving the folder
+  silently unwatched. Overlapping hostnames are an error by default, since which
+  certificate wins would otherwise depend on directory order;
+  `allow-sni-overlaps` accepts them and resolves by sorted path. New metrics:
+  `zentinel_tls_certificates_loaded`, `zentinel_tls_reload_total{result}`,
+  `zentinel_tls_folder_entries_skipped_total{reason}`. (#117)
+- **`retry-policy` gains `retryable-status-codes`, `backoff`, `max-backoff`,
+  `per-attempt-timeout` and `retry-non-idempotent`.** Nothing is retried on a
+  status code unless configured, and `POST` is not replayed without opting in —
+  the proxy cannot tell whether an origin already performed a side effect. When
+  the budget runs out the client receives the upstream's own response, not a
+  gateway error. (#279)
+- **`zentinel lint` checks resource bounds.** Warns about a `max-connections` of
+  0, an unreachable `max-idle`, an agent with `max-concurrent-calls` 0, a route
+  that buffers bodies with no `max-body-size`, and limits generous enough to be
+  indistinguishable from unbounded. (#128)
+
+### Changed
+- **BREAKING (behaviour) — `retry-policy.max-attempts` now bounds request
+  retries.** It previously bounded upstream *peer-selection* attempts: retrying
+  the choice of backend from the pool, which fails only when no pool member is
+  healthy. A route configured for request resilience was getting extra tries at
+  an operation that rarely fails. Peer selection now has its own small fixed
+  count. Re-check any route relying on the old meaning. (#279)
+- **Host matching is case-insensitive**, per RFC 3986 §3.2.2. This previously
+  failed in both directions: a request for `EXAMPLE.COM` missed a route for
+  `example.com`, and a route written `host "Example.com"` matched nothing at
+  all — silently, permanently. Routes with mixed-case hosts that appeared to do
+  nothing will now start matching. (#113)
+
+### Fixed
+- **Route cache poisoning across query parameters.** The cache key was built
+  from method, host, path and headers, and `path` carries no query string — so
+  `/api?version=v2` and `/api?version=v1` shared an entry and the second request
+  was routed to the first's upstream. A route selected by query parameter could
+  be reached by any request to the same path once an entry was primed. (#355)
+- **A trailing dot no longer bypasses a host route.** `admin.example.com.` names
+  the same host as `admin.example.com` but did not match it, so a restrictive
+  host route could be stepped around by appending a dot and falling through to a
+  permissive catch-all. (#113)
+- **IPv6 hosts are no longer mangled when stripping a port.** The port was
+  removed with `split(':').next()`, which reduces `[::1]:8080` to `[`. (#113)
+- **`binary-uds` no longer hangs every agent call.** The UDS server reads only
+  the correlation id out of an event payload; `rmp_serde::to_vec` encodes structs
+  positionally, so that partial read failed and the server answered with an empty
+  correlation id. The proxy, which matches responses by correlation id, waited
+  out its timeout on every request. Structs are now encoded as maps. (#359)
+
+### Known issues
+- **`binary-uds` still breaks WebSocket agent inspection.** After the fix above,
+  7 of 8 WebSocket frame-inspection tests still time out with that feature
+  enabled. Root cause not yet identified; tracked in #360, along with the reason
+  neither fault was caught — feature-gated code is compiled by the clippy job but
+  runs in no job that executes tests.
+
 ---
 
 ## [26.08_3] - 2026-08-22
