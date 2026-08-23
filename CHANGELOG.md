@@ -124,6 +124,20 @@ for details.
   nothing will now start matching. (#113)
 
 ### Fixed
+- **The WebSocket example enables WebSocket.** It wrote `websocket { enabled
+  #true … }` as a block, while a route reads `websocket` as a scalar boolean —
+  so every route in the example demonstrating WebSocket proxying parsed to
+  `websocket = false` and proxied none. The example now uses `websocket #true`
+  and `websocket-inspection #true`, and the keepalive, message-size and
+  per-IP-connection settings it carried are kept as comments, since none of
+  them exist in the schema. Its header no longer advertises them. (#369)
+- **`zentinel lint` no longer claims a check it cannot perform.** The
+  "buffers bodies but sets no max-body-size" rule could never fire —
+  `buffer-requests` and `buffer-responses` have no KDL key and are read by
+  nothing, so they are always false for any config a person can write. The
+  rule is removed rather than left reporting coverage that does not exist; a
+  test now guards that those fields are still unreachable, so it fails if
+  #366 wires them up. (#366)
 - **Distributed rate-limit fallback and TTL are read.** The backend parser
   looked for `redis-fallback`, `memcached-fallback` and `memcached-ttl` while
   every config writes `redis-fallback-local`, `memcached-fallback-local` and

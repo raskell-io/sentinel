@@ -1,11 +1,12 @@
 // Example: WebSocket Proxy Configuration
 //
 // WebSocket proxying with:
-// - Frame inspection for security
-// - Rate limiting (messages per second)
-// - Connection limits per IP
-// - Ping/pong keepalive
+// - Frame inspection for security (via a websocket-inspector agent)
 // - Token authentication
+//
+// Note: per-route keepalive, message-size and per-IP connection limits are
+// not currently configurable. The settings for them are kept below as
+// comments so the intent survives; see zentinelproxy/zentinel#369.
 
 system {
     worker-threads 0
@@ -87,13 +88,11 @@ routes {
         upstream "ws-backend"
         filters "auth" "ws-inspector"
 
-        websocket {
-            enabled #true
-            ping-interval-secs 30
-            ping-timeout-secs 10
-            max-message-size-bytes 65536
-            max-connections-per-ip 10
-        }
+        websocket #true
+        websocket-inspection #true
+        // Not yet configurable (#369): ping-interval-secs 30,
+        // ping-timeout-secs 10, max-message-size-bytes 65536,
+        // max-connections-per-ip 10
 
         policies {
             timeout-secs 3600  // Long timeout for persistent connections
@@ -112,12 +111,10 @@ routes {
         upstream "socketio-backend"
         filters "auth"
 
-        websocket {
-            enabled #true
-            ping-interval-secs 25
-            ping-timeout-secs 10
-            max-message-size-bytes 1048576  // 1MB for larger payloads
-        }
+        websocket #true
+        // Not yet configurable (#369): ping-interval-secs 25,
+        // ping-timeout-secs 10, max-message-size-bytes 1048576 (1MB for
+        // larger payloads)
 
         policies {
             timeout-secs 3600
@@ -135,13 +132,11 @@ routes {
         upstream "chat-backend"
         filters "auth" "ws-inspector"
 
-        websocket {
-            enabled #true
-            ping-interval-secs 30
-            ping-timeout-secs 10
-            max-message-size-bytes 16384
-            max-connections-per-ip 5
-        }
+        websocket #true
+        websocket-inspection #true
+        // Not yet configurable (#369): ping-interval-secs 30,
+        // ping-timeout-secs 10, max-message-size-bytes 16384,
+        // max-connections-per-ip 5
 
         policies {
             timeout-secs 7200  // 2 hour sessions

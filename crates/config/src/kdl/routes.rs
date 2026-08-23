@@ -1897,6 +1897,36 @@ mod tests {
     /// and hold their defaults no matter what the config said. Each test below
     /// uses a value that differs from the default, so a field falling back to
     /// its default fails the test rather than passing by coincidence.
+    /// The WebSocket example exists to demonstrate WebSocket proxying, and for
+    /// some time demonstrated none: it wrote `websocket { enabled #true … }`
+    /// as a block while the parser reads `websocket` as a scalar bool, so every
+    /// route in it parsed to `websocket = false` (#369).
+    #[test]
+    fn the_websocket_example_actually_enables_websocket() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/examples/websocket.kdl"
+        );
+        let text = std::fs::read_to_string(path).expect("example should be readable");
+        let config = crate::Config::from_kdl(&text).expect("example should parse");
+
+        let ws_routes: Vec<&crate::RouteConfig> =
+            config.routes.iter().filter(|r| r.websocket).collect();
+
+        assert!(
+            ws_routes.len() >= 3,
+            "the WebSocket example should enable websocket on its websocket routes, \
+             found {} of {}",
+            ws_routes.len(),
+            config.routes.len()
+        );
+
+        assert!(
+            config.routes.iter().any(|r| r.websocket_inspection),
+            "the example advertises frame inspection and should enable it on at least one route"
+        );
+    }
+
     mod route_policies_are_parsed {
         use super::*;
 
