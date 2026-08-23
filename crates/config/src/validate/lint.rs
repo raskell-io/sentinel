@@ -183,18 +183,14 @@ fn check_resource_bounds(config: &Config, result: &mut ValidationResult) {
     for route in &config.routes {
         let policies = &route.policies;
 
-        // A buffered body is held in memory for the life of the request, so an
-        // unbounded one is a per-request allocation the client chooses.
-        if (policies.buffer_requests || policies.buffer_responses)
-            && policies.max_body_size.is_none()
-        {
-            result.add_warning(ValidationWarning::new(format!(
-                "Route '{}' buffers bodies but sets no max-body-size, so one request \
-                 can allocate as much memory as it asks for.",
-                route.id
-            )));
-        }
-
+        // A rule for "buffers bodies but sets no max-body-size" was removed
+        // here. It could never fire: `buffer_requests` and `buffer_responses`
+        // have no KDL key and are read by nothing in the proxy, so they are
+        // always false for any config a person can write. Its tests passed
+        // only because they set the fields directly. A linter reporting
+        // coverage it does not have is worse than one check short — restore
+        // this once #366 decides whether those fields get implemented or
+        // removed.
         if let Some(max_body) = policies.max_body_size {
             if max_body.0 > GENEROUS_BODY_SIZE {
                 result.add_warning(ValidationWarning::new(format!(
@@ -604,32 +600,27 @@ mod resource_bound_tests {
         assert!(mentions(&config, "can never be reached"));
     }
 
-    /// Buffering without a size limit is the combination that turns one
-    /// request into as much memory as it asks for.
+    /// Guards the removal above: `buffer_requests` cannot be set from any
+    /// config, so a rule keyed on it can never fire for a real user. The two
+    /// tests that used to live here set the field directly and so passed
+    /// while the rule was dead. If #366 wires these fields up, this test
+    /// starts failing and the rule can come back with it.
     #[test]
-    fn buffering_without_a_body_limit_is_reported() {
-        let mut config = Config::default_for_testing();
-        for route in &mut config.routes {
-            route.policies.buffer_requests = true;
-            route.policies.max_body_size = None;
-        }
-        assert!(mentions(
-            &config,
-            "buffers bodies but sets no max-body-size"
-        ));
-    }
+    fn buffering_flags_are_still_unreachable_from_config() {
+        let kdl = "system {\n  workers 2\n}\n\
+                   listeners {\n  listener \"http\" {\n    address \"127.0.0.1:8080\"\n  }\n}\n\
+                   upstreams {\n  upstream \"b\" {\n    target \"127.0.0.1:9000\"\n  }\n}\n\
+                   routes {\n  route \"r\" {\n    matches {\n      path-prefix \"/\"\n    }\n\
+                   \x20   upstream \"b\"\n    policies {\n      buffer-requests #true\n\
+                   \x20     buffer-responses #true\n    }\n  }\n}\n";
+        let config = Config::from_kdl(kdl).expect("config should parse");
+        let policies = &config.routes[0].policies;
 
-    #[test]
-    fn buffering_with_a_body_limit_is_not_reported() {
-        let mut config = Config::default_for_testing();
-        for route in &mut config.routes {
-            route.policies.buffer_requests = true;
-            route.policies.max_body_size = Some(ByteSize::from_mb(10));
-        }
-        assert!(!mentions(
-            &config,
-            "buffers bodies but sets no max-body-size"
-        ));
+        assert!(
+            !policies.buffer_requests && !policies.buffer_responses,
+            "buffering became settable from config — see #366, and restore the \
+             lint rule that was removed alongside these tests"
+        );
     }
 
     #[test]
