@@ -136,7 +136,13 @@ fn parse_rate_limit_backend(node: &kdl::KdlNode) -> Result<RateLimitBackend> {
             let timeout_ms = get_int_entry(node, "redis-timeout-ms")
                 .map(|v| v as u64)
                 .unwrap_or(50);
-            let fallback_local = get_bool_entry(node, "redis-fallback").unwrap_or(true);
+            // Every config writes `redis-fallback-local`; this read only
+            // `redis-fallback`. It looked correct because the default is also
+            // true, so the discarded setting matched intent by coincidence —
+            // until someone wrote `#false`, which was silently ignored.
+            let fallback_local = get_bool_entry(node, "redis-fallback-local")
+                .or_else(|| get_bool_entry(node, "redis-fallback"))
+                .unwrap_or(true);
 
             Ok(RateLimitBackend::Redis(RedisBackendConfig {
                 url: redis_url,
@@ -158,8 +164,14 @@ fn parse_rate_limit_backend(node: &kdl::KdlNode) -> Result<RateLimitBackend> {
             let timeout_ms = get_int_entry(node, "memcached-timeout-ms")
                 .map(|v| v as u64)
                 .unwrap_or(50);
-            let fallback_local = get_bool_entry(node, "memcached-fallback").unwrap_or(true);
-            let ttl_secs = get_int_entry(node, "memcached-ttl")
+            // Same mismatch as the Redis branch above, plus the TTL: configs
+            // write `memcached-ttl-secs`, this read `memcached-ttl`, and the
+            // default of 2 matched what the examples asked for.
+            let fallback_local = get_bool_entry(node, "memcached-fallback-local")
+                .or_else(|| get_bool_entry(node, "memcached-fallback"))
+                .unwrap_or(true);
+            let ttl_secs = get_int_entry(node, "memcached-ttl-secs")
+                .or_else(|| get_int_entry(node, "memcached-ttl"))
                 .map(|v| v as u32)
                 .unwrap_or(2);
 
@@ -435,6 +447,92 @@ fn parse_path_modifier(node: &kdl::KdlNode) -> Option<PathModifier> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The distributed backends read `redis-fallback` / `memcached-fallback` /
+    /// `memcached-ttl`, while every config writes the longer names. Because the
+    /// defaults matched what the examples asked for, the mismatch was invisible
+    /// until someone set a value that differed.
+    mod backend_key_names {
+        use super::*;
+
+        fn backend(body: &str) -> RateLimitBackend {
+            let kdl =
+                format!("filter \"rl\" {{\n  type \"rate-limit\"\n  max-rps 100\n{body}\n}}\n");
+            let doc: kdl::KdlDocument = kdl.parse().expect("kdl parses");
+            match parse_single_filter_definition(doc.nodes().first().expect("filter node"))
+                .expect("parses")
+            {
+                Filter::RateLimit(f) => f.backend,
+                other => panic!("expected a rate limit filter, got {other:?}"),
+            }
+        }
+
+        fn redis(extra: &str) -> RedisBackendConfig {
+            match backend(&format!(
+                "  backend \"redis\"\n  redis-url \"redis://localhost:6379\"\n  {extra}"
+            )) {
+                RateLimitBackend::Redis(c) => c,
+                other => panic!("expected redis backend, got {other:?}"),
+            }
+        }
+
+        fn memcached(extra: &str) -> MemcachedBackendConfig {
+            match backend(&format!(
+                "  backend \"memcached\"\n  memcached-url \"memcache://localhost:11211\"\n  {extra}"
+            )) {
+                RateLimitBackend::Memcached(c) => c,
+                other => panic!("expected memcached backend, got {other:?}"),
+            }
+        }
+
+        /// The name every config uses. `#false` is the value that mattered:
+        /// with it discarded, a Redis outage silently fell back to local
+        /// counting, so each instance limited independently.
+        #[test]
+        fn redis_fallback_local_is_read() {
+            assert!(!redis("redis-fallback-local #false").fallback_local);
+            assert!(redis("redis-fallback-local #true").fallback_local);
+        }
+
+        #[test]
+        fn redis_fallback_alias_still_works() {
+            assert!(!redis("redis-fallback #false").fallback_local);
+        }
+
+        #[test]
+        fn redis_fallback_defaults_to_true() {
+            assert!(redis("redis-prefix \"x:\"").fallback_local);
+        }
+
+        #[test]
+        fn memcached_fallback_local_is_read() {
+            assert!(!memcached("memcached-fallback-local #false").fallback_local);
+        }
+
+        #[test]
+        fn memcached_fallback_alias_still_works() {
+            assert!(!memcached("memcached-fallback #false").fallback_local);
+        }
+
+        #[test]
+        fn memcached_ttl_secs_is_read() {
+            assert_eq!(memcached("memcached-ttl-secs 99").ttl_secs, 99);
+        }
+
+        #[test]
+        fn memcached_ttl_alias_still_works() {
+            assert_eq!(memcached("memcached-ttl 99").ttl_secs, 99);
+        }
+
+        #[test]
+        fn the_documented_name_wins_when_both_are_present() {
+            assert!(!redis("redis-fallback-local #false\n  redis-fallback #true").fallback_local);
+            assert_eq!(
+                memcached("memcached-ttl-secs 99\n  memcached-ttl 5").ttl_secs,
+                99
+            );
+        }
+    }
 
     fn parse_filter(kdl: &str) -> Filter {
         let doc: kdl::KdlDocument = kdl.parse().expect("kdl parses");
