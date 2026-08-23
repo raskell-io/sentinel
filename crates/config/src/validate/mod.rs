@@ -7,6 +7,7 @@ pub mod agents;
 pub mod certs;
 pub mod lint;
 pub mod network;
+pub mod unknown_keys;
 
 use std::fmt;
 

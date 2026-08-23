@@ -75,6 +75,16 @@ for details.
 > `failure-mode` — are now read at all. All five are detailed below.
 
 ### Added
+- **`zentinel lint` reports config keys that no parser reads.** A misspelled key
+  in a nested KDL block was accepted and discarded — no error, no warning, no
+  effect — so `failure_mode` with an underscore, or `ratelimit` without a
+  hyphen, silently disabled a policy while the config file said otherwise. The
+  lint now names the key, says it is being ignored, and suggests the intended
+  spelling. It checks blocks whose key set is fixed (`connection-pool`,
+  `timeouts`, `policies`); blocks that legitimately hold arbitrary keys, like a
+  JSON schema's properties, are left alone. A test asserts every shipped config
+  passes, so an under-listed key set fails the build rather than warning
+  operators about valid configuration. (#365)
 - **Certificate folders.** An `sni-certs` block points at a directory, and every
   certificate/key pair found there is registered with the hostnames from its own
   CN and SANs — no config edit to add or remove one. `reload-mode` selects `off`
