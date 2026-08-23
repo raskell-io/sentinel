@@ -727,8 +727,8 @@ impl AgentClientV2Uds {
     ///
     /// Unlike the typed events, a configure payload is arbitrary operator
     /// configuration with no correlation id of its own, so one is added here.
-    /// The server needs it to address its reply, and [`Self::send_event`] no
-    /// longer injects one.
+    /// The server needs it to address its reply, and `send_event` no longer
+    /// injects one.
     pub async fn send_configure(
         &self,
         correlation_id: &str,

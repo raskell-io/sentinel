@@ -116,10 +116,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
+      # --all-features here too: without it, docs on feature-gated items are
+      # never rendered and their broken links go unnoticed.
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps --all-features
 
   test:
     name: Unit Tests
