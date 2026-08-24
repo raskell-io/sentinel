@@ -163,11 +163,6 @@ pub fn parse_routes(node: &kdl::KdlNode) -> Result<Vec<RouteConfig>> {
                     max_body_size: settings.max_body_size,
                     rate_limit: settings.rate_limit,
                     failure_mode: settings.failure_mode,
-                    // Not parsed: nothing in the proxy reads these, and there
-                    // is no KDL key for them. See #366 — they want either
-                    // implementing or removing, not wiring to a dead end.
-                    buffer_requests: false,
-                    buffer_responses: false,
                 };
 
                 routes.push(RouteConfig {

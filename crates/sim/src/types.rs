@@ -200,12 +200,9 @@ pub struct AppliedPolicies {
 
     /// Cache configuration
     pub cache: Option<CacheInfo>,
-
-    /// Whether request buffering is enabled
-    pub buffer_requests: bool,
-
-    /// Whether response buffering is enabled
-    pub buffer_responses: bool,
+    // Buffering flags were reported here until #366. They mirrored
+    // RoutePolicies fields that no configuration could set, so the simulator
+    // was always reporting `false` regardless of what the config said.
 }
 
 /// Rate limit information

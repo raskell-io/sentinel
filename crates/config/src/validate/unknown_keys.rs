@@ -106,11 +106,9 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
             "max-body-size",
             "failure-mode",
             "rate-limit",
-            // Parsed by nothing today, but named in configs and tracked in
-            // #366. Listing them keeps this check quiet about a known gap
-            // rather than reporting it as a typo.
-            "buffer-requests",
-            "buffer-responses",
+            // "buffer-requests" / "buffer-responses" were listed here to keep
+            // this check quiet about a known gap. #366 removed the fields, so
+            // they are now reported like any other key nothing reads.
         ],
     },
 ];

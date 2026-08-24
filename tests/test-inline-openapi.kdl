@@ -43,7 +43,6 @@ routes {
         }
 
         policies {
-            buffer-requests #true
             max-body-size "1MB"
             timeout-secs 30
         }
