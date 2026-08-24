@@ -42,9 +42,6 @@ pub fn render(topology: &Topology) -> String {
         out.push_str("        color=\"#666666\";\n");
         for r in &topology.routes {
             let mut extras = Vec::new();
-            if r.has_circuit_breaker {
-                extras.push("CB");
-            }
             if r.has_retry {
                 extras.push("Retry");
             }
@@ -128,7 +125,15 @@ pub fn render(topology: &Topology) -> String {
             } else {
                 String::new()
             };
-            let hc = if u.has_health_check { " [HC]" } else { "" };
+            // CB moved here from the route node: circuit breakers are per
+            // upstream. See #387.
+            let mut hc = String::new();
+            if u.has_health_check {
+                hc.push_str(" [HC]");
+            }
+            if u.has_circuit_breaker {
+                hc.push_str(" [CB]");
+            }
             out.push_str(&format!(
                 "        U_{} [label=\"{}\\n{}{}\\n{}{}\", shape=cylinder, style=filled, fillcolor=\"#fce4ec\"];\n",
                 sanitize(&u.id),

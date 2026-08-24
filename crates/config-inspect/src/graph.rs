@@ -40,7 +40,6 @@ pub struct RouteNode {
     pub priority: String,
     pub match_summary: String,
     pub service_type: String,
-    pub has_circuit_breaker: bool,
     pub has_retry: bool,
     pub websocket: bool,
     pub cache_exclusions: Option<String>,
@@ -72,6 +71,11 @@ pub struct UpstreamNode {
     pub targets: Vec<String>,
     pub load_balancing: String,
     pub has_health_check: bool,
+    /// Circuit breakers are configured per upstream. This used to sit on
+    /// `RouteNode`, read from a `RouteConfig` field that has never existed, so
+    /// the graph reported breaker coverage against the wrong node type — and
+    /// `config-inspect` did not compile at all.
+    pub has_circuit_breaker: bool,
 }
 
 /// A directed edge between two nodes in the topology.
@@ -153,7 +157,6 @@ fn build_route_nodes(routes: &[RouteConfig]) -> Vec<RouteNode> {
                 priority: r.priority.to_string(),
                 match_summary: summarize_matches(&r.matches),
                 service_type: format!("{:?}", r.service_type),
-                has_circuit_breaker: r.circuit_breaker.is_some(),
                 has_retry: r.retry_policy.is_some(),
                 websocket: r.websocket,
                 cache_exclusions,
@@ -217,6 +220,7 @@ fn build_upstream_nodes(
                 .collect(),
             load_balancing: format!("{:?}", u.load_balancing),
             has_health_check: u.health_check.is_some(),
+            has_circuit_breaker: u.circuit_breaker.is_some(),
         })
         .collect();
     nodes.sort_by(|a, b| a.id.cmp(&b.id));

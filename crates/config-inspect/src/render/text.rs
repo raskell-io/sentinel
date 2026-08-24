@@ -29,11 +29,14 @@ pub fn render(topology: &Topology) -> String {
     out.push_str(&"-".repeat(30));
     out.push('\n');
     for r in &topology.routes {
-        let extras = if r.has_circuit_breaker || r.has_retry || r.websocket {
+        let extras = if r.has_retry || r.websocket {
             let mut flags = Vec::new();
-            if r.has_circuit_breaker { flags.push("CB"); }
-            if r.has_retry { flags.push("retry"); }
-            if r.websocket { flags.push("WS"); }
+            if r.has_retry {
+                flags.push("retry");
+            }
+            if r.websocket {
+                flags.push("WS");
+            }
             format!(" [{}]", flags.join(", "))
         } else {
             String::new()
@@ -101,7 +104,15 @@ pub fn render(topology: &Topology) -> String {
         out.push_str(&"-".repeat(30));
         out.push('\n');
         for u in &topology.upstreams {
-            let hc = if u.has_health_check { " [HC]" } else { "" };
+            // CB moved here from the route node: circuit breakers are per
+            // upstream. See #387.
+            let mut hc = String::new();
+            if u.has_health_check {
+                hc.push_str(" [HC]");
+            }
+            if u.has_circuit_breaker {
+                hc.push_str(" [CB]");
+            }
             out.push_str(&format!(
                 "  {} ({}, {}){}\n",
                 u.id,

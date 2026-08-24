@@ -89,7 +89,15 @@ pub fn render(topology: &Topology) -> String {
             } else {
                 String::new()
             };
-            let hc = if u.has_health_check { " ✓HC" } else { "" };
+            // CB moved here from the route node: circuit breakers are per
+            // upstream. See #387.
+            let mut hc = String::new();
+            if u.has_health_check {
+                hc.push_str(" ✓HC");
+            }
+            if u.has_circuit_breaker {
+                hc.push_str(" ✓CB");
+            }
             out.push_str(&format!(
                 "        U_{id}[[\"{id}\\n{targets}{more}\\n{lb}{hc}\"]]\n",
                 id = sanitize(&u.id),
@@ -117,7 +125,8 @@ pub fn render(topology: &Topology) -> String {
         out.push('\n');
         out.push_str("    %% Warnings:\n");
         for w in &topology.warnings {
-            out.push_str(&format!("    %% [{severity}] {code}: {msg}\n",
+            out.push_str(&format!(
+                "    %% [{severity}] {code}: {msg}\n",
                 severity = w.severity,
                 code = w.code,
                 msg = w.message,
@@ -140,9 +149,6 @@ fn node_ref_id(nr: &NodeRef) -> String {
 
 fn build_route_extras(r: &crate::graph::RouteNode) -> String {
     let mut extras = Vec::new();
-    if r.has_circuit_breaker {
-        extras.push("CB");
-    }
     if r.has_retry {
         extras.push("Retry");
     }
