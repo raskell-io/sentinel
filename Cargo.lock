@@ -7,7 +7,7 @@ name = "TinyUFO"
 version = "0.8.1"
 source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "crossbeam-queue",
  "crossbeam-skiplist",
  "flurry",
@@ -46,17 +46,6 @@ dependencies = [
  "cipher",
  "cpubits",
  "cpufeatures 0.3.0",
-]
-
-[[package]]
-name = "ahash"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891477e0c6a8957309ee5c45a6368af3ae14bb510732d2684ffa19af310920f9"
-dependencies = [
- "getrandom 0.2.17",
- "once_cell",
- "version_check",
 ]
 
 [[package]]
@@ -1461,7 +1450,7 @@ dependencies = [
  "asn1-rs 0.6.2",
  "displaydoc",
  "nom 7.1.3",
- "num-bigint",
+ "num-bigint 0.4.6",
  "num-traits",
  "rusticata-macros",
 ]
@@ -1475,7 +1464,7 @@ dependencies = [
  "asn1-rs 0.7.1",
  "displaydoc",
  "nom 7.1.3",
- "num-bigint",
+ "num-bigint 0.4.6",
  "num-traits",
  "rusticata-macros",
 ]
@@ -1865,7 +1854,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf5efcf77a4da27927d3ab0509dec5b0954bb3bc59da5a1de9e52642ebd4cdf9"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "num_cpus",
  "parking_lot",
  "seize",
@@ -2233,9 +2222,6 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
-dependencies = [
- "ahash 0.7.8",
-]
 
 [[package]]
 name = "hashbrown"
@@ -3078,7 +3064,7 @@ version = "0.49.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59ec8a241beed129f06114aa68007e905ca350e7baeb6e17a7631bb7978d91b2"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "bytecount",
  "data-encoding",
  "email_address",
@@ -3118,7 +3104,7 @@ version = "0.49.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ec7637f83e510868ae6ed625f7ebfbbde4554ee8ce49854caa5126a8b9b9ecb"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "bytecount",
  "fraction",
  "num-cmp",
@@ -3258,7 +3244,7 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c072737075826ee74d3e615e80334e41e617ca3d14fb46ef7cdfda822d6f15f2"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "async-broadcast",
  "async-stream",
  "backon",
@@ -3717,7 +3703,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.6",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -3730,6 +3716,16 @@ name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -3782,7 +3778,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.6",
  "num-integer",
  "num-traits",
 ]
@@ -4290,7 +4286,7 @@ name = "pingora-cache"
 version = "0.8.1"
 source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "async-trait",
  "blake2",
  "bstr",
@@ -4326,7 +4322,7 @@ name = "pingora-core"
 version = "0.8.1"
 source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "async-trait",
  "brotli 3.5.0",
  "bstr",
@@ -4362,7 +4358,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sfv",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "tokio",
@@ -4417,7 +4413,7 @@ name = "pingora-limits"
 version = "0.8.1"
 source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
 ]
 
 [[package]]
@@ -4447,7 +4443,7 @@ version = "0.8.1"
 source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "arrayvec",
- "hashbrown 0.12.3",
+ "hashbrown 0.17.0",
  "parking_lot",
  "rand 0.8.6",
 ]
@@ -4458,7 +4454,7 @@ version = "0.8.1"
 source = "git+https://github.com/zentinelproxy/pingora.git?rev=de28721#de28721d24a1975c86136d781ffc5e44340cfbe0"
 dependencies = [
  "TinyUFO",
- "ahash 0.8.12",
+ "ahash",
  "async-trait",
  "log",
  "parking_lot",
@@ -5087,9 +5083,9 @@ dependencies = [
 
 [[package]]
 name = "redis"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3257df217f7eab0044627a268c9cc6cdb60c0c421c88f83ac41c4e31520b6b84"
+checksum = "e37a4ca5c6ca42aa3e6df2fd32b987a65d32a4c2159a6f3fe0fd1df306a2658f"
 dependencies = [
  "arc-swap",
  "arcstr",
@@ -5101,7 +5097,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "itoa",
- "num-bigint",
+ "num-bigint 0.5.1",
  "percent-encoding",
  "pin-project-lite",
  "ryu",
@@ -5179,7 +5175,7 @@ version = "0.49.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6efa2154ea6f5ce0fdecdd2a8d18f2fa1a39a8fbba91564f555a592e4dce8278"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "fluent-uri",
  "getrandom 0.3.4",
  "hashbrown 0.17.0",
@@ -6949,9 +6945,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.24.0"
+version = "1.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+checksum = "2cefc03fd367c0c6d4305de1b312cf00248c4114f4a0418ce6a6af769e3b0bd9"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
