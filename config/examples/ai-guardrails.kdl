@@ -155,8 +155,6 @@ routes {
         policies {
             timeout-secs 300
             max-body-size "1MB"
-            buffer-requests #true   // Required for request inspection
-            buffer-responses #true  // Required for response inspection
             failure-mode "closed"
         }
     }
@@ -200,8 +198,6 @@ routes {
         policies {
             timeout-secs 300
             max-body-size "1MB"
-            buffer-requests #true
-            buffer-responses #true
         }
     }
 
@@ -249,8 +245,6 @@ routes {
         policies {
             timeout-secs 300
             max-body-size "512KB"  // Smaller limit for security
-            buffer-requests #true
-            buffer-responses #true
             failure-mode "closed"
         }
     }
@@ -286,7 +280,6 @@ routes {
         policies {
             timeout-secs 60
             max-body-size "10MB"  // Large batches
-            buffer-requests #true
         }
     }
 

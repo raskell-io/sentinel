@@ -2151,8 +2151,6 @@ mod tests {
                 max_body_size: None,
                 rate_limit: None,
                 failure_mode: FailureMode::Closed,
-                buffer_requests: false,
-                buffer_responses: false,
                 cache: None,
             },
             filters: vec![],
