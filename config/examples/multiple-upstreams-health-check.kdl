@@ -34,13 +34,6 @@ routes {
 
         upstream "backend"
 
-        circuit-breaker {
-            failure-threshold 5
-            success-threshold 2
-            timeout-seconds 60
-            half-open-max-requests 3
-        }
-
         // retry-policy currently implements max-attempts only; per-attempt
         // timeouts, backoff tuning and status-code retries are tracked in #279.
         retry-policy {
