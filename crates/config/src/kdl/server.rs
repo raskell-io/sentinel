@@ -19,6 +19,25 @@ use std::time::Duration;
 use super::helpers::{get_bool_entry, get_first_arg_string, get_int_entry, get_string_entry};
 
 /// Parse server configuration block
+/// Every key `parse_server_config` reads.
+///
+/// Kept beside the parser so that adding a setting below without listing it
+/// here is a visible omission rather than a silent one. The unknown-key lint
+/// reads this list; under-listing it produces false warnings on valid configs.
+pub(crate) const RECOGNIZED_SYSTEM_KEYS: &[&str] = &[
+    "worker-threads",
+    "max-connections",
+    "graceful-shutdown-timeout-secs",
+    "daemon",
+    "pid-file",
+    "user",
+    "group",
+    "working-directory",
+    "trace-id-format",
+    "auto-reload",
+    "route-cache-size",
+];
+
 pub fn parse_server_config(node: &kdl::KdlNode) -> Result<ServerConfig> {
     trace!("Parsing server configuration block");
 

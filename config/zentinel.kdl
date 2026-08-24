@@ -131,15 +131,9 @@ routes {
         filters "auth" "rate-limit"
         waf-enabled #true
 
-        circuit-breaker {
-            failure-threshold 5
-            success-threshold 2
-            timeout-seconds 30
-            half-open-max-requests 3
-        }
-
-        // retry-policy currently supports max-attempts only; per-attempt
-        // timeouts and backoff tuning are not yet implemented.
+        // max-attempts counts request retries, not peer selections. Nothing is
+        // retried on a status code unless retryable-status-codes says so, and
+        // POST is never replayed without retry-non-idempotent.
         retry-policy {
             max-attempts 3
         }
