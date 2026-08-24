@@ -156,7 +156,10 @@ impl ConditionDetail {
             explanation: if matched {
                 Some(format!("Path '{}' matches regex '{}'", path, pattern))
             } else {
-                Some(format!("Path '{}' does not match regex '{}'", path, pattern))
+                Some(format!(
+                    "Path '{}' does not match regex '{}'",
+                    path, pattern
+                ))
             },
         }
     }
@@ -294,9 +297,7 @@ mod tests {
 
     #[test]
     fn test_match_step_no_match() {
-        let conditions = vec![
-            ConditionDetail::path_prefix("/api", "/other", false),
-        ];
+        let conditions = vec![ConditionDetail::path_prefix("/api", "/other", false)];
 
         let step = MatchStep::no_match("api-route".to_string(), conditions);
 

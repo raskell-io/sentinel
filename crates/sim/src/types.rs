@@ -67,7 +67,8 @@ impl SimulatedRequest {
 
     /// Add a query parameter
     pub fn with_query_param(mut self, name: &str, value: &str) -> Self {
-        self.query_params.insert(name.to_string(), value.to_string());
+        self.query_params
+            .insert(name.to_string(), value.to_string());
         self
     }
 
@@ -130,7 +131,12 @@ impl SimulatedRequest {
 
     /// Generate a cache key for this request (used internally)
     pub fn cache_key(&self) -> String {
-        format!("{}:{}:{}", self.method, self.host, self.path_without_query())
+        format!(
+            "{}:{}:{}",
+            self.method,
+            self.host,
+            self.path_without_query()
+        )
     }
 }
 

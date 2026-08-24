@@ -3,9 +3,9 @@
 //! Simulates load balancer behavior to show which upstream target
 //! would be selected for a given request.
 
+use xxhash_rust::xxh3::xxh3_64;
 use zentinel_common::types::LoadBalancingAlgorithm;
 use zentinel_config::{Config, UpstreamConfig};
-use xxhash_rust::xxh3::xxh3_64;
 
 use crate::types::{SimulatedRequest, UpstreamSelection};
 
@@ -126,7 +126,10 @@ fn select_target(
             // Weighted selection based on weights
             let total_weight: u32 = targets.iter().map(|t| t.weight).sum();
             if total_weight == 0 {
-                return (0, "Weighted: all weights are zero, using first target".to_string());
+                return (
+                    0,
+                    "Weighted: all weights are zero, using first target".to_string(),
+                );
             }
 
             let hash = xxh3_64(request.cache_key().as_bytes());
@@ -325,7 +328,10 @@ fn select_target(
             // Weighted least connections combines weights with connection counts
             let total_weight: u32 = targets.iter().map(|t| t.weight).sum();
             if total_weight == 0 {
-                return (0, "Weighted least connections: all weights zero, using first target".to_string());
+                return (
+                    0,
+                    "Weighted least connections: all weights zero, using first target".to_string(),
+                );
             }
 
             let hash = xxh3_64(request.cache_key().as_bytes());
@@ -347,7 +353,10 @@ fn select_target(
                 }
             }
 
-            (0, "Weighted least connections: fallback to first target".to_string())
+            (
+                0,
+                "Weighted least connections: fallback to first target".to_string(),
+            )
         }
 
         LoadBalancingAlgorithm::Sticky => {
@@ -408,6 +417,7 @@ mod tests {
             timeouts: Default::default(),
             tls: None,
             http_version: Default::default(),
+            circuit_breaker: None,
         }
     }
 

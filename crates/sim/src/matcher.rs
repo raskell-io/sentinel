@@ -6,7 +6,6 @@
 
 use regex::Regex;
 
-use zentinel_common::types::Priority;
 use zentinel_config::{MatchCondition, RouteConfig};
 
 use crate::trace::{ConditionDetail, MatchStep};
@@ -206,16 +205,24 @@ impl CompiledRoute {
         let mut score = 0;
         for matcher in matchers {
             score += match matcher {
-                CompiledMatcher::Path(_) => 1000,     // Exact path most specific
+                CompiledMatcher::Path(_) => 1000, // Exact path most specific
                 CompiledMatcher::PathRegex { .. } => 500,
                 CompiledMatcher::PathPrefix(_) => 100,
                 CompiledMatcher::Host(_) => 50,
                 CompiledMatcher::Header { value, .. } => {
-                    if value.is_some() { 30 } else { 20 }
+                    if value.is_some() {
+                        30
+                    } else {
+                        20
+                    }
                 }
                 CompiledMatcher::Method(_) => 10,
                 CompiledMatcher::QueryParam { value, .. } => {
-                    if value.is_some() { 25 } else { 15 }
+                    if value.is_some() {
+                        25
+                    } else {
+                        15
+                    }
                 }
             };
         }
@@ -228,11 +235,7 @@ impl CompiledRoute {
     }
 
     /// Evaluate this route and return match result with condition details
-    fn evaluate(
-        &self,
-        request: &SimulatedRequest,
-        path: &str,
-    ) -> (bool, Vec<ConditionDetail>) {
+    fn evaluate(&self, request: &SimulatedRequest, path: &str) -> (bool, Vec<ConditionDetail>) {
         let mut all_matched = true;
         let mut conditions = Vec::new();
 
@@ -414,6 +417,8 @@ impl HostMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the tests construct routes, so this is not needed by the crate proper.
+    use zentinel_common::types::Priority;
     use zentinel_config::{MatchCondition, RouteConfig, ServiceType};
 
     fn create_route(id: &str, matches: Vec<MatchCondition>) -> RouteConfig {
@@ -427,7 +432,6 @@ mod tests {
             filters: vec![],
             builtin_handler: None,
             waf_enabled: false,
-            circuit_breaker: None,
             retry_policy: None,
             static_files: None,
             api_schema: None,
@@ -446,7 +450,10 @@ mod tests {
     fn test_path_prefix_matching() {
         let routes = vec![
             create_route("api", vec![MatchCondition::PathPrefix("/api".to_string())]),
-            create_route("static", vec![MatchCondition::PathPrefix("/static".to_string())]),
+            create_route(
+                "static",
+                vec![MatchCondition::PathPrefix("/static".to_string())],
+            ),
         ];
 
         let matcher = RouteMatcher::new(&routes, None).unwrap();
@@ -461,8 +468,14 @@ mod tests {
     #[test]
     fn test_exact_path_matching() {
         let routes = vec![
-            create_route("exact", vec![MatchCondition::Path("/api/v1/users".to_string())]),
-            create_route("prefix", vec![MatchCondition::PathPrefix("/api".to_string())]),
+            create_route(
+                "exact",
+                vec![MatchCondition::Path("/api/v1/users".to_string())],
+            ),
+            create_route(
+                "prefix",
+                vec![MatchCondition::PathPrefix("/api".to_string())],
+            ),
         ];
 
         let matcher = RouteMatcher::new(&routes, None).unwrap();
@@ -530,15 +543,18 @@ mod tests {
         let without_auth = SimulatedRequest::new("GET", "example.com", "/api");
         assert!(matcher.match_request(&without_auth).is_none());
 
-        let with_auth =
-            SimulatedRequest::new("GET", "example.com", "/api").with_header("Authorization", "Bearer token");
+        let with_auth = SimulatedRequest::new("GET", "example.com", "/api")
+            .with_header("Authorization", "Bearer token");
         assert!(matcher.match_request(&with_auth).is_some());
     }
 
     #[test]
     fn test_match_trace() {
         let routes = vec![
-            create_route("static", vec![MatchCondition::PathPrefix("/static".to_string())]),
+            create_route(
+                "static",
+                vec![MatchCondition::PathPrefix("/static".to_string())],
+            ),
             create_route("api", vec![MatchCondition::PathPrefix("/api".to_string())]),
         ];
 
@@ -586,10 +602,12 @@ mod tests {
 
     #[test]
     fn test_priority_ordering() {
-        let mut low_priority = create_route("low", vec![MatchCondition::PathPrefix("/".to_string())]);
+        let mut low_priority =
+            create_route("low", vec![MatchCondition::PathPrefix("/".to_string())]);
         low_priority.priority = Priority::LOW;
 
-        let mut high_priority = create_route("high", vec![MatchCondition::PathPrefix("/".to_string())]);
+        let mut high_priority =
+            create_route("high", vec![MatchCondition::PathPrefix("/".to_string())]);
         high_priority.priority = Priority::HIGH;
 
         // Add in wrong order to verify sorting

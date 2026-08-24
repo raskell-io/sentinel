@@ -565,14 +565,18 @@ impl CircuitBreakerState {
         Self::default()
     }
 
-    /// Initialize circuit breakers from config
+    /// Initialize circuit breakers from config.
+    ///
+    /// Breakers are per **upstream**, which is where the proxy actually has
+    /// them. This used to read `route.circuit_breaker` — a field `RouteConfig`
+    /// has never had, so the simulator did not compile (#387) and, before that,
+    /// modelled a feature the proxy does not implement. The module header has
+    /// said "per upstream" throughout.
     fn init_from_config(&mut self, config: &Config) {
-        // Per-route circuit breakers
-        for route in &config.routes {
-            if let Some(ref cb) = route.circuit_breaker {
-                let key = format!("route:{}", route.id);
+        for (name, upstream) in &config.upstreams {
+            if let Some(ref cb) = upstream.circuit_breaker {
                 self.breakers.insert(
-                    key,
+                    Self::key(name),
                     CircuitBreaker::new(
                         cb.failure_threshold,
                         cb.success_threshold,
@@ -583,14 +587,19 @@ impl CircuitBreakerState {
         }
     }
 
-    /// Check circuit breaker for a route
+    /// Map an upstream name to its breaker key.
+    fn key(upstream: &str) -> String {
+        format!("upstream:{upstream}")
+    }
+
+    /// Check the circuit breaker guarding an upstream.
     fn check(
         &mut self,
-        route_id: &str,
+        upstream: &str,
         timestamp: f64,
         request_index: usize,
     ) -> (bool, Option<StateTransition>) {
-        let key = format!("route:{}", route_id);
+        let key = Self::key(upstream);
 
         if let Some(cb) = self.breakers.get_mut(&key) {
             let before = cb.snapshot();
@@ -797,8 +806,7 @@ pub fn simulate_sequence(
         let route = matched_route.as_ref().unwrap();
 
         // 2. Check rate limit
-        let (allowed, rl_transition) =
-            rate_limits.check_and_consume(&route.id, timestamp, idx);
+        let (allowed, rl_transition) = rate_limits.check_and_consume(&route.id, timestamp, idx);
 
         if let Some(t) = rl_transition {
             transitions.push(t);
@@ -831,17 +839,21 @@ pub fn simulate_sequence(
             cache_misses += 1;
         }
 
-        // 4. Check circuit breaker (only if not cache hit)
+        // 4. Check the circuit breaker guarding this route's upstream (only if
+        //    not a cache hit). A route with no upstream — static files, a
+        //    builtin handler — reaches no upstream and so cannot be blocked by
+        //    one.
         let mut circuit_open = false;
         if !is_cache_hit {
-            let (blocked, cb_transition) =
-                circuit_breakers.check(&route.id, timestamp, idx);
-            if let Some(t) = cb_transition {
-                transitions.push(t);
-            }
-            if blocked {
-                circuit_open = true;
-                circuit_blocked_count += 1;
+            if let Some(ref upstream_id) = route.upstream {
+                let (blocked, cb_transition) = circuit_breakers.check(upstream_id, timestamp, idx);
+                if let Some(t) = cb_transition {
+                    transitions.push(t);
+                }
+                if blocked {
+                    circuit_open = true;
+                    circuit_blocked_count += 1;
+                }
             }
         }
 
@@ -1000,6 +1012,64 @@ mod tests {
         // Success in half-open should close
         cb.record_success();
         assert_eq!(cb.state, CircuitState::Closed);
+    }
+
+    /// The state-machine test above builds a `CircuitBreaker` directly, so it
+    /// passed throughout the period when `init_from_config` read a `RouteConfig`
+    /// field that did not exist (#387). This one goes through a real config, so
+    /// it fails if the wiring breaks again.
+    #[test]
+    fn breakers_are_built_from_upstreams_not_routes() {
+        let kdl = r#"
+            system {
+                worker-threads 2
+            }
+            listeners {
+                listener "http" {
+                    address "127.0.0.1:8080"
+                }
+            }
+            upstreams {
+                upstream "guarded" {
+                    target "127.0.0.1:9000"
+                    circuit-breaker {
+                        failure-threshold 2
+                        success-threshold 1
+                        timeout-seconds 10
+                    }
+                }
+                upstream "unguarded" {
+                    target "127.0.0.1:9001"
+                }
+            }
+            routes {
+                route "r" {
+                    matches {
+                        path-prefix "/"
+                    }
+                    upstream "guarded"
+                }
+            }
+        "#;
+        let config = Config::from_kdl(kdl).expect("config should parse");
+
+        let mut state = CircuitBreakerState::new();
+        state.init_from_config(&config);
+
+        let snapshot = state.snapshot();
+        assert!(
+            snapshot.contains_key("upstream:guarded"),
+            "expected a breaker keyed by upstream name, got: {:?}",
+            snapshot.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !snapshot.contains_key("upstream:unguarded"),
+            "an upstream without a circuit-breaker block should get no breaker"
+        );
+        assert!(
+            !snapshot.keys().any(|k| k.starts_with("route:")),
+            "breakers are per upstream; the proxy has no per-route circuit breaker"
+        );
     }
 
     #[test]

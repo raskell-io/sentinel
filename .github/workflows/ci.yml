@@ -166,3 +166,54 @@ jobs:
       # `binary-uds` shipped hanging every agent call but one (#359, #360).
       - name: Run unit tests
         run: cargo test --workspace --lib --all-features
+
+  # Crates in the workspace `exclude` list are built by nothing above, so they
+  # can break without any job going red. zentinel-sim did exactly that: it
+  # stopped compiling and stayed that way, because `cargo check --workspace`
+  # never looks at it (#387).
+  #
+  # They are excluded for a real reason — sim and playground-wasm depend on
+  # zentinel-config with `default-features = false` to stay WASM-compatible,
+  # and workspace feature unification would pull `runtime` back in via
+  # zentinel-proxy. So they need their own build rather than membership.
+  #
+  # Covers the two that build on a native target today. `crates/config-inspect`
+  # and `crates/playground-wasm` are NOT covered: both still require
+  # zentinel-config/common `^0.5.4` while the workspace is well past that, so
+  # they cannot resolve dependencies at all. Add them here once those pins are
+  # fixed.
+  excluded-crates:
+    name: Excluded Crates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-excluded
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      # The root `fmt` job runs `cargo fmt --all` at the workspace, which by
+      # definition does not reach an excluded crate. sim had drifted across
+      # five files as a result.
+      - name: Check formatting (excluded crates)
+        run: |
+          cargo fmt --manifest-path crates/sim/Cargo.toml --check
+          cargo fmt --manifest-path agents/wasm-allowlist/Cargo.toml --check
+
+      - name: Test zentinel-sim
+        working-directory: crates/sim
+        run: cargo test --all-targets
+
+      - name: Check agents/wasm-allowlist
+        working-directory: agents/wasm-allowlist
+        run: cargo check --all-targets
