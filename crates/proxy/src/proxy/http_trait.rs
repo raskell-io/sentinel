@@ -1650,12 +1650,17 @@ impl ProxyHttp for ZentinelProxy {
     /// - **Stream mode**: Send each chunk immediately to agents as it arrives
     async fn request_body_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         body: &mut Option<Bytes>,
         end_of_stream: bool,
         ctx: &mut Self::CTX,
     ) -> Result<(), Box<Error>> {
         use zentinel_config::BodyStreamingMode;
+
+        // MCP / A2A policy. Runs before agent inspection because it decides
+        // whether the request may be made at all, from data already in hand;
+        // agents decide whether its contents are safe.
+        self.evaluate_agentic_policy(session, body.as_ref(), end_of_stream, ctx)?;
 
         // Handle WebSocket frame inspection (client -> server)
         if ctx.is_websocket_upgrade {
@@ -3819,6 +3824,98 @@ impl ProxyHttp for ZentinelProxy {
 // =============================================================================
 
 impl ZentinelProxy {
+    /// Enforce a route's MCP or A2A policy against the request body.
+    ///
+    /// Policy is resolved from the JSON-RPC envelope, never from the mirrored
+    /// `Mcp-*` headers — those are only consulted to confirm they agree with
+    /// the body, and a request that disagrees with itself is refused. See
+    /// [`crate::agentic::mcp`] for why.
+    ///
+    /// The body is accumulated across chunks and judged once, at end of stream,
+    /// so that a decision is never made on a partial envelope. Nothing has been
+    /// forwarded upstream at that point.
+    fn evaluate_agentic_policy(
+        &self,
+        session: &Session,
+        chunk: Option<&Bytes>,
+        end_of_stream: bool,
+        ctx: &mut RequestContext,
+    ) -> Result<(), Box<Error>> {
+        use crate::agentic::{self, jsonrpc};
+
+        let Some(route) = ctx.route_config.clone() else {
+            return Ok(());
+        };
+        if route.mcp.is_none() && route.a2a.is_none() {
+            return Ok(());
+        }
+
+        // Accumulate, but never past what the evaluator will parse. Beyond that
+        // the body is uninspectable, and the policy says what to do about that
+        // — judging a truncated prefix would be worse than either answer.
+        if let Some(chunk) = chunk {
+            let remaining = jsonrpc::MAX_ENVELOPE_BYTES.saturating_sub(ctx.agentic_body.len());
+            if chunk.len() > remaining {
+                ctx.agentic_body_oversize = true;
+                ctx.agentic_body.extend_from_slice(&chunk[..remaining]);
+            } else {
+                ctx.agentic_body.extend_from_slice(chunk);
+            }
+        }
+
+        if !end_of_stream {
+            return Ok(());
+        }
+
+        // An oversize body is deliberately handed on as-is: it is past the
+        // parse bound, so the evaluator will classify it uninspectable and the
+        // route's own setting decides.
+        let headers: Vec<(String, String)> = session
+            .req_header()
+            .headers
+            .iter()
+            .filter_map(|(k, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|v| (k.as_str().to_ascii_lowercase(), v.to_string()))
+            })
+            .collect();
+
+        match agentic::decide(&route, &headers, &ctx.agentic_body) {
+            None => {}
+            Some(agentic::Outcome::Allow {
+                mcp_method,
+                mcp_target,
+                a2a_method,
+            }) => {
+                trace!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = ?ctx.route_id,
+                    mcp_method = ?mcp_method,
+                    mcp_target = ?mcp_target,
+                    a2a_method = ?a2a_method,
+                    "Agentic request permitted"
+                );
+                ctx.mcp_method = mcp_method;
+                ctx.mcp_target = mcp_target;
+                ctx.a2a_method = a2a_method;
+            }
+            Some(agentic::Outcome::Deny { reason, kind }) => {
+                warn!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = ?ctx.route_id,
+                    policy = kind,
+                    reason = %reason,
+                    "Agentic request denied"
+                );
+                self.metrics.record_blocked_request(kind);
+                return Err(Error::explain(ErrorType::HTTPStatus(403), reason));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Process a single body chunk in streaming mode.
     async fn process_body_chunk_streaming(
         &self,
