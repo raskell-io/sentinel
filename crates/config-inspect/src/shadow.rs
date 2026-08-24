@@ -95,12 +95,30 @@ fn check_path_shadow(
 /// Check if the higher route has conditions that the lower route doesn't,
 /// which would mean it's more restrictive (not a true shadow).
 fn has_extra_restrictions(higher: &RouteConfig, lower: &RouteConfig) -> bool {
-    let higher_has_host = higher.matches.iter().any(|m| matches!(m, MatchCondition::Host(_)));
-    let lower_has_host = lower.matches.iter().any(|m| matches!(m, MatchCondition::Host(_)));
-    let higher_has_method = higher.matches.iter().any(|m| matches!(m, MatchCondition::Method(_)));
-    let lower_has_method = lower.matches.iter().any(|m| matches!(m, MatchCondition::Method(_)));
-    let higher_has_header = higher.matches.iter().any(|m| matches!(m, MatchCondition::Header { .. }));
-    let lower_has_header = lower.matches.iter().any(|m| matches!(m, MatchCondition::Header { .. }));
+    let higher_has_host = higher
+        .matches
+        .iter()
+        .any(|m| matches!(m, MatchCondition::Host(_)));
+    let lower_has_host = lower
+        .matches
+        .iter()
+        .any(|m| matches!(m, MatchCondition::Host(_)));
+    let higher_has_method = higher
+        .matches
+        .iter()
+        .any(|m| matches!(m, MatchCondition::Method(_)));
+    let lower_has_method = lower
+        .matches
+        .iter()
+        .any(|m| matches!(m, MatchCondition::Method(_)));
+    let higher_has_header = higher
+        .matches
+        .iter()
+        .any(|m| matches!(m, MatchCondition::Header { .. }));
+    let lower_has_header = lower
+        .matches
+        .iter()
+        .any(|m| matches!(m, MatchCondition::Header { .. }));
 
     // If higher route has a condition type that lower doesn't, it's more restrictive
     (higher_has_host && !lower_has_host)
@@ -155,7 +173,6 @@ mod tests {
             filters: vec![],
             builtin_handler: None,
             waf_enabled: false,
-            circuit_breaker: None,
             retry_policy: None,
             static_files: None,
             api_schema: None,
@@ -173,8 +190,16 @@ mod tests {
     #[test]
     fn prefix_shadows_longer_prefix() {
         let routes = vec![
-            route("api", Priority::HIGH, vec![MatchCondition::PathPrefix("/api".into())]),
-            route("api-users", Priority::NORMAL, vec![MatchCondition::PathPrefix("/api/users".into())]),
+            route(
+                "api",
+                Priority::HIGH,
+                vec![MatchCondition::PathPrefix("/api".into())],
+            ),
+            route(
+                "api-users",
+                Priority::NORMAL,
+                vec![MatchCondition::PathPrefix("/api/users".into())],
+            ),
         ];
         let shadowed = find_shadowed_routes(&routes);
         assert_eq!(shadowed.len(), 1);
@@ -185,8 +210,16 @@ mod tests {
     #[test]
     fn same_priority_does_not_shadow() {
         let routes = vec![
-            route("api", Priority::NORMAL, vec![MatchCondition::PathPrefix("/api".into())]),
-            route("api-users", Priority::NORMAL, vec![MatchCondition::PathPrefix("/api/users".into())]),
+            route(
+                "api",
+                Priority::NORMAL,
+                vec![MatchCondition::PathPrefix("/api".into())],
+            ),
+            route(
+                "api-users",
+                Priority::NORMAL,
+                vec![MatchCondition::PathPrefix("/api/users".into())],
+            ),
         ];
         let shadowed = find_shadowed_routes(&routes);
         assert!(shadowed.is_empty());
@@ -203,7 +236,11 @@ mod tests {
                     MatchCondition::Host("internal.example.com".into()),
                 ],
             ),
-            route("api", Priority::NORMAL, vec![MatchCondition::PathPrefix("/api".into())]),
+            route(
+                "api",
+                Priority::NORMAL,
+                vec![MatchCondition::PathPrefix("/api".into())],
+            ),
         ];
         let shadowed = find_shadowed_routes(&routes);
         assert!(shadowed.is_empty());

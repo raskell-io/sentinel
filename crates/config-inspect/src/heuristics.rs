@@ -81,7 +81,10 @@ fn check_orphan_upstreams(config: &Config, warnings: &mut Vec<Warning>) {
             warnings.push(Warning {
                 severity: Severity::Warn,
                 code: "ORPHAN_UPSTREAM".to_string(),
-                message: format!("Upstream '{}' is defined but not referenced by any route", upstream_id),
+                message: format!(
+                    "Upstream '{}' is defined but not referenced by any route",
+                    upstream_id
+                ),
                 context: vec![upstream_id.clone()],
             });
         }
@@ -104,7 +107,10 @@ fn check_orphan_agents(config: &Config, warnings: &mut Vec<Warning>) {
             warnings.push(Warning {
                 severity: Severity::Warn,
                 code: "ORPHAN_AGENT".to_string(),
-                message: format!("Agent '{}' is defined but not referenced by any filter", agent.id),
+                message: format!(
+                    "Agent '{}' is defined but not referenced by any filter",
+                    agent.id
+                ),
                 context: vec![agent.id.clone()],
             });
         }
@@ -124,7 +130,10 @@ fn check_orphan_filters(config: &Config, warnings: &mut Vec<Warning>) {
             warnings.push(Warning {
                 severity: Severity::Info,
                 code: "ORPHAN_FILTER".to_string(),
-                message: format!("Filter '{}' is defined but not referenced by any route", filter_id),
+                message: format!(
+                    "Filter '{}' is defined but not referenced by any route",
+                    filter_id
+                ),
                 context: vec![filter_id.clone()],
             });
         }
@@ -195,8 +204,8 @@ fn check_single_target(config: &Config, warnings: &mut Vec<Warning>) {
 
 /// Catch-all routes (no match conditions) that aren't lowest priority.
 fn check_catch_all_priority(config: &Config, warnings: &mut Vec<Warning>) {
-    use zentinel_config::routes::ServiceType;
     use zentinel_common::types::Priority;
+    use zentinel_config::routes::ServiceType;
 
     for route in &config.routes {
         if route.matches.is_empty()

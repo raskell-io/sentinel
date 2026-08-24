@@ -177,11 +177,15 @@ jobs:
   # and workspace feature unification would pull `runtime` back in via
   # zentinel-proxy. So they need their own build rather than membership.
   #
-  # Covers the two that build on a native target today. `crates/config-inspect`
-  # and `crates/playground-wasm` are NOT covered: both still require
-  # zentinel-config/common `^0.5.4` while the workspace is well past that, so
-  # they cannot resolve dependencies at all. Add them here once those pins are
-  # fixed.
+  # Covers all four excluded crates. config-inspect and playground-wasm were
+  # added once their dependency pins were fixed — they had required
+  # zentinel-config/common `^0.5.4` against a workspace at 0.6.27, so they
+  # failed at dependency resolution before compiling anything.
+  #
+  # Internal deps in these crates are pinned as `0.6`, not an exact patch, so a
+  # workspace patch release cannot strand them again. A 0.7 bump still will,
+  # deliberately: excluded crates cannot use `version.workspace = true`, so
+  # something has to notice.
   excluded-crates:
     name: Excluded Crates
     runs-on: ubuntu-latest
@@ -208,11 +212,24 @@ jobs:
       - name: Check formatting (excluded crates)
         run: |
           cargo fmt --manifest-path crates/sim/Cargo.toml --check
+          cargo fmt --manifest-path crates/config-inspect/Cargo.toml --check
+          cargo fmt --manifest-path crates/playground-wasm/Cargo.toml --check
           cargo fmt --manifest-path agents/wasm-allowlist/Cargo.toml --check
 
       - name: Test zentinel-sim
         working-directory: crates/sim
         run: cargo test --all-targets
+
+      - name: Test zentinel-config-inspect
+        working-directory: crates/config-inspect
+        run: cargo test --all-targets
+
+      # Native check only. The real artifact is built for wasm32 by wasm-pack
+      # outside CI; this catches the breakage that actually happened — a change
+      # in zentinel-config that the crate no longer compiles against.
+      - name: Check zentinel-playground-wasm
+        working-directory: crates/playground-wasm
+        run: cargo check --all-targets
 
       - name: Check agents/wasm-allowlist
         working-directory: agents/wasm-allowlist

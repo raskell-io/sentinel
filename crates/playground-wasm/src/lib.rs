@@ -54,9 +54,9 @@
 use wasm_bindgen::prelude::*;
 
 use zentinel_sim::{
-    validate as sim_validate, simulate as sim_simulate, get_effective_config,
-    simulate_sequence as sim_simulate_sequence, simulate_with_agents as sim_simulate_with_agents,
-    MockAgentResponse, SimulatedRequest, TimestampedRequest,
+    get_effective_config, simulate as sim_simulate, simulate_sequence as sim_simulate_sequence,
+    simulate_with_agents as sim_simulate_with_agents, validate as sim_validate, MockAgentResponse,
+    SimulatedRequest, TimestampedRequest,
 };
 
 /// Initialize panic hook for better error messages in the console
@@ -90,17 +90,25 @@ pub fn validate(config_kdl: &str) -> JsValue {
     // Convert to a serializable format
     let response = ValidationResponse {
         valid: result.valid,
-        errors: result.errors.iter().map(|e| ErrorInfo {
-            message: e.message.clone(),
-            severity: format!("{:?}", e.severity).to_lowercase(),
-            line: e.location.as_ref().map(|l| l.line),
-            column: e.location.as_ref().map(|l| l.column),
-            hint: e.hint.clone(),
-        }).collect(),
-        warnings: result.warnings.iter().map(|w| WarningInfo {
-            code: w.code.clone(),
-            message: w.message.clone(),
-        }).collect(),
+        errors: result
+            .errors
+            .iter()
+            .map(|e| ErrorInfo {
+                message: e.message.clone(),
+                severity: format!("{:?}", e.severity).to_lowercase(),
+                line: e.location.as_ref().map(|l| l.line),
+                column: e.location.as_ref().map(|l| l.column),
+                hint: e.hint.clone(),
+            })
+            .collect(),
+        warnings: result
+            .warnings
+            .iter()
+            .map(|w| WarningInfo {
+                code: w.code.clone(),
+                message: w.message.clone(),
+            })
+            .collect(),
         effective_config: if result.valid {
             result.effective_config.as_ref().map(get_effective_config)
         } else {
@@ -136,25 +144,36 @@ pub fn simulate(config_kdl: &str, request_json: &str) -> JsValue {
     if !validation.valid {
         return serde_wasm_bindgen::to_value(&SimulationError {
             error: "Invalid configuration".to_string(),
-            details: validation.errors.iter().map(|e| e.message.clone()).collect(),
-        }).unwrap_or(JsValue::NULL);
+            details: validation
+                .errors
+                .iter()
+                .map(|e| e.message.clone())
+                .collect(),
+        })
+        .unwrap_or(JsValue::NULL);
     }
 
     let config = match validation.effective_config {
         Some(c) => c,
-        None => return serde_wasm_bindgen::to_value(&SimulationError {
-            error: "Failed to parse configuration".to_string(),
-            details: vec![],
-        }).unwrap_or(JsValue::NULL),
+        None => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Failed to parse configuration".to_string(),
+                details: vec![],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
     };
 
     // Parse request
     let request: SimulatedRequest = match serde_json::from_str(request_json) {
         Ok(r) => r,
-        Err(e) => return serde_wasm_bindgen::to_value(&SimulationError {
-            error: "Invalid request JSON".to_string(),
-            details: vec![e.to_string()],
-        }).unwrap_or(JsValue::NULL),
+        Err(e) => {
+            return serde_wasm_bindgen::to_value(&SimulationError {
+                error: "Invalid request JSON".to_string(),
+                details: vec![e.to_string()],
+            })
+            .unwrap_or(JsValue::NULL)
+        }
     };
 
     // Run simulation
@@ -173,8 +192,13 @@ pub fn get_normalized_config(config_kdl: &str) -> JsValue {
     if !validation.valid {
         return serde_wasm_bindgen::to_value(&SimulationError {
             error: "Invalid configuration".to_string(),
-            details: validation.errors.iter().map(|e| e.message.clone()).collect(),
-        }).unwrap_or(JsValue::NULL);
+            details: validation
+                .errors
+                .iter()
+                .map(|e| e.message.clone())
+                .collect(),
+        })
+        .unwrap_or(JsValue::NULL);
     }
 
     match validation.effective_config {
@@ -237,7 +261,11 @@ pub fn simulate_stateful(config_kdl: &str, requests_json: &str) -> JsValue {
     if !validation.valid {
         return serde_wasm_bindgen::to_value(&SimulationError {
             error: "Invalid configuration".to_string(),
-            details: validation.errors.iter().map(|e| e.message.clone()).collect(),
+            details: validation
+                .errors
+                .iter()
+                .map(|e| e.message.clone())
+                .collect(),
         })
         .unwrap_or(JsValue::NULL);
     }
@@ -326,7 +354,11 @@ pub fn simulate_with_agents(
     if !validation.valid {
         return serde_wasm_bindgen::to_value(&SimulationError {
             error: "Invalid configuration".to_string(),
-            details: validation.errors.iter().map(|e| e.message.clone()).collect(),
+            details: validation
+                .errors
+                .iter()
+                .map(|e| e.message.clone())
+                .collect(),
         })
         .unwrap_or(JsValue::NULL);
     }
@@ -478,9 +510,10 @@ pub fn lint_config(config_kdl: &str) -> JsValue {
     };
 
     let topology = zentinel_config_inspect::inspect(&config);
-    let has_errors = topology.warnings.iter().any(|w| {
-        matches!(w.severity, zentinel_config_inspect::Severity::Error)
-    });
+    let has_errors = topology
+        .warnings
+        .iter()
+        .any(|w| matches!(w.severity, zentinel_config_inspect::Severity::Error));
 
     let warnings: Vec<LintWarning> = topology
         .warnings
