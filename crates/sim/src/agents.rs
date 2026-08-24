@@ -390,7 +390,10 @@ pub fn simulate_with_agents(
                 || mock.audit.confidence.is_some()
                 || !mock.audit.reason_codes.is_empty()
             {
-                audit_trail.push(AuditEntry::from_audit_info(&mock.audit, &agent_hook.agent_id));
+                audit_trail.push(AuditEntry::from_audit_info(
+                    &mock.audit,
+                    &agent_hook.agent_id,
+                ));
             }
 
             // Check if this decision should short-circuit
@@ -640,8 +643,8 @@ mod tests {
 
     #[test]
     fn test_header_mutation_remove() {
-        let request = SimulatedRequest::new("GET", "example.com", "/api")
-            .with_header("X-Remove-Me", "value");
+        let request =
+            SimulatedRequest::new("GET", "example.com", "/api").with_header("X-Remove-Me", "value");
         let mut transformed = TransformedRequest::from(&request);
 
         let mutations = vec![HeaderMutation::Remove {

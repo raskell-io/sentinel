@@ -37,9 +37,15 @@ pub struct AgentConfig {
     pub message: String,
 }
 
-fn default_mode() -> String { "denylist".to_string() }
-fn default_status() -> u16 { 403 }
-fn default_message() -> String { "Access Denied".to_string() }
+fn default_mode() -> String {
+    "denylist".to_string()
+}
+fn default_status() -> u16 {
+    403
+}
+fn default_message() -> String {
+    "Access Denied".to_string()
+}
 
 impl Default for AgentConfig {
     fn default() -> Self {
@@ -57,10 +63,7 @@ impl Default for AgentConfig {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Decision {
     Allow,
-    Block {
-        status: u16,
-        body: Option<String>,
-    },
+    Block { status: u16, body: Option<String> },
 }
 
 /// Agent response.

@@ -25,22 +25,22 @@ mod trace;
 mod types;
 mod upstream;
 
-pub use matcher::{RouteMatcher, RouteMatchError};
-pub use trace::{MatchStep, MatchStepResult, ConditionDetail};
-pub use types::{
-    AgentHook, AppliedPolicies, MatchedRoute, RouteDecision, SimulatedRequest,
-    UpstreamSelection, ValidationError, ValidationResult, ValidationSeverity, Warning,
-};
-pub use upstream::{simulate_upstream_selection, LoadBalancerSimulation};
-pub use stateful::{
-    simulate_sequence, CacheSnapshot, CircuitBreakerSnapshot, FinalState, RequestResult,
-    SimulationSummary, StatefulSimulationResult, StateTransition, TimestampedRequest,
-    TokenBucketSnapshot,
-};
 pub use agents::{
     simulate_with_agents, AgentChainStep, AgentDecision, AgentSimulationResult, AuditEntry,
     AuditInfo, BlockResponse, ChallengeInfo, HeaderMutation, MockAgentResponse, TransformedRequest,
 };
+pub use matcher::{RouteMatchError, RouteMatcher};
+pub use stateful::{
+    simulate_sequence, CacheSnapshot, CircuitBreakerSnapshot, FinalState, RequestResult,
+    SimulationSummary, StateTransition, StatefulSimulationResult, TimestampedRequest,
+    TokenBucketSnapshot,
+};
+pub use trace::{ConditionDetail, MatchStep, MatchStepResult};
+pub use types::{
+    AgentHook, AppliedPolicies, MatchedRoute, RouteDecision, SimulatedRequest, UpstreamSelection,
+    ValidationError, ValidationResult, ValidationSeverity, Warning,
+};
+pub use upstream::{simulate_upstream_selection, LoadBalancerSimulation};
 
 use zentinel_config::Config;
 
@@ -206,11 +206,15 @@ fn extract_policies(route: &MatchedRoute, config: &Config) -> AppliedPolicies {
             timeout_secs: rc.policies.timeout_secs,
             max_body_size: rc.policies.max_body_size.map(|b| b.to_string()),
             failure_mode: format!("{:?}", rc.policies.failure_mode).to_lowercase(),
-            rate_limit: rc.policies.rate_limit.as_ref().map(|rl| types::RateLimitInfo {
-                requests_per_second: rl.requests_per_second,
-                burst: rl.burst,
-                key: format!("{:?}", rl.key),
-            }),
+            rate_limit: rc
+                .policies
+                .rate_limit
+                .as_ref()
+                .map(|rl| types::RateLimitInfo {
+                    requests_per_second: rl.requests_per_second,
+                    burst: rl.burst,
+                    key: format!("{:?}", rl.key),
+                }),
             cache: rc.policies.cache.as_ref().map(|c| types::CacheInfo {
                 enabled: c.enabled,
                 ttl_secs: c.default_ttl_secs,
@@ -241,10 +245,11 @@ fn extract_agent_hooks(route: &MatchedRoute, config: &Config) -> Vec<AgentHook> 
                     hooks.push(AgentHook {
                         agent_id: agent_filter.agent.clone(),
                         hook: "on_request_headers".to_string(),
-                        timeout_ms: agent_filter.timeout_ms.unwrap_or(
-                            agent_config.map(|a| a.timeout_ms).unwrap_or(1000)
-                        ),
-                        failure_mode: agent_filter.failure_mode
+                        timeout_ms: agent_filter
+                            .timeout_ms
+                            .unwrap_or(agent_config.map(|a| a.timeout_ms).unwrap_or(1000)),
+                        failure_mode: agent_filter
+                            .failure_mode
                             .map(|fm| format!("{:?}", fm).to_lowercase())
                             .unwrap_or_else(|| "closed".to_string()),
                         body_inspection: None,
@@ -260,7 +265,7 @@ fn extract_agent_hooks(route: &MatchedRoute, config: &Config) -> Vec<AgentHook> 
                 hooks.push(AgentHook {
                     agent_id: "waf".to_string(),
                     hook: "on_request_headers".to_string(),
-                    timeout_ms: 500, // Default WAF timeout
+                    timeout_ms: 500,                    // Default WAF timeout
                     failure_mode: "closed".to_string(), // WAF should fail closed by default
                     body_inspection: None,
                 });
@@ -298,9 +303,7 @@ fn generate_warnings(
     if let Some(rc) = route_config {
         // Shadow config on POST without body buffering
         if let Some(ref shadow) = rc.shadow {
-            if !shadow.buffer_body
-                && ["POST", "PUT", "PATCH"].contains(&request.method.as_str())
-            {
+            if !shadow.buffer_body && ["POST", "PUT", "PATCH"].contains(&request.method.as_str()) {
                 warnings.push(Warning {
                     code: "SHADOW_NO_BODY_BUFFER".to_string(),
                     message: format!(
