@@ -212,14 +212,11 @@ pub struct RoutePolicies {
     #[serde(default = "default_failure_mode")]
     pub failure_mode: FailureMode,
 
-    /// Enable request buffering
-    #[serde(default)]
-    pub buffer_requests: bool,
-
-    /// Enable response buffering
-    #[serde(default)]
-    pub buffer_responses: bool,
-
+    // `buffer_requests` and `buffer_responses` were removed here (#366). They
+    // had no KDL key, were read by nothing in the proxy, and could therefore
+    // never be true for any configuration a person could write — while their
+    // names promised control over body buffering. Agents that inspect bodies
+    // do not need a flag; the proxy already buffers what it forwards.
     /// HTTP caching configuration
     #[serde(default)]
     pub cache: Option<RouteCacheConfig>,

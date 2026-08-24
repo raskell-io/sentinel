@@ -192,8 +192,6 @@ routes {
 
         policies {
             timeout-secs 3600  // 1 hour for WebSocket
-            buffer-requests #false
-            buffer-responses #false
         }
     }
 

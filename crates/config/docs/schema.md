@@ -223,8 +223,6 @@ Request routing configuration.
 | `max-body-size` | `string` | - | Body size limit (e.g., `"10MB"`) |
 | `rate-limit` | `RateLimitPolicy` | - | Rate limit policy |
 | `failure-mode` | `string` | `"closed"` | Failure mode: `open` or `closed` |
-| `buffer-requests` | `bool` | `false` | Buffer request body |
-| `buffer-responses` | `bool` | `false` | Buffer response body |
 | `cache` | `RouteCacheConfig` | - | HTTP caching config (see [Cache](#routecacheconfig)) |
 
 ### RouteCacheConfig

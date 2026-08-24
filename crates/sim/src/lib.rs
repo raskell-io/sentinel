@@ -215,8 +215,6 @@ fn extract_policies(route: &MatchedRoute, config: &Config) -> AppliedPolicies {
                 enabled: c.enabled,
                 ttl_secs: c.default_ttl_secs,
             }),
-            buffer_requests: rc.policies.buffer_requests,
-            buffer_responses: rc.policies.buffer_responses,
         }
     } else {
         AppliedPolicies::default()

@@ -183,14 +183,13 @@ fn check_resource_bounds(config: &Config, result: &mut ValidationResult) {
     for route in &config.routes {
         let policies = &route.policies;
 
-        // A rule for "buffers bodies but sets no max-body-size" was removed
-        // here. It could never fire: `buffer_requests` and `buffer_responses`
-        // have no KDL key and are read by nothing in the proxy, so they are
-        // always false for any config a person can write. Its tests passed
-        // only because they set the fields directly. A linter reporting
-        // coverage it does not have is worse than one check short — restore
-        // this once #366 decides whether those fields get implemented or
-        // removed.
+        // A rule for "buffers bodies but sets no max-body-size" used to live
+        // here, keyed on `buffer_requests` / `buffer_responses`. It could never
+        // fire — those fields had no KDL key and were read by nothing, so they
+        // were always false for any config a person could write, and the rule's
+        // tests passed only because they set the fields directly. #366 removed
+        // the fields; if body buffering is ever implemented as real
+        // configuration, this rule is worth restoring with it.
         if let Some(max_body) = policies.max_body_size {
             if max_body.0 > GENEROUS_BODY_SIZE {
                 result.add_warning(ValidationWarning::new(format!(
@@ -602,26 +601,26 @@ mod resource_bound_tests {
         assert!(mentions(&config, "can never be reached"));
     }
 
-    /// Guards the removal above: `buffer_requests` cannot be set from any
-    /// config, so a rule keyed on it can never fire for a real user. The two
-    /// tests that used to live here set the field directly and so passed
-    /// while the rule was dead. If #366 wires these fields up, this test
-    /// starts failing and the rule can come back with it.
+    /// #366 removed `buffer_requests` / `buffer_responses`, so the guard test
+    /// that asserted they stayed unreachable no longer has fields to assert on.
+    /// What replaces it is the unknown-key check: with the keys gone from
+    /// `CLOSED_BLOCKS`, writing one in a `policies` block is now reported
+    /// rather than silently accepted.
     #[test]
-    fn buffering_flags_are_still_unreachable_from_config() {
-        let kdl = "system {\n  workers 2\n}\n\
-                   listeners {\n  listener \"http\" {\n    address \"127.0.0.1:8080\"\n  }\n}\n\
-                   upstreams {\n  upstream \"b\" {\n    target \"127.0.0.1:9000\"\n  }\n}\n\
-                   routes {\n  route \"r\" {\n    matches {\n      path-prefix \"/\"\n    }\n\
-                   \x20   upstream \"b\"\n    policies {\n      buffer-requests #true\n\
-                   \x20     buffer-responses #true\n    }\n  }\n}\n";
-        let config = Config::from_kdl(kdl).expect("config should parse");
-        let policies = &config.routes[0].policies;
+    fn buffering_keys_are_reported_rather_than_silently_accepted() {
+        let mut result = ValidationResult::new();
+        crate::validate::unknown_keys::check_unknown_keys(
+            "routes {\n  route \"r\" {\n    policies {\n      buffer-requests #true\n    }\n  }\n}\n",
+            &mut result,
+        );
 
         assert!(
-            !policies.buffer_requests && !policies.buffer_responses,
-            "buffering became settable from config — see #366, and restore the \
-             lint rule that was removed alongside these tests"
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("buffer-requests")),
+            "expected 'buffer-requests' to be reported as an unknown key, got: {:?}",
+            result.warnings
         );
     }
 

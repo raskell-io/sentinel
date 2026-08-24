@@ -275,8 +275,6 @@ pub struct AppliedPolicies {
     pub failure_mode: String,
     pub rate_limit: Option<RateLimitInfo>,
     pub cache: Option<CacheInfo>,
-    pub buffer_requests: bool,
-    pub buffer_responses: bool,
 }
 ```
 
