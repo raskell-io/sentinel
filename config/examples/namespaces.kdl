@@ -335,7 +335,6 @@ namespace "storefront" {
                 policies {
                     timeout-secs 60
                     failure-mode "closed"
-                    buffer-requests #true
                 }
             }
         }

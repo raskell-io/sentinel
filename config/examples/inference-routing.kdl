@@ -163,7 +163,6 @@ routes {
             timeout-secs 300
             max-body-size "1MB"
             failure-mode "closed"
-            buffer-requests #true  // Required for token counting
         }
     }
 

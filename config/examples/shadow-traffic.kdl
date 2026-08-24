@@ -306,7 +306,6 @@ routes {
         policies {
             timeout-secs 60
             max-body-size "50MB"
-            buffer-requests #true
         }
     }
 
