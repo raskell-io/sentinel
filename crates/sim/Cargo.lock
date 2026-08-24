@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "zentinel-sim"
-version = "0.6.8"
+version = "0.6.27"
 dependencies = [
  "insta",
  "proptest",
