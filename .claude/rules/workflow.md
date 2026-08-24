@@ -231,7 +231,7 @@ Zentinel uses [CalVer](https://calver.org/) (`YY.MM_PATCH`) as the operator-faci
 and [SemVer](https://semver.org/) for crate versions on crates.io. The Release workflow
 (`.github/workflows/release.yml`) is triggered by **CalVer tags** matching
 `[0-9][0-9].[0-9][0-9]_[0-9]*` (e.g. `26.04_7`). It builds platform binaries, signs them,
-publishes all workspace crates to crates.io, and creates the GitHub Release.
+publishes the four published crates to crates.io, and creates the GitHub Release.
 
 ### Cutting a release
 
@@ -260,7 +260,7 @@ publishes all workspace crates to crates.io, and creates the GitHub Release.
    git push origin YY.MM_PATCH
    ```
 4. **Verify** the run: `gh run list --workflow Release --limit 1`. It builds 4 platform
-   targets, signs with cosign, publishes all workspace crates as **`X.Y.Z + 1`**, and
+   targets, signs with cosign, publishes the four published crates as **`X.Y.Z + 1`**, and
    creates the GitHub Release (whose notes show the *published* version, so the Release
    says `X.Y.Z + 1` while the CHANGELOG says `X.Y.Z` — by design). All builds run
    **before** any publish, so a build failure publishes nothing.
@@ -280,22 +280,30 @@ publishes all workspace crates to crates.io, and creates the GitHub Release.
 
 ### Crates.io publishing
 
-The Release workflow handles publishing automatically once the tag is pushed. Manual
-publishing (in dependency order) is only needed when re-publishing or recovering from
-a failure:
+**Only four crates are published.** The workflow's `CRATES=(...)` array is the single
+source of truth, and it lists exactly these, in dependency order:
 
 ```bash
 cargo publish -p zentinel-common
 cargo publish -p zentinel-config
 cargo publish -p zentinel-agent-protocol
-cargo publish -p zentinel-wasm-runtime
 cargo publish -p zentinel-proxy
-cargo publish -p zentinel-gateway
-cargo publish -p zentinel-stack
 ```
 
-Crates excluded from the workspace (`crates/sim`, `crates/playground-wasm`,
-`crates/config-inspect`) are not published as part of the release.
+The Release workflow runs this automatically once the tag is pushed. Manual publishing is
+only needed when re-publishing or recovering from a partial failure.
+
+> **Do not add crates to this list to "fix" a release.** `zentinel-wasm-runtime`,
+> `zentinel-gateway` and `zentinel-stack` are workspace members that have **never** been
+> published — they return HTTP 404 on crates.io, and that is the expected steady state, not
+> a broken publish. None of them set `publish = false`, so the manifests give no hint;
+> running `cargo publish` on one would **create a new crate under that name**, which cannot
+> be undone (crates.io permits yanking, never deletion or renaming).
+>
+> When verifying a release, query the crates.io API for the four above only.
+
+Crates excluded from the workspace entirely (`crates/sim`, `crates/playground-wasm`,
+`crates/config-inspect`) are likewise not published.
 
 ---
 
