@@ -108,11 +108,6 @@ routes {
             failure-mode "closed"
         }
 
-        circuit-breaker {
-            failure-threshold 3
-            success-threshold 2
-            timeout-seconds 30
-        }
     }
 
     // User service - standard CRUD, moderate timeouts
@@ -137,11 +132,6 @@ routes {
             max-body-size "5MB"
         }
 
-        circuit-breaker {
-            failure-threshold 5
-            success-threshold 2
-            timeout-seconds 60
-        }
     }
 
     // Order service - critical business logic, longer timeouts
@@ -162,11 +152,6 @@ routes {
             failure-mode "closed"
         }
 
-        circuit-breaker {
-            failure-threshold 3
-            success-threshold 2
-            timeout-seconds 120
-        }
     }
 
     // Product service - read-heavy, can tolerate failures
@@ -213,11 +198,6 @@ routes {
             max-body-size "1MB"
         }
 
-        circuit-breaker {
-            failure-threshold 10
-            success-threshold 3
-            timeout-seconds 60
-        }
     }
 
     // Webhook service - async processing, fire-and-forget

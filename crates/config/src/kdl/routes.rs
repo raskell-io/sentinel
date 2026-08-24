@@ -20,7 +20,7 @@ use super::helpers::{
 
 /// Recognized child node names inside a `route` block.
 /// Any child node not in this set will produce a warning during parsing.
-const RECOGNIZED_ROUTE_CHILDREN: &[&str] = &[
+pub(crate) const RECOGNIZED_ROUTE_CHILDREN: &[&str] = &[
     "matches",
     "priority",
     "upstream",
