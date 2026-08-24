@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_5](#26085---2026-08-24) | 0.6.28 | 2026-08-24 | MCP and A2A policy is now enforced — it was parsed and ignored in 26.08_4; `cargo install zentinel-proxy` works again; unknown-key checking extended to `route` and `system`; **breaking**: dead buffering fields removed |
 | [26.08_4](#26084---2026-08-23) | 0.6.27 | 2026-08-23 | Native MCP and A2A support; settings that were parsed and discarded now take effect (upstream timeouts, route policies, `failure-mode`); agent and mTLS authentication hardening |
 | [26.08_3](#26083---2026-08-22) | 0.6.26 | 2026-08-22 | Per-SNI certificates, mTLS and TLS hardening settings now reach the listener (#303) |
 | [26.08_2](#26082---2026-08-22) | 0.6.25 | 2026-08-22 | ACME DNS-01 idempotency, breaking TLS config schema |
@@ -68,6 +69,72 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.08_5] - 2026-08-24
+
+**Crate version:** 0.6.28
+
+> **If you configured `mcp` or `a2a` in 26.08_4, it did nothing.** The blocks
+> parsed, validated, and rejected unknown keys — and no request was ever checked
+> against them. A route declaring `tools { allow "get_weather" }` permitted every
+> tool there is. That is fixed here, which means these routes begin enforcing
+> policy for the first time: **check your allow and deny lists say what you
+> intend before upgrading.**
+>
+> Also breaking: `buffer-requests` and `buffer-responses` are removed. Neither
+> ever had any effect, so no behaviour changes, but a config setting them will
+> now be reported by `zentinel lint` as a key nothing reads.
+
+### Fixed
+- **MCP and A2A route policy is enforced.** `RouteConfig::mcp` and
+  `RouteConfig::a2a` were read by nothing: the module had no call site anywhere
+  in the request path. Policy now runs in `request_body_filter`, resolved from
+  the JSON-RPC envelope, with the body accumulated across chunks and judged once
+  at end of stream — never on a partial envelope, and before anything reaches an
+  upstream. Denials return 403 with an operator-readable reason; allowed
+  requests record the method and tool resolved *from the body*, so metrics
+  describe what the upstream will execute rather than what a header claimed.
+  Accumulation stops at 1 MiB, past which `on-uninspectable-body` decides rather
+  than a truncated prefix being judged as the whole request. (#392)
+- **`cargo install zentinel-proxy` works again.** `cargo publish` strips git
+  sources, so the published crate resolved `pingora-core` from crates.io —
+  upstream, without `TlsSettings::with_server_config` — and failed to compile
+  after roughly ten minutes. Broken in 0.6.26 and 0.6.27. The fork's five
+  affected crates are now published as `zentinel-pingora`,
+  `zentinel-pingora-core`, `-proxy`, `-cache` and `-load-balancing`, and are
+  depended on by version. No git or path dependencies remain. (#357, #391)
+- **`workers` in two shipped configs was read by nothing** — the parser reads
+  `worker-threads`, so both ran on the default worker count while the file said
+  4 and 1. (#386)
+- **`circuit-breaker` inside `route` blocks did nothing.** Circuit breakers are
+  configured per upstream and per agent; `RouteConfig` has no such field. Eight
+  occurrences across five shipped configs, including `config/zentinel.kdl`, are
+  removed. The simulator and `zentinel-inspect` made the same assumption and are
+  corrected to report breakers against upstreams. (#386, #387, #390)
+- **`crates/sim` compiles again**, and `zentinel-inspect` and
+  `playground-wasm` resolve their dependencies. All three were broken and
+  invisible, because crates in the workspace `exclude` list are built by no CI
+  job. (#387, #389, #390)
+
+### Added
+- **Unknown-key checking covers `route`, `system` and `server`.** A misspelled
+  key inside those blocks was accepted and discarded; `zentinel lint` now names
+  it and suggests the intended spelling. (#365, #386)
+- **CI builds the excluded crates.** A new `Excluded Crates` job covers all four
+  crates outside the workspace, including formatting, which the workspace-wide
+  `cargo fmt --all` cannot reach. (#387, #389, #390)
+
+### Changed
+- **BREAKING — `buffer-requests` and `buffer-responses` removed** from
+  `RoutePolicies`. No KDL key set them and nothing in the proxy read them, so
+  they could never be anything but `false`. Thirteen sites across five shipped
+  configs and a test fixture set them anyway; `ai-guardrails.kdl` annotated them
+  "Required for request inspection", which was not true. No behaviour changes.
+  (#366, #388)
+- Dependency maintenance: wasmtime group 47 → 48, `jsonschema` 0.50, rust-minor
+  batch. (#381, #382, #383)
 
 ---
 
