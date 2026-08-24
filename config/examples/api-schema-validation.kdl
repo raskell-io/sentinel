@@ -8,7 +8,7 @@
 
 // Server Configuration
 system {
-    workers 4
+    worker-threads 4
     daemon #false
 }
 

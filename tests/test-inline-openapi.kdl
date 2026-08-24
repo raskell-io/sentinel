@@ -4,7 +4,7 @@
 // with schema validation for user creation endpoint.
 
 system {
-    workers 1
+    worker-threads 1
     daemon #false
 }
 

@@ -16,8 +16,8 @@ mod filters;
 mod helpers;
 mod namespace;
 mod retrypolicy_helper;
-mod routes;
-mod server;
+pub(crate) mod routes;
+pub(crate) mod server;
 mod upstreams;
 
 use tracing::{debug, trace, warn};

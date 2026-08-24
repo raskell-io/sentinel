@@ -80,6 +80,22 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
             "exclusion",
         ],
     },
+    // `route` and `system` both keep their key list beside their parser, so
+    // that adding a setting and forgetting the list is visible at the point of
+    // the change rather than here.
+    ClosedBlock {
+        name: "route",
+        keys: crate::kdl::routes::RECOGNIZED_ROUTE_CHILDREN,
+    },
+    ClosedBlock {
+        name: "system",
+        keys: crate::kdl::server::RECOGNIZED_SYSTEM_KEYS,
+    },
+    ClosedBlock {
+        // Deprecated spelling of `system`, parsed by the same function.
+        name: "server",
+        keys: crate::kdl::server::RECOGNIZED_SYSTEM_KEYS,
+    },
     ClosedBlock {
         name: "policies",
         keys: &[
@@ -303,6 +319,94 @@ mod tests {
     /// key this check does not know, operators would get a warning about
     /// perfectly valid configuration — so that failure belongs here, loudly,
     /// rather than in someone's terminal.
+    /// `workers` shipped in two configs and was read by nothing, so both ran on
+    /// the default worker count while the file said 4 and 1.
+    ///
+    /// No suggestion is offered here, and that is worth recording rather than
+    /// asserting away: `workers` is not a typo of `worker-threads`, it is a
+    /// different, shorter name for the same idea, and it is too far away for
+    /// the edit-distance heuristic to reach. The warning still names the key
+    /// and says it is ignored, which is the part that matters.
+    #[test]
+    fn the_workers_key_that_shipped_in_two_configs_is_reported() {
+        let kdl = r#"
+            system {
+                workers 4
+                daemon #false
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert_eq!(warnings.len(), 1, "got: {warnings:?}");
+        assert!(warnings[0].contains("workers"));
+        assert!(warnings[0].contains("is being ignored"));
+    }
+
+    #[test]
+    fn a_valid_system_block_produces_no_warnings() {
+        let kdl = r#"
+            system {
+                worker-threads 4
+                max-connections 10000
+                graceful-shutdown-timeout-secs 30
+                daemon #false
+                pid-file "/var/run/zentinel.pid"
+                user "zentinel"
+                group "zentinel"
+                working-directory "/var/lib/zentinel"
+                trace-id-format "uuid"
+                auto-reload #false
+                route-cache-size 1024
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    /// `server` is the deprecated spelling and is parsed by the same function,
+    /// so it has to be checked against the same keys.
+    #[test]
+    fn the_deprecated_server_block_is_checked_too() {
+        let kdl = r#"
+            server {
+                worker_threads 4
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert_eq!(warnings.len(), 1, "got: {warnings:?}");
+        assert!(warnings[0].contains("worker_threads"));
+    }
+
+    #[test]
+    fn an_unknown_directive_in_a_route_is_reported() {
+        let kdl = r#"
+            routes {
+                route "api" {
+                    path_prefix "/api"
+                    upstream "backend"
+                }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert_eq!(warnings.len(), 1, "got: {warnings:?}");
+        assert!(warnings[0].contains("path_prefix"));
+    }
+
+    #[test]
+    fn a_valid_route_produces_no_warnings() {
+        let kdl = r#"
+            routes {
+                route "api" {
+                    matches {
+                        path-prefix "/api"
+                    }
+                    upstream "backend"
+                    priority 10
+                    waf-enabled #true
+                }
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
     #[test]
     fn shipped_configs_use_only_known_keys() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
