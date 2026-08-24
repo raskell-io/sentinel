@@ -170,6 +170,26 @@ pub struct RequestContext {
     /// Agent IDs to use for body inspection
     pub(crate) body_inspection_agents: Vec<String>,
 
+    // === Agentic protocol policy (MCP / A2A) ===
+    /// Request body accumulated for MCP/A2A policy evaluation.
+    ///
+    /// Separate from `body_buffer`, which serves agent inspection and is
+    /// governed by the WAF's streaming mode. Policy here is resolved from the
+    /// JSON-RPC envelope and must see the whole envelope before the request
+    /// reaches an upstream, whatever the agent configuration happens to be.
+    pub(crate) agentic_body: Vec<u8>,
+    /// Set when the body exceeded what the evaluator will parse, so evaluation
+    /// treats it as uninspectable rather than judging a truncated prefix.
+    pub(crate) agentic_body_oversize: bool,
+    /// MCP method resolved **from the body**, for metrics and audit. Recording
+    /// the header value instead would describe what a client claimed rather
+    /// than what the upstream will execute.
+    pub(crate) mcp_method: Option<String>,
+    /// MCP tool or resource resolved from the body.
+    pub(crate) mcp_target: Option<String>,
+    /// A2A method resolved from the body.
+    pub(crate) a2a_method: Option<String>,
+
     // === Body Decompression ===
     /// Whether decompression is enabled for body inspection
     pub(crate) decompression_enabled: bool,
@@ -369,6 +389,11 @@ impl RequestContext {
             body_inspection_enabled: false,
             body_bytes_inspected: 0,
             body_buffer: Vec::new(),
+            agentic_body: Vec::new(),
+            agentic_body_oversize: false,
+            mcp_method: None,
+            mcp_target: None,
+            a2a_method: None,
             body_inspection_agents: Vec::new(),
             decompression_enabled: false,
             body_content_encoding: None,
