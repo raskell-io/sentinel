@@ -155,6 +155,7 @@ More examples: [`config/examples/`](config/examples/) covers API gateways, load 
 | **Service Types** | Web, API, Static, Builtin, and Inference (LLM/AI) |
 | **Load Balancing** | 14 algorithms: round-robin, weighted, least connections, Maglev, Peak EWMA, and more |
 | **Security** | TLS/mTLS, rate limiting, GeoIP filtering, WAF, zip bomb protection |
+| **Agentic Protocols** | Native MCP and A2A awareness — per-method and per-tool allow/deny, resolved from the JSON-RPC body rather than trusting mirrored headers |
 | **Agent Protocol** | External agents for WAF, auth, and custom logic — crash-isolated, any language |
 | **HTTP Caching** | Pingora-based response caching with stampede prevention and LRU eviction (memory, disk, or hybrid backends) |
 | **WebSocket Proxying** | RFC 6455 compliant with per-frame agent inspection and session affinity |
@@ -169,6 +170,7 @@ See the full feature breakdown at [zentinelproxy.io/features](https://zentinelpr
 - **API Gateway** — Versioned routing, JWT/API key auth, per-client rate limiting, and JSON error responses
 - **Load Balancer** — Weighted traffic distribution, health checks, circuit breakers, and blue-green/canary deployments
 - **Inference Gateway** — Token-based rate limiting, model routing with glob patterns (`gpt-4*`, `claude-*`), prompt injection detection, and PII filtering for OpenAI, Anthropic, and generic LLM providers
+- **Agent Gateway (MCP / A2A)** — Per-method and per-tool allowlists for Model Context Protocol and Agent2Agent traffic, enforced against the JSON-RPC body so a mirrored `Mcp-Name` header cannot name one tool while the body calls another
 - **WebSocket Gateway** — Persistent connection proxying with frame inspection, message rate limiting, and session affinity
 - **Security Gateway** — WAF, GeoIP filtering, mTLS, and composable agent pipelines for custom security logic
 
@@ -184,6 +186,40 @@ Modern proxies accumulate hidden behavior, unbounded complexity, and operational
 - **Observable by default** — Every decision is logged and metered. Features ship only when bounded, observed, and tested.
 
 The goal is infrastructure that is **correct, calm, and trustworthy**. See [`MANIFESTO.md`](MANIFESTO.md) for the full philosophy.
+
+## Agentic Protocols
+
+Zentinel understands **MCP** (Model Context Protocol) and **A2A** (Agent2Agent) natively. A route declares which methods and tools are permitted, and the proxy enforces that by reading the JSON-RPC envelope:
+
+```kdl
+route "mcp" {
+    matches { path-prefix "/mcp" }
+    upstream "mcp-server"
+
+    mcp {
+        tools {
+            allow "get_weather" "search_docs"
+            deny "execute_sql"
+        }
+    }
+}
+```
+
+**Policy is resolved from the body, never from the mirrored headers.** MCP's Streamable HTTP transport copies the method and tool name into `Mcp-Method` and `Mcp-Name` so intermediaries can route without parsing JSON. Building an allowlist on those headers builds an allowlist that allows everything:
+
+```http
+Mcp-Name: read_file                    ← what a header-based allowlist checks
+{"method":"tools/call","params":{"name":"delete_everything"}}
+                                ↑ what the server actually executes
+```
+
+Zentinel reads the headers only to confirm they agree with the body, and refuses a request that disagrees with itself. Requests claiming a protocol revision older than `2026-07-28` are refused by default, because those revisions never required the two to match — without that check, an attacker opts out of validation by claiming an old version.
+
+A2A defines no mirrored headers, so its policy reads the body directly and there is nothing to spoof.
+
+This decides whether a call may be *made*. Whether its *contents* are safe — prompt injection in an argument, PII in a payload — stays [agent](#agents) work.
+
+Full reference: [Agentic Protocols](https://docs.zentinelproxy.io/configuration/agentic/)
 
 ## Agents
 
