@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_7](#26087---2026-08-27) | 0.6.30 | 2026-08-27 | `zentinel lint` now reports settings that parse but are read by nothing: run-together lines, and keys written into the wrong one of two same-named blocks |
 | [26.08_6](#26086---2026-08-27) | 0.6.29 | 2026-08-27 | Listener `namespace` isolation and per-listener timeouts now work on wildcard binds — both were silently ignored on `0.0.0.0` listeners; certificate reloads report what changed instead of only counts |
 | [26.08_5](#26085---2026-08-24) | 0.6.28 | 2026-08-24 | MCP and A2A policy is now enforced — it was parsed and ignored in 26.08_4; `cargo install zentinel-proxy` works again; unknown-key checking extended to `route` and `system`; **breaking**: dead buffering fields removed |
 | [26.08_4](#26084---2026-08-23) | 0.6.27 | 2026-08-23 | Native MCP and A2A support; settings that were parsed and discarded now take effect (upstream timeouts, route policies, `failure-mode`); agent and mTLS authentication hardening |
@@ -70,6 +71,56 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.08_7] - 2026-08-27
+
+**Crate version:** 0.6.30
+
+> Configuration checking only — no change to how the proxy handles traffic.
+> `zentinel lint` reports more of the configuration that parses cleanly and then
+> does nothing. If it now warns about a config you have been running, the setting
+> in question was already being ignored; the warning is new, the behaviour is not.
+
+### Added
+- **Settings swallowed by a run-together line are reported.** KDL separates nodes
+  by newline or `;`. Written on one line with neither,
+  `listener "public" { address "0.0.0.0:8080" namespace "iso" }` is a single
+  `address` node with three arguments — `namespace` never reaches a parser, and
+  the config loads, validates and starts without it. That is how a listener's
+  namespace isolation came to be silently absent in #396, and both `zentinel test`
+  and `zentinel lint` reported success. The check reports an argument after the
+  first whose value names a key of the same block, so a node legitimately taking a
+  list (`hostnames "a.com" "b.com"`) is not affected. (#365, #404)
+- **Keys in the wrong one of two same-named blocks are reported, with where they
+  belong.** Block names are not unique: the top-level `cache` block configures the
+  storage backend (`backend`, `disk-path`), while a route's `cache` block
+  configures that route's policy (`default-ttl-secs`), and they share one key
+  between them. Checking them against a merged list accepted either half
+  anywhere, which is why #90 — storage settings in a route's cache block, cache
+  directory silently empty — produced no warning. The same applies to `tls`,
+  which means one thing on a listener and another on an upstream. Misplaced keys
+  are now named as misplaced rather than offered a spelling suggestion:
+  `'disk-path' is a setting of the top-level 'cache' block, not of a 'route'
+  block's 'cache' block`. (#90, #365, #405)
+- **Unknown-key checking extended to eleven more blocks:** `listener`, `cache`
+  (both), `sni`, `sni-certs`, `acme`, `eab`, `upstream`, an upstream's `tls`, and
+  `target`. (#365, #404, #405, #406)
+
+### Fixed
+- **`verify` in the inference-routing example did nothing.** Two upstream `tls`
+  blocks in `config/examples/inference-routing.kdl` set `verify #true`. No parser
+  reads it — certificate verification is controlled by `insecure-skip-verify` and
+  is on by default — so the example got the behaviour it intended by accident
+  while stating it in a key that has never existed. Found by the new checks on
+  their first run against the shipped configs. (#406)
+
+### Changed
+- The release process documentation in `.claude/rules/workflow.md` stated the
+  CHANGELOG's crate version rule backwards, describing it as the tagged
+  `Cargo.toml` version rather than the version actually published. Corrected, and
+  the two versions are now named rather than both written `X.Y.Z`. (#403)
 
 ---
 
