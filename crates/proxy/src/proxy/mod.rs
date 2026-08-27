@@ -13,6 +13,7 @@ mod fallback_metrics;
 pub(crate) mod filters;
 mod handlers;
 mod http_trait;
+mod listener_addr;
 mod model_routing;
 mod model_routing_metrics;
 
@@ -53,10 +54,12 @@ use crate::reload::{
     ConfigManager, GracefulReloadCoordinator, ReloadEvent, RouteValidator, UpstreamValidator,
 };
 use crate::routing::RouteMatcher;
+
 use crate::scoped_routing::ScopedRouteMatcher;
 use crate::static_files::StaticFileServer;
 use crate::upstream::{ActiveHealthChecker, HealthCheckRunner, UpstreamPool};
 use crate::validation::SchemaValidator;
+use listener_addr::ListenerMatchers;
 
 use zentinel_common::TraceIdFormat;
 use zentinel_config::{Config, FlattenedConfig};
@@ -68,10 +71,11 @@ pub struct ZentinelProxy {
     /// Route matcher (global routes only, for backward compatibility)
     pub(super) route_matcher: Arc<RwLock<RouteMatcher>>,
     /// Per-listener route matchers for listeners bound to a namespace route set,
-    /// keyed by the listener's bound address. A request arriving on one of these
-    /// listeners is matched only against its namespace's routes (isolated from
-    /// the global set). Listeners absent from this map use [`Self::route_matcher`].
-    pub(super) listener_matchers: Arc<RwLock<HashMap<String, Arc<RouteMatcher>>>>,
+    /// resolved from the accepted connection's local address. A request arriving
+    /// on one of these listeners is matched only against its namespace's routes
+    /// (isolated from the global set). Listeners absent from this map use
+    /// [`Self::route_matcher`].
+    pub(super) listener_matchers: Arc<RwLock<ListenerMatchers>>,
     /// Scoped route matcher (namespace/service aware)
     pub(super) scoped_route_matcher: Arc<tokio::sync::RwLock<ScopedRouteMatcher>>,
     /// Upstream pools (keyed by upstream ID, global only)
@@ -398,10 +402,8 @@ impl ZentinelProxy {
     /// the global matcher at request time). Unknown namespace references are
     /// skipped with a warning — config validation rejects them before startup,
     /// so this only guards against a reload racing a bad config.
-    fn build_listener_matchers(
-        config: &zentinel_config::Config,
-    ) -> HashMap<String, Arc<RouteMatcher>> {
-        let mut matchers = HashMap::new();
+    fn build_listener_matchers(config: &zentinel_config::Config) -> ListenerMatchers {
+        let mut matchers = ListenerMatchers::default();
         for listener in &config.listeners {
             let Some(ns_id) = listener.namespace.as_ref() else {
                 continue;
@@ -427,7 +429,13 @@ impl ZentinelProxy {
                         routes = ns.routes.len(),
                         "Listener bound to namespace route set"
                     );
-                    matchers.insert(listener.address.clone(), Arc::new(matcher));
+                    if !matchers.insert(&listener.address, Arc::new(matcher)) {
+                        error!(
+                            listener_id = %listener.id,
+                            address = %listener.address,
+                            "Listener address is not a socket address; namespace routes                              will not be served on it"
+                        );
+                    }
                 }
                 Err(e) => {
                     error!(
@@ -446,7 +454,7 @@ impl ZentinelProxy {
     async fn setup_reload_handler(
         config_manager: Arc<ConfigManager>,
         route_matcher: Arc<RwLock<RouteMatcher>>,
-        listener_matchers: Arc<RwLock<HashMap<String, Arc<RouteMatcher>>>>,
+        listener_matchers: Arc<RwLock<ListenerMatchers>>,
         upstream_pools: Registry<UpstreamPool>,
         scoped_route_matcher: Arc<tokio::sync::RwLock<ScopedRouteMatcher>>,
         scoped_upstream_pools: ScopedRegistry<UpstreamPool>,
@@ -998,6 +1006,11 @@ impl ZentinelProxy {
 mod listener_matcher_tests {
     use super::*;
     use crate::routing::RequestInfo;
+    use std::net::SocketAddr;
+
+    fn local(s: &str) -> SocketAddr {
+        s.parse().expect("test address parses")
+    }
 
     const KDL: &str = r#"
         schema-version "1.0"
@@ -1036,9 +1049,9 @@ mod listener_matcher_tests {
 
         // Only the namespace-bound listener gets a dedicated matcher.
         assert_eq!(matchers.len(), 1);
-        assert!(!matchers.contains_key("0.0.0.0:8080"));
+        assert!(!matchers.contains_configured("0.0.0.0:8080"));
         let admin = matchers
-            .get("127.0.0.1:9000")
+            .get(local("127.0.0.1:9000"))
             .expect("admin listener bound to namespace");
 
         // Isolated: the admin listener serves the namespace route...
@@ -1076,5 +1089,107 @@ mod listener_matcher_tests {
         let config = zentinel_config::Config::from_kdl(kdl).expect("config parses");
         let matchers = ZentinelProxy::build_listener_matchers(&config);
         assert!(matchers.is_empty());
+    }
+
+    /// A namespaced listener bound to `0.0.0.0` used to be unreachable: the
+    /// matcher was stored under the configured `0.0.0.0:8080`, but a connection
+    /// accepted on that bind reports the concrete interface from
+    /// `getsockname()`, so the lookup always missed and the request silently
+    /// fell back to the *global* route set.
+    const WILDCARD_KDL: &str = r#"
+        schema-version "1.0"
+        system { worker-threads 0 }
+        listeners {
+            listener "public" {
+                address "0.0.0.0:8080"
+                namespace "iso"
+            }
+        }
+        routes {
+            route "global-secret" {
+                matches { path "/secret" }
+                service-type "builtin"
+                builtin-handler "config"
+            }
+        }
+        namespace "iso" {
+            routes {
+                route "only" {
+                    matches { path "/ok" }
+                    service-type "builtin"
+                    builtin-handler "health"
+                }
+            }
+        }
+    "#;
+
+    #[test]
+    fn wildcard_bound_namespace_listener_resolves_from_concrete_local_addr() {
+        let config = zentinel_config::Config::from_kdl(WILDCARD_KDL).expect("config parses");
+        let matchers = ZentinelProxy::build_listener_matchers(&config);
+
+        // Every interface a `0.0.0.0` bind can accept on must resolve.
+        for arrival in ["127.0.0.1:8080", "203.0.113.5:8080", "10.0.0.7:8080"] {
+            let matcher = matchers
+                .get(local(arrival))
+                .unwrap_or_else(|| panic!("no matcher for connection arriving on {arrival}"));
+
+            // The namespace route is live...
+            assert!(
+                matcher
+                    .match_request(&RequestInfo::new("GET", "/ok", "x"))
+                    .is_some(),
+                "namespace route should match on {arrival}"
+            );
+            // ...and the global route stays out of reach, which is the
+            // isolation guarantee `namespace` is documented to provide.
+            assert!(
+                matcher
+                    .match_request(&RequestInfo::new("GET", "/secret", "x"))
+                    .is_none(),
+                "global route must not leak into namespace on {arrival}"
+            );
+        }
+    }
+
+    #[test]
+    fn wildcard_listener_does_not_capture_other_ports() {
+        let config = zentinel_config::Config::from_kdl(WILDCARD_KDL).expect("config parses");
+        let matchers = ZentinelProxy::build_listener_matchers(&config);
+        assert!(matchers.get(local("203.0.113.5:9090")).is_none());
+    }
+
+    /// Per-listener timeouts resolve through the same path, and used to be
+    /// inert on wildcard binds for the same reason.
+    #[test]
+    fn per_listener_timeouts_resolve_on_wildcard_bind() {
+        let kdl = r#"
+            schema-version "1.0"
+            system { worker-threads 0 }
+            listeners {
+                listener "public" {
+                    address "0.0.0.0:8080"
+                    request-timeout-secs 17
+                    keepalive-timeout-secs 23
+                }
+            }
+            routes {
+                route "api" {
+                    matches { path-prefix "/api" }
+                    upstream "backend"
+                }
+            }
+            upstreams {
+                upstream "backend" { target "127.0.0.1:3000" }
+            }
+        "#;
+        let config = zentinel_config::Config::from_kdl(kdl).expect("config parses");
+        let listener =
+            super::listener_addr::listener_for_addr(&config.listeners, local("203.0.113.5:8080"))
+                .expect("wildcard listener resolves from a concrete local address");
+
+        assert_eq!(listener.id, "public");
+        assert_eq!(listener.request_timeout_secs, 17);
+        assert_eq!(listener.keepalive_timeout_secs, 23);
     }
 }

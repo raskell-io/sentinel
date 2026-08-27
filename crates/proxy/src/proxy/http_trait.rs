@@ -31,9 +31,20 @@ use crate::routing::RequestInfo;
 use super::context::{FallbackReason, RequestContext};
 use super::fallback::FallbackEvaluator;
 use super::fallback_metrics::get_fallback_metrics;
+use super::listener_addr::listener_for_addr;
 use super::model_routing;
 use super::model_routing_metrics::get_model_routing_metrics;
 use super::ZentinelProxy;
+
+/// The IP socket address behind a Pingora endpoint, if it has one.
+///
+/// Unix-domain listeners carry no `SocketAddr` to resolve against a configured
+/// bind address, so they simply do not match any listener.
+fn to_socket_addr(
+    addr: &pingora::protocols::l4::socket::SocketAddr,
+) -> Option<std::net::SocketAddr> {
+    addr.as_inet().copied()
+}
 
 /// Helper type for rate limiting when we don't need header access
 struct NoHeaderAccessor;
@@ -57,8 +68,11 @@ impl ZentinelProxy {
         if matchers.is_empty() {
             return None;
         }
-        let addr = session.downstream_session.server_addr()?.to_string();
-        matchers.get(&addr).cloned()
+        // `server_addr()` is `getsockname()` on the accepted connection, so a
+        // wildcard-bound listener reports the concrete interface here and never
+        // the configured `0.0.0.0`. The lookup resolves that.
+        let addr = to_socket_addr(session.downstream_session.server_addr()?)?;
+        matchers.get(addr).cloned()
     }
 }
 
@@ -899,22 +913,26 @@ impl ProxyHttp for ZentinelProxy {
             "Starting request filter phase"
         );
 
-        // Apply per-listener timeouts from config
-        if let Some(server_addr) = session.downstream_session.server_addr() {
-            let server_addr_str = server_addr.to_string();
+        // Apply per-listener timeouts from config. Resolved against the local
+        // address the same way namespace matchers are, so these reach
+        // wildcard-bound listeners too.
+        if let Some(local_addr) = session
+            .downstream_session
+            .server_addr()
+            .and_then(to_socket_addr)
+        {
             let config = ctx
                 .config
                 .get_or_insert_with(|| self.config_manager.current());
-            for listener in &config.listeners {
-                if listener.address == server_addr_str {
-                    // Apply downstream read timeout
-                    session.downstream_session.set_read_timeout(Some(
-                        std::time::Duration::from_secs(listener.request_timeout_secs),
-                    ));
-                    // Store keepalive for response phase
-                    ctx.listener_keepalive_timeout_secs = Some(listener.keepalive_timeout_secs);
-                    break;
-                }
+            if let Some(listener) = listener_for_addr(&config.listeners, local_addr) {
+                let request_timeout_secs = listener.request_timeout_secs;
+                let keepalive_timeout_secs = listener.keepalive_timeout_secs;
+                // Apply downstream read timeout
+                session
+                    .downstream_session
+                    .set_read_timeout(Some(std::time::Duration::from_secs(request_timeout_secs)));
+                // Store keepalive for response phase
+                ctx.listener_keepalive_timeout_secs = Some(keepalive_timeout_secs);
             }
         }
 
