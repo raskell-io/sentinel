@@ -38,6 +38,27 @@ pub(crate) const RECOGNIZED_SYSTEM_KEYS: &[&str] = &[
     "route-cache-size",
 ];
 
+/// Every key the listener parsers read.
+///
+/// Both `parse_listeners` here and `parse_namespace_listener` in `namespace.rs`
+/// build a `ListenerConfig` from exactly this set, so a setting added to one
+/// and not the other is a bug this list makes visible.
+///
+/// Kept beside the parser for the same reason as [`RECOGNIZED_SYSTEM_KEYS`]:
+/// the unknown-key lint reads it, and under-listing produces false warnings on
+/// valid configs.
+pub(crate) const RECOGNIZED_LISTENER_KEYS: &[&str] = &[
+    "address",
+    "protocol",
+    "tls",
+    "default-route",
+    "namespace",
+    "request-timeout-secs",
+    "keepalive-timeout-secs",
+    "max-concurrent-streams",
+    "keepalive-max-requests",
+];
+
 pub fn parse_server_config(node: &kdl::KdlNode) -> Result<ServerConfig> {
     trace!("Parsing server configuration block");
 

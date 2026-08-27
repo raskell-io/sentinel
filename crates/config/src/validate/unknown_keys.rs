@@ -97,6 +97,10 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         keys: crate::kdl::server::RECOGNIZED_SYSTEM_KEYS,
     },
     ClosedBlock {
+        name: "listener",
+        keys: crate::kdl::server::RECOGNIZED_LISTENER_KEYS,
+    },
+    ClosedBlock {
         name: "policies",
         keys: &[
             "request-headers",
@@ -138,6 +142,7 @@ fn walk(node: &kdl::KdlNode, result: &mut ValidationResult) {
                     result
                         .add_warning(ValidationWarning::new(unknown_key_message(block.name, key)));
                 }
+                check_run_together(block, child, result);
             }
         }
     }
@@ -147,6 +152,54 @@ fn walk(node: &kdl::KdlNode, result: &mut ValidationResult) {
             walk(child, result);
         }
     }
+}
+
+/// Warn when a node's surplus arguments name a sibling key.
+///
+/// KDL separates nodes by newline or `;`. Written on one line without either,
+///
+/// ```kdl
+/// listener "public" { address "0.0.0.0:8080" namespace "iso" }
+/// ```
+///
+/// is not two settings — it is a single `address` node carrying three
+/// arguments, and the entry helpers read only the first. `namespace` is
+/// dropped before any parser sees it, so the unknown-key check above cannot
+/// see it either: there is no `namespace` child node to be unknown. The config
+/// loads, validates and starts, and the setting simply does not exist. That is
+/// how a listener's namespace isolation came to be silently absent in #396.
+///
+/// The signature is specific: an argument *after the first* whose value is the
+/// name of a key in this same block. A node legitimately taking a list —
+/// `hostnames "a.com" "b.com"` — never matches, because hostnames are not
+/// listener keys. Only the first argument is exempt, since that is the node's
+/// own value.
+fn check_run_together(block: &ClosedBlock, child: &kdl::KdlNode, result: &mut ValidationResult) {
+    let key = child.name().value();
+
+    for entry in child.entries().iter().skip(1) {
+        // Property syntax (`name=value`) is not a run-together line.
+        if entry.name().is_some() {
+            continue;
+        }
+        let Some(value) = entry.value().as_string() else {
+            continue;
+        };
+        if block.keys.contains(&value) {
+            result.add_warning(ValidationWarning::new(run_together_message(
+                block.name, key, value,
+            )));
+        }
+    }
+}
+
+/// Build the run-together warning.
+fn run_together_message(block: &str, key: &str, swallowed: &str) -> String {
+    format!(
+        "'{swallowed}' is being read as an argument to '{key}' rather than as a setting, \
+         so it is ignored. In the '{block}' block, put each setting on its own line \
+         (or separate them with ';')."
+    )
 }
 
 /// Build the warning, with a suggestion when one key is clearly meant.
@@ -403,6 +456,132 @@ mod tests {
             }
         "#;
         assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    /// The #396 case: `namespace` swallowed as an argument to `address`.
+    #[test]
+    fn a_run_together_listener_line_is_reported() {
+        let kdl = r#"
+            listeners {
+                listener "public" { address "0.0.0.0:8080" namespace "iso" }
+            }
+        "#;
+        let mut result = ValidationResult::default();
+        check_unknown_keys(kdl, &mut result);
+
+        let warnings = warning_texts(&result);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected exactly one warning, got: {warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("'namespace'") && warnings[0].contains("'address'"),
+            "warning should name both the swallowed setting and its host: {}",
+            warnings[0]
+        );
+    }
+
+    /// The same config written correctly must be silent.
+    #[test]
+    fn separated_listener_settings_are_not_reported() {
+        for separator in ["\n", ";"] {
+            let kdl = format!(
+                r#"
+                listeners {{
+                    listener "public" {{ address "0.0.0.0:8080"{separator}namespace "iso" }}
+                }}
+                "#
+            );
+            let mut result = ValidationResult::default();
+            check_unknown_keys(&kdl, &mut result);
+            assert!(
+                result.warnings.is_empty(),
+                "separator {separator:?} should parse as two settings, got: {:?}",
+                warning_texts(&result)
+            );
+        }
+    }
+
+    /// A node that legitimately takes a list must not be flagged. This is the
+    /// false positive that would make the check unusable.
+    #[test]
+    fn a_node_taking_a_list_of_values_is_not_reported() {
+        let kdl = r#"
+            route "r" {
+                policies {
+                    cache {
+                        cacheable-methods "GET" "HEAD"
+                    }
+                }
+            }
+        "#;
+        let mut result = ValidationResult::default();
+        check_unknown_keys(kdl, &mut result);
+        assert!(
+            result.warnings.is_empty(),
+            "a value list is not a run-together line: {:?}",
+            warning_texts(&result)
+        );
+    }
+
+    /// Only arguments *after* the first are candidates: the first is the
+    /// node's own value, and may legitimately equal a key name.
+    #[test]
+    fn a_value_equal_to_a_key_name_is_allowed_in_first_position() {
+        let kdl = r#"
+            listeners {
+                listener "public" { address "0.0.0.0:8080" }
+                listener "odd" { default-route "namespace" }
+            }
+        "#;
+        let mut result = ValidationResult::default();
+        check_unknown_keys(kdl, &mut result);
+        assert!(
+            result.warnings.is_empty(),
+            "a first-position value is the node's own: {:?}",
+            warning_texts(&result)
+        );
+    }
+
+    /// Several settings can be swallowed by one line, and each is worth naming.
+    #[test]
+    fn every_swallowed_setting_on_a_line_is_reported() {
+        let kdl = r#"
+            listeners {
+                listener "public" {
+                    address "0.0.0.0:8080" namespace "iso" protocol "https"
+                }
+            }
+        "#;
+        let mut result = ValidationResult::default();
+        check_unknown_keys(kdl, &mut result);
+
+        let warnings = warning_texts(&result);
+        assert_eq!(warnings.len(), 2, "got: {warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("'namespace'")));
+        assert!(warnings.iter().any(|w| w.contains("'protocol'")));
+    }
+
+    /// Property syntax is a different construct and not this check's business.
+    #[test]
+    fn property_syntax_is_not_a_run_together_line() {
+        let kdl = r#"
+            listeners {
+                listener "public" { address "0.0.0.0:8080" namespace="iso" }
+            }
+        "#;
+        let mut result = ValidationResult::default();
+        check_unknown_keys(kdl, &mut result);
+        assert!(
+            result.warnings.is_empty(),
+            "named entries are properties, not swallowed nodes: {:?}",
+            warning_texts(&result)
+        );
+    }
+
+    fn warning_texts(result: &ValidationResult) -> Vec<String> {
+        result.warnings.iter().map(|w| w.to_string()).collect()
     }
 
     #[test]
