@@ -346,7 +346,7 @@ const KNOWN_TLS_NODES: &[&str] = &[
 ];
 
 /// Child nodes recognized inside an `sni` block.
-const KNOWN_SNI_NODES: &[&str] = &[
+pub(crate) const KNOWN_SNI_NODES: &[&str] = &[
     "hostnames",
     "priority-hostnames",
     "cert-file",

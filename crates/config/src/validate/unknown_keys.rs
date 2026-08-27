@@ -195,15 +195,13 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         ],
     },
     ClosedBlock {
+        // The listener TLS parser rejects unknown nodes here outright
+        // (`reject_unknown_nodes`), so this mainly covers the same ground a
+        // second time -- but it shares the parser's list rather than copying
+        // it, so the two cannot drift apart.
         name: "sni",
         nesting: Nesting::Anywhere,
-        keys: &[
-            "hostnames",
-            "priority-hostnames",
-            "cert-file",
-            "key-file",
-            "acme",
-        ],
+        keys: crate::kdl::server::KNOWN_SNI_NODES,
     },
     ClosedBlock {
         name: "sni-certs",
@@ -231,6 +229,29 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         name: "eab",
         nesting: Nesting::Anywhere,
         keys: &["kid", "hmac-key"],
+    },
+    ClosedBlock {
+        name: "upstream",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::upstreams::RECOGNIZED_UPSTREAM_KEYS,
+    },
+    ClosedBlock {
+        // An upstream's `tls` block. A listener's `tls` block shares the name
+        // and not one key, hence the qualification.
+        //
+        // The listener side is deliberately absent: `parse_tls_config` already
+        // rejects unknown nodes with a hard error and a targeted hint, so a
+        // lint warning there would arrive after the config had already failed
+        // to load. Upstream TLS has no such check, which is why this one earns
+        // its place.
+        name: "tls",
+        nesting: Nesting::In("upstream"),
+        keys: crate::kdl::upstreams::RECOGNIZED_UPSTREAM_TLS_KEYS,
+    },
+    ClosedBlock {
+        name: "target",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::upstreams::RECOGNIZED_TARGET_KEYS,
     },
     ClosedBlock {
         name: "policies",
@@ -959,6 +980,124 @@ mod tests {
             !warnings[0].contains("'disk-path'"),
             "suggestion leaked from the top-level block: {}",
             warnings[0]
+        );
+    }
+
+    /// The single-target shorthand. `address` is read inside
+    /// `parse_upstream_targets`, not in `parse_upstream`, so it appears nowhere
+    /// in the upstream parser's body -- omitting it from the key list would
+    /// warn about a perfectly valid config.
+    #[test]
+    fn the_upstream_address_shorthand_is_not_reported() {
+        let kdl = r#"
+            upstream "backend" {
+                address "127.0.0.1:8081"
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    #[test]
+    fn a_valid_upstream_produces_no_warnings() {
+        let kdl = r#"
+            upstream "backend" {
+                target "127.0.0.1:8081" weight=2
+                targets {
+                    target { address "127.0.0.1:8082"; weight 3 }
+                }
+                load-balancing "round_robin"
+                health-check { path "/healthz" }
+                http-version { max-version 2 }
+                connection-pool { max-connections 100 }
+                timeouts { connect-secs 5 }
+                tls { sni "backend.internal" }
+                circuit-breaker { failure-threshold 5 }
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    #[test]
+    fn an_unknown_upstream_key_is_reported() {
+        let kdl = r#"
+            upstream "backend" {
+                target "127.0.0.1:8081"
+                retries 3
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings.iter().any(|w| w.contains("'retries'")),
+            "{warnings:?}"
+        );
+    }
+
+    /// The two `tls` blocks share a name and no keys, exactly like the two
+    /// `cache` blocks.
+    #[test]
+    fn upstream_tls_keys_are_distinct_from_listener_tls_keys() {
+        let valid = r#"
+            upstream "backend" {
+                target "127.0.0.1:8081"
+                tls {
+                    sni "backend.internal"
+                    insecure-skip-verify #false
+                    client-cert "/c.crt"
+                    client-key "/c.key"
+                    ca-cert "/ca.crt"
+                }
+            }
+        "#;
+        assert!(warnings_for(valid).is_empty(), "{:?}", warnings_for(valid));
+
+        // `cert-file` is a *listener* TLS key and does nothing on an upstream.
+        let wrong = r#"
+            upstream "backend" {
+                target "127.0.0.1:8081"
+                tls { cert-file "/c.crt" }
+            }
+        "#;
+        assert!(
+            warnings_for(wrong)
+                .iter()
+                .any(|w| w.contains("'cert-file'")),
+            "{:?}",
+            warnings_for(wrong)
+        );
+    }
+
+    /// The dead key this check found in `config/examples/inference-routing.kdl`
+    /// on its first run: certificate verification is controlled by
+    /// `insecure-skip-verify`, and `verify` is read by nothing.
+    #[test]
+    fn the_verify_key_that_shipped_in_an_example_is_reported() {
+        let kdl = r#"
+            upstream "openai" {
+                target "api.openai.com:443"
+                tls {
+                    sni "api.openai.com"
+                    verify #true
+                }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings.iter().any(|w| w.contains("'verify'")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn target_block_keys_are_checked() {
+        let kdl = r#"
+            upstream "backend" {
+                target { address "127.0.0.1:8081"; wieght 2 }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings.iter().any(|w| w.contains("'wieght'")),
+            "{warnings:?}"
         );
     }
 
