@@ -36,6 +36,33 @@ pub(crate) const RECOGNIZED_UPSTREAM_KEYS: &[&str] = &[
     "circuit-breaker",
 ];
 
+/// Every child node `parse_health_check` reads directly.
+///
+/// The type-specific settings are *not* here: they are children of the `type`
+/// node itself (`type "http" { path "/health" }`), so this list is fixed rather
+/// than varying with the check type.
+pub(crate) const RECOGNIZED_HEALTH_CHECK_KEYS: &[&str] = &[
+    "type",
+    "interval-secs",
+    "timeout-secs",
+    "healthy-threshold",
+    "unhealthy-threshold",
+];
+
+/// Settings accepted inside `type "http" { ... }`.
+pub(crate) const RECOGNIZED_HTTP_CHECK_KEYS: &[&str] = &["path", "expected-status", "host"];
+
+/// Settings accepted inside `type "grpc" { ... }`.
+pub(crate) const RECOGNIZED_GRPC_CHECK_KEYS: &[&str] = &["service"];
+
+/// Settings accepted inside `type "inference" { ... }`.
+pub(crate) const RECOGNIZED_INFERENCE_CHECK_KEYS: &[&str] =
+    &["endpoint", "expected-models", "readiness"];
+
+/// `type "tcp"` takes no settings; the parser reads none and treats every
+/// unrecognised type as TCP.
+pub(crate) const RECOGNIZED_TCP_CHECK_KEYS: &[&str] = &[];
+
 /// Every child node `parse_upstream_tls` reads.
 ///
 /// Distinct from a listener's `tls` block, which shares the name and no keys.
