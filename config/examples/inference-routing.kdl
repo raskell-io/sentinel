@@ -29,7 +29,8 @@ upstreams {
 
         tls {
             sni "api.openai.com"
-            verify #true
+            // Certificate verification is on by default; `insecure-skip-verify #true`
+            // is the (discouraged) opt-out. There is no `verify` key.
         }
 
         health-check {
@@ -55,7 +56,6 @@ upstreams {
 
         tls {
             sni "api.anthropic.com"
-            verify #true
         }
 
         timeouts {
