@@ -60,7 +60,7 @@
 //! }
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -127,7 +127,99 @@ pub struct SniResolver {
     wildcard_certs: HashMap<String, Arc<CertifiedKey>>,
 }
 
+/// The name used for the default certificate in reload diffs.
+///
+/// It has no SNI hostname of its own but is what an unmatched name is served,
+/// so a silent rotation of it would be exactly as invisible as any other.
+const DEFAULT_CERT_LABEL: &str = "<default>";
+
+/// SHA-256 of a leaf certificate's DER encoding, as lowercase hex.
+///
+/// This is the same digest `openssl x509 -fingerprint -sha256 -noout` prints, so
+/// a fingerprint in the log can be matched against a file on disk without
+/// guesswork. Truncated to 16 hex characters: enough to distinguish the
+/// certificates on one listener, short enough to stay readable in a log line.
+fn cert_fingerprint(cert: &CertifiedKey) -> String {
+    use sha2::{Digest, Sha256};
+
+    let Some(leaf) = cert.cert.first() else {
+        return "unknown".to_string();
+    };
+    let digest = Sha256::digest(leaf.as_ref());
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// What a reload actually changed, in terms an operator can act on.
+///
+/// Counts alone cannot answer "did anything change?": the common case is a
+/// renewal, where a certificate is replaced by one covering the same names and
+/// every count stays identical. `replaced` is what makes that visible.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct CertDiff {
+    /// Hostnames served now that were not served before.
+    pub added: Vec<String>,
+    /// Hostnames no longer served.
+    pub removed: Vec<String>,
+    /// Hostnames still served, but by a different certificate — i.e. a renewal.
+    pub replaced: Vec<String>,
+}
+
+impl CertDiff {
+    /// Whether the reload was a no-op as far as served certificates go.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.replaced.is_empty()
+    }
+
+    /// Compute the diff between two snapshots of `hostname -> fingerprint`.
+    fn between(before: &BTreeMap<String, String>, after: &BTreeMap<String, String>) -> Self {
+        let mut diff = Self::default();
+
+        for (hostname, new_fp) in after {
+            match before.get(hostname) {
+                None => diff.added.push(hostname.clone()),
+                Some(old_fp) if old_fp != new_fp => {
+                    diff.replaced
+                        .push(format!("{hostname} ({old_fp}->{new_fp})"));
+                }
+                Some(_) => {}
+            }
+        }
+        for hostname in before.keys() {
+            if !after.contains_key(hostname) {
+                diff.removed.push(hostname.clone());
+            }
+        }
+
+        diff
+    }
+
+    /// Render one field of the diff for logging, or `-` when it is empty.
+    fn render(names: &[String]) -> String {
+        if names.is_empty() {
+            "-".to_string()
+        } else {
+            names.join(", ")
+        }
+    }
+}
+
 impl SniResolver {
+    /// Every hostname this resolver serves, mapped to its certificate
+    /// fingerprint.
+    ///
+    /// Built on demand at reload time only, so the hot path pays nothing for it.
+    pub fn served_certs(&self) -> BTreeMap<String, String> {
+        let mut served = BTreeMap::new();
+        served.insert(
+            DEFAULT_CERT_LABEL.to_string(),
+            cert_fingerprint(&self.default_cert),
+        );
+        for (hostname, cert) in self.sni_certs.iter().chain(self.wildcard_certs.iter()) {
+            served.insert(hostname.clone(), cert_fingerprint(cert));
+        }
+        served
+    }
+
     /// Create a new SNI resolver from TLS configuration
     pub fn from_config(config: &TlsConfig, listener_id: Option<&str>) -> Result<Self, TlsError> {
         let listener_id_str = listener_id.unwrap_or("unknown");
@@ -564,14 +656,33 @@ impl HotReloadableSniResolver {
             }
         };
 
+        // Snapshot both sides before the swap. With `reload-mode "watch"` the
+        // reload is unattended by design, so this log line is the only record an
+        // operator has of what a rescan actually did.
+        let before = self.inner.read().served_certs();
+        let after = new_resolver.served_certs();
+        let diff = CertDiff::between(&before, &after);
+
         // Swap in the new resolver atomically
         *self.inner.write() = Arc::new(new_resolver);
         *self.last_reload.write() = Instant::now();
 
-        info!(
-            listener_id = %self.listener_id,
-            "TLS certificates reloaded successfully"
-        );
+        if diff.is_empty() {
+            info!(
+                listener_id = %self.listener_id,
+                hostnames = after.len(),
+                "TLS certificates reloaded successfully; no change to served certificates"
+            );
+        } else {
+            info!(
+                listener_id = %self.listener_id,
+                hostnames = after.len(),
+                added = %CertDiff::render(&diff.added),
+                removed = %CertDiff::render(&diff.removed),
+                replaced = %CertDiff::render(&diff.replaced),
+                "TLS certificates reloaded successfully"
+            );
+        }
         if let Some(metrics) = crate::tls_metrics::get_tls_metrics() {
             metrics.record_reload(&self.listener_id, true);
         }
@@ -1924,5 +2035,91 @@ mod tests {
         let hostname = "Example.COM";
         let normalized = hostname.to_lowercase();
         assert_eq!(normalized, "example.com");
+    }
+}
+
+#[cfg(test)]
+mod cert_diff_tests {
+    use super::*;
+
+    fn snapshot(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(h, f)| (h.to_string(), f.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn an_unchanged_folder_reports_no_change() {
+        let before = snapshot(&[("<default>", "aa"), ("a.test", "bb")]);
+        let diff = CertDiff::between(&before, &before);
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn a_new_certificate_is_reported_as_added() {
+        let before = snapshot(&[("a.test", "aa")]);
+        let after = snapshot(&[("a.test", "aa"), ("b.test", "bb")]);
+        let diff = CertDiff::between(&before, &after);
+        assert_eq!(diff.added, vec!["b.test".to_string()]);
+        assert!(diff.removed.is_empty());
+        assert!(diff.replaced.is_empty());
+    }
+
+    #[test]
+    fn a_deleted_certificate_is_reported_as_removed() {
+        let before = snapshot(&[("a.test", "aa"), ("b.test", "bb")]);
+        let after = snapshot(&[("a.test", "aa")]);
+        let diff = CertDiff::between(&before, &after);
+        assert_eq!(diff.removed, vec!["b.test".to_string()]);
+        assert!(diff.added.is_empty());
+        assert!(diff.replaced.is_empty());
+    }
+
+    /// The case the counts cannot see, and the reason this diff exists: a
+    /// renewal swaps the certificate while every hostname and every count stays
+    /// exactly the same.
+    #[test]
+    fn a_renewal_for_the_same_hostname_is_reported_as_replaced() {
+        let before = snapshot(&[("a.test", "old00000")]);
+        let after = snapshot(&[("a.test", "new11111")]);
+        let diff = CertDiff::between(&before, &after);
+
+        assert!(diff.added.is_empty(), "hostname set is unchanged");
+        assert!(diff.removed.is_empty(), "hostname set is unchanged");
+        assert_eq!(
+            diff.replaced,
+            vec!["a.test (old00000->new11111)".to_string()]
+        );
+        assert!(!diff.is_empty(), "a renewal is a change and must be logged");
+    }
+
+    /// A 1-for-1 rotation: one name retired, its replacement added, counts equal
+    /// on both sides.
+    #[test]
+    fn a_one_for_one_rotation_shows_both_sides() {
+        let before = snapshot(&[("<default>", "dd"), ("old.test", "aa")]);
+        let after = snapshot(&[("<default>", "dd"), ("new.test", "bb")]);
+        let diff = CertDiff::between(&before, &after);
+
+        assert_eq!(before.len(), after.len(), "counts alone show nothing");
+        assert_eq!(diff.added, vec!["new.test".to_string()]);
+        assert_eq!(diff.removed, vec!["old.test".to_string()]);
+    }
+
+    #[test]
+    fn rotating_the_default_certificate_is_visible() {
+        let before = snapshot(&[(DEFAULT_CERT_LABEL, "old00000")]);
+        let after = snapshot(&[(DEFAULT_CERT_LABEL, "new11111")]);
+        assert!(!CertDiff::between(&before, &after).is_empty());
+    }
+
+    #[test]
+    fn empty_diff_fields_render_as_a_dash() {
+        assert_eq!(CertDiff::render(&[]), "-");
+        assert_eq!(
+            CertDiff::render(&["a.test".to_string(), "b.test".to_string()]),
+            "a.test, b.test"
+        );
     }
 }

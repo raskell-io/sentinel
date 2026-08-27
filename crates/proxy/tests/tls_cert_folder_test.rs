@@ -312,3 +312,100 @@ fn a_reload_picks_up_a_newly_added_certificate() {
         "the reload should have discovered the new certificate"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Reload observability
+//
+// #117 asked for "full rescan + diff + atomic swap on reload". The rescan and
+// the swap shipped; the diff did not, so a reload logged counts and nothing
+// else. Counts cannot answer the question an operator actually has after an
+// unattended `reload-mode "watch"` rescan -- "did anything change?" -- because
+// the most common event, a renewal, leaves every count identical.
+// ---------------------------------------------------------------------------
+
+/// Write a self-signed cert/key pair for `cn` into `dir` under `stem`.
+///
+/// Each call produces a fresh key, so two calls with the same `cn` model a
+/// renewal: same hostname, different certificate.
+fn issue(dir: &Path, stem: &str, cn: &str) {
+    let mut params =
+        rcgen::CertificateParams::new(vec![cn.to_string()]).expect("valid subject alt name");
+    let mut dn = rcgen::DistinguishedName::new();
+    dn.push(rcgen::DnType::CommonName, cn);
+    params.distinguished_name = dn;
+
+    let key = rcgen::KeyPair::generate().expect("keypair");
+    let cert = params.self_signed(&key).expect("self-signed cert");
+
+    fs::write(dir.join(format!("{stem}.crt")), cert.pem()).expect("write cert");
+    fs::write(dir.join(format!("{stem}.key")), key.serialize_pem()).expect("write key");
+}
+
+fn served(dir: &Path) -> std::collections::BTreeMap<String, String> {
+    let mut config = config_with_folder(dir);
+    config.allow_sni_overlaps = true;
+    SniResolver::from_config(&config, Some("folder-test"))
+        .expect("should build")
+        .served_certs()
+}
+
+#[test]
+fn a_renewal_changes_the_fingerprint_for_an_unchanged_hostname() {
+    let dir = tempfile::tempdir().unwrap();
+    issue(dir.path(), "renewme", "renew.example.com");
+    let before = served(dir.path());
+
+    // The renewal an ACME client would perform: same name, same filename, new
+    // certificate written over the old one.
+    issue(dir.path(), "renewme", "renew.example.com");
+    let after = served(dir.path());
+
+    assert_eq!(
+        before.keys().collect::<Vec<_>>(),
+        after.keys().collect::<Vec<_>>(),
+        "a renewal must not change the hostname set -- that is what makes it invisible to counts"
+    );
+    assert_ne!(
+        before.get("renew.example.com"),
+        after.get("renew.example.com"),
+        "the fingerprint must change, or the reload diff cannot see a renewal"
+    );
+}
+
+#[test]
+fn an_untouched_folder_produces_an_identical_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    issue(dir.path(), "stable", "stable.example.com");
+
+    assert_eq!(
+        served(dir.path()),
+        served(dir.path()),
+        "rescanning an unchanged folder must not report a change"
+    );
+}
+
+#[test]
+fn adding_and_removing_certificates_moves_the_hostname_set() {
+    let dir = tempfile::tempdir().unwrap();
+    issue(dir.path(), "first", "first.example.com");
+    let before = served(dir.path());
+
+    fs::remove_file(dir.path().join("first.crt")).expect("remove cert");
+    fs::remove_file(dir.path().join("first.key")).expect("remove key");
+    issue(dir.path(), "second", "second.example.com");
+    let after = served(dir.path());
+
+    assert!(before.contains_key("first.example.com"));
+    assert!(!after.contains_key("first.example.com"));
+    assert!(after.contains_key("second.example.com"));
+    // The 1-for-1 rotation from the issue: counts are equal on both sides.
+    assert_eq!(before.len(), after.len());
+}
+
+/// The default certificate has no SNI hostname, so a silent rotation of it
+/// would be exactly as invisible as any other.
+#[test]
+fn the_default_certificate_is_part_of_the_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(served(dir.path()).contains_key("<default>"));
+}
