@@ -12,6 +12,47 @@ use crate::{kdl::circuitbreaker_helper::parse_circuit_breaker_faildefault, upstr
 use super::helpers::{get_first_arg_string, get_int_entry, parse_upstream_targets};
 
 //Parse a single upstream block
+/// Every child node `parse_upstream` reads.
+///
+/// `address` is the easy one to miss: it is the single-target shorthand
+/// (`upstream "x" { address "127.0.0.1:8081" }`), handled inside
+/// `parse_upstream_targets` rather than here, so it does not appear anywhere in
+/// this function's body.
+///
+/// Kept beside the parser for the same reason as the other recognised-key
+/// lists: the unknown-key lint reads it, and under-listing produces false
+/// warnings on valid configs.
+pub(crate) const RECOGNIZED_UPSTREAM_KEYS: &[&str] = &[
+    "target",
+    "targets",
+    // Single-target shorthand; see `parse_upstream_targets`.
+    "address",
+    "load-balancing",
+    "health-check",
+    "http-version",
+    "connection-pool",
+    "timeouts",
+    "tls",
+    "circuit-breaker",
+];
+
+/// Every child node `parse_upstream_tls` reads.
+///
+/// Distinct from a listener's `tls` block, which shares the name and no keys.
+pub(crate) const RECOGNIZED_UPSTREAM_TLS_KEYS: &[&str] = &[
+    "sni",
+    "insecure-skip-verify",
+    "client-cert",
+    "client-key",
+    "ca-cert",
+];
+
+/// Every child node a `target` block reads.
+///
+/// Both are also accepted as properties (`target address="..." weight=2`),
+/// which the lint ignores; only child nodes are checked.
+pub(crate) const RECOGNIZED_TARGET_KEYS: &[&str] = &["address", "weight"];
+
 pub fn parse_upstream(child: &kdl::KdlNode) -> Result<UpstreamConfig> {
     if child.name().value() == "upstream" {
         let id = get_first_arg_string(child).ok_or_else(|| {
