@@ -241,12 +241,29 @@ publishes the four published crates to crates.io, and creates the GitHub Release
 > `Cargo.toml` when preparing a release** — bumping it makes the workflow publish `+2`
 > and silently skips a version on crates.io (this is why `0.6.19` was skipped on 26.07_1).
 
+Two different crate versions are in play at every release, and confusing them is the
+single most common mistake here. Naming them, because `X.Y.Z` alone is ambiguous:
+
+| Term | Value | Where it appears |
+|---|---|---|
+| **`CURRENT`** | the version in `Cargo.toml` at the commit you tag | nowhere user-facing; it is only an input |
+| **`PUBLISHED`** | `CURRENT` + 1 — what the workflow actually publishes | crates.io, the CHANGELOG entry, the GitHub Release notes, the docs-site changelog |
+
+Everything a reader ever sees says **`PUBLISHED`**. `CURRENT` is plumbing.
+
 1. **Prepare PR (CHANGELOG only):** open a branch (e.g.
    `chore/prepare-release-YY.MM_PATCH`) against `main` that edits **only `CHANGELOG.md`**:
    - Add the overview-table row and the dated `## [YY.MM_PATCH] - DATE` section.
-   - The section's `**Crate version:**` is the **current** `Cargo.toml` version — i.e.
-     the *tag* version, which is what gets published **minus 1**. Leave `Cargo.toml` and
+   - The section's `**Crate version:**` is **`PUBLISHED`** — the `Cargo.toml` version
+     **plus one**, i.e. what this release will put on crates.io. Leave `Cargo.toml` and
      `Cargo.lock` untouched.
+
+     `CHANGELOG.md`'s own "Release Overview" preamble is the authority on this and says
+     so outright: *"**Crate Version** is the version actually **published to crates.io**
+     [...] It is not the version present in `Cargo.toml` at the tagged commit."* Check it
+     against the previous entry if in doubt — e.g. 26.08_5 was tagged with `Cargo.toml`
+     at `0.6.27`, and its CHANGELOG entry, its GitHub Release and crates.io all read
+     `0.6.28`.
    - Commit message: `chore: prepare release YY.MM_PATCH`.
 2. **Merge** to `main` once CI is green. The base-branch policy blocks the merge while
    **any** check is still pending — even non-required ones (Unit Tests) — so `gh pr merge`
@@ -255,15 +272,30 @@ publishes the four published crates to crates.io, and creates the GitHub Release
    trigger the workflow.
    ```bash
    git fetch origin main
-   # X.Y.Z below = the current Cargo.toml version (= what will be published − 1)
-   git tag -a YY.MM_PATCH origin/main -m "Release YY.MM_PATCH (semver X.Y.Z)"
+   # The semver in the message is CURRENT -- the version in Cargo.toml right now,
+   # one below what this tag will publish. It is a note to yourself about the input,
+   # not the release's version; see the caveat under step 4.
+   git tag -a YY.MM_PATCH origin/main -m "Release YY.MM_PATCH (semver CURRENT)"
    git push origin YY.MM_PATCH
    ```
 4. **Verify** the run: `gh run list --workflow Release --limit 1`. It builds 4 platform
-   targets, signs with cosign, publishes the four published crates as **`X.Y.Z + 1`**, and
-   creates the GitHub Release (whose notes show the *published* version, so the Release
-   says `X.Y.Z + 1` while the CHANGELOG says `X.Y.Z` — by design). All builds run
+   targets, signs with cosign, publishes the four published crates as **`PUBLISHED`**, and
+   creates the GitHub Release. The Release notes, the CHANGELOG entry and crates.io all
+   agree on `PUBLISHED` — there is no by-design discrepancy between them. All builds run
    **before** any publish, so a build failure publishes nothing.
+
+   > The **annotated tag message** is the one place carrying `CURRENT`, and the two
+   > conventions have actually been mixed. `26.08_4` and `26.08_5` *both* read
+   > `(semver 0.6.27)` and mean opposite things by it:
+   >
+   > | Tag | `Cargo.toml` at tag | Message says | Published | Message meant |
+   > |---|---|---|---|---|
+   > | `26.08_4` | `0.6.26` | `0.6.27` | `0.6.27` | `PUBLISHED` |
+   > | `26.08_5` | `0.6.27` | `0.6.27` | `0.6.28` | `CURRENT` |
+   >
+   > (`26.08_3` carries no semver at all.) So treat a tag message as an informal note and
+   > **never as evidence of what a release shipped** — read crates.io, the Release notes,
+   > or the CHANGELOG for that. All three agree; the tag message may not.
 5. **Post-release bump (manual, every release):** the workflow force-pushes a
    `chore/bump-<published>` branch but its `gh pr create` reliably fails, leaving an
    **orphan branch that only edits `Cargo.toml`**. Open the PR yourself, add a
