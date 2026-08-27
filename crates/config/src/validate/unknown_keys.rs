@@ -45,6 +45,16 @@ enum Nesting {
     Root,
     /// Matches only as a direct child of the named block.
     In(&'static str),
+    /// Matches a node inside `parent` whose own first argument is `arg`.
+    ///
+    /// For blocks whose valid keys depend on the value they carry:
+    /// `type "http" { path "/health" }` and `type "grpc" { service "..." }` are
+    /// both `type` blocks inside `health-check`, and neither accepts the
+    /// other's settings.
+    InWithArg {
+        parent: &'static str,
+        arg: &'static str,
+    },
 }
 
 /// A block whose full set of valid keys is known.
@@ -58,31 +68,50 @@ struct ClosedBlock {
 }
 
 impl ClosedBlock {
-    /// Whether this entry describes a node of `name` directly inside `parent`.
-    fn matches(&self, name: &str, parent: Option<&str>) -> bool {
-        self.name == name
-            && match self.nesting {
-                Nesting::Anywhere => true,
-                Nesting::Root => parent.is_none(),
-                Nesting::In(required) => parent == Some(required),
-            }
+    /// Whether this entry describes `node`, sitting directly inside `parent`.
+    fn matches(&self, node: &kdl::KdlNode, parent: Option<&str>) -> bool {
+        if self.name != node.name().value() {
+            return false;
+        }
+        match self.nesting {
+            Nesting::Anywhere => true,
+            Nesting::Root => parent.is_none(),
+            Nesting::In(required) => parent == Some(required),
+            Nesting::InWithArg {
+                parent: required,
+                arg,
+            } => parent == Some(required) && first_arg(node) == Some(arg),
+        }
+    }
+
+    /// How narrowly this entry applies. Higher wins when several match.
+    fn specificity(&self) -> u8 {
+        match self.nesting {
+            Nesting::Anywhere => 0,
+            Nesting::Root | Nesting::In(_) => 1,
+            Nesting::InWithArg { .. } => 2,
+        }
     }
 }
 
-/// The entry describing this node, preferring a nesting-qualified match.
+/// A node's first argument as a string, if it has one.
+fn first_arg(node: &kdl::KdlNode) -> Option<&str> {
+    node.entries()
+        .iter()
+        .find(|e| e.name().is_none())
+        .and_then(|e| e.value().as_string())
+}
+
+/// The entry describing this node, preferring the most narrowly scoped match.
 ///
-/// A qualified entry is always more specific than `Anywhere`, so it wins.
-fn block_for<'a>(name: &str, parent: Option<&str>) -> Option<&'a ClosedBlock> {
-    let candidates = CLOSED_BLOCKS.iter().filter(|b| b.matches(name, parent));
-    let mut fallback = None;
-    for block in candidates {
-        if block.nesting == Nesting::Anywhere {
-            fallback = Some(block);
-        } else {
-            return Some(block);
-        }
-    }
-    fallback
+/// `type "http"` inside `health-check` matches both the value-qualified entry
+/// and any broader one; the value-qualified entry is the accurate description,
+/// so it wins.
+fn block_for<'a>(node: &kdl::KdlNode, parent: Option<&str>) -> Option<&'a ClosedBlock> {
+    CLOSED_BLOCKS
+        .iter()
+        .filter(|b| b.matches(node, parent))
+        .max_by_key(|b| b.specificity())
 }
 
 /// Blocks this check inspects.
@@ -254,6 +283,46 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         keys: crate::kdl::upstreams::RECOGNIZED_TARGET_KEYS,
     },
     ClosedBlock {
+        name: "health-check",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::upstreams::RECOGNIZED_HEALTH_CHECK_KEYS,
+    },
+    // The `type` block's settings depend on the type it names, so each value
+    // gets its own entry. `type "http" { service "..." }` is a gRPC setting on
+    // an HTTP check and is reported as such.
+    ClosedBlock {
+        name: "type",
+        nesting: Nesting::InWithArg {
+            parent: "health-check",
+            arg: "http",
+        },
+        keys: crate::kdl::upstreams::RECOGNIZED_HTTP_CHECK_KEYS,
+    },
+    ClosedBlock {
+        name: "type",
+        nesting: Nesting::InWithArg {
+            parent: "health-check",
+            arg: "grpc",
+        },
+        keys: crate::kdl::upstreams::RECOGNIZED_GRPC_CHECK_KEYS,
+    },
+    ClosedBlock {
+        name: "type",
+        nesting: Nesting::InWithArg {
+            parent: "health-check",
+            arg: "inference",
+        },
+        keys: crate::kdl::upstreams::RECOGNIZED_INFERENCE_CHECK_KEYS,
+    },
+    ClosedBlock {
+        name: "type",
+        nesting: Nesting::InWithArg {
+            parent: "health-check",
+            arg: "tcp",
+        },
+        keys: crate::kdl::upstreams::RECOGNIZED_TCP_CHECK_KEYS,
+    },
+    ClosedBlock {
         name: "policies",
         nesting: Nesting::Anywhere,
         keys: &[
@@ -292,7 +361,7 @@ pub fn check_unknown_keys(kdl_source: &str, result: &mut ValidationResult) {
 fn walk(node: &kdl::KdlNode, parent: Option<&str>, result: &mut ValidationResult) {
     let name = node.name().value();
 
-    if let Some(block) = block_for(name, parent) {
+    if let Some(block) = block_for(node, parent) {
         if let Some(children) = node.children() {
             for child in children.nodes() {
                 let key = child.name().value();
@@ -364,6 +433,9 @@ fn describe(block: &ClosedBlock) -> String {
     match block.nesting {
         Nesting::Root => format!("the top-level '{}' block", block.name),
         Nesting::In(parent) => format!("a '{parent}' block's '{}' block", block.name),
+        Nesting::InWithArg { parent, arg } => {
+            format!("a '{parent}' block's '{} \"{arg}\"' block", block.name)
+        }
         Nesting::Anywhere => format!("the '{}' block", block.name),
     }
 }
@@ -1006,7 +1078,7 @@ mod tests {
                     target { address "127.0.0.1:8082"; weight 3 }
                 }
                 load-balancing "round_robin"
-                health-check { path "/healthz" }
+                health-check { type "http" { path "/healthz" } }
                 http-version { max-version 2 }
                 connection-pool { max-connections 100 }
                 timeouts { connect-secs 5 }
@@ -1098,6 +1170,122 @@ mod tests {
         assert!(
             warnings.iter().any(|w| w.contains("'wieght'")),
             "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_valid_health_check_produces_no_warnings() {
+        // The form the documentation shows.
+        let kdl = r#"
+            upstream "backend" {
+                target "127.0.0.1:8081"
+                health-check {
+                    type "http" {
+                        path "/health"
+                        expected-status 200
+                        host "backend.internal"
+                    }
+                    interval-secs 10
+                    timeout-secs 5
+                    healthy-threshold 2
+                    unhealthy-threshold 3
+                }
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    /// `path` is read only inside `type "http"`. Directly under `health-check`
+    /// it is read by nothing -- a mistake easy to make, and one I made in this
+    /// file's own fixtures before the check existed.
+    #[test]
+    fn a_type_specific_setting_outside_its_type_block_is_reported() {
+        let kdl = r#"
+            health-check {
+                path "/health"
+                interval-secs 10
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("'path'"), "{}", warnings[0]);
+    }
+
+    /// The point of the value-qualified entries: each check type accepts only
+    /// its own settings.
+    #[test]
+    fn each_health_check_type_accepts_only_its_own_settings() {
+        // `service` is a gRPC setting, on an HTTP check.
+        let http_with_grpc_key = r#"
+            health-check {
+                type "http" { service "grpc.health.v1.Health" }
+            }
+        "#;
+        let warnings = warnings_for(http_with_grpc_key);
+        assert!(
+            warnings.iter().any(|w| w.contains("'service'")),
+            "{warnings:?}"
+        );
+
+        // ...and the same key is fine on a gRPC check.
+        let grpc = r#"
+            health-check {
+                type "grpc" { service "grpc.health.v1.Health" }
+            }
+        "#;
+        assert!(warnings_for(grpc).is_empty(), "{:?}", warnings_for(grpc));
+
+        // `path` is fine on HTTP but not on inference.
+        let inference_with_http_key = r#"
+            health-check {
+                type "inference" { path "/health" }
+            }
+        "#;
+        assert!(
+            warnings_for(inference_with_http_key)
+                .iter()
+                .any(|w| w.contains("'path'")),
+            "{:?}",
+            warnings_for(inference_with_http_key)
+        );
+    }
+
+    #[test]
+    fn a_valid_inference_health_check_produces_no_warnings() {
+        let kdl = r#"
+            health-check {
+                type "inference" {
+                    endpoint "/v1/models"
+                    expected-models "gpt-4" "claude-3"
+                }
+                interval-secs 30
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    /// `type "tcp"` takes no settings at all.
+    #[test]
+    fn a_tcp_check_accepts_no_settings() {
+        let bare = r#"
+            health-check {
+                type "tcp"
+                interval-secs 5
+            }
+        "#;
+        assert!(warnings_for(bare).is_empty(), "{:?}", warnings_for(bare));
+
+        let with_settings = r#"
+            health-check {
+                type "tcp" { path "/health" }
+            }
+        "#;
+        assert!(
+            warnings_for(with_settings)
+                .iter()
+                .any(|w| w.contains("'path'")),
+            "{:?}",
+            warnings_for(with_settings)
         );
     }
 
