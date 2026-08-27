@@ -28,12 +28,61 @@
 
 use super::{ValidationResult, ValidationWarning};
 
+/// Where a block has to appear for its key list to apply.
+///
+/// Block names are not unique. `cache` at the top level configures the storage
+/// backend (`backend`, `disk-path`, `max-size`); `cache` inside a `route`
+/// configures that route's policy (`default-ttl-secs`, `stale-if-error-secs`).
+/// The two share no keys at all, so matching on the node name alone would force
+/// this check to accept the union — and accepting the union is precisely how
+/// #90 went unreported, where `backend "disk"` and `disk-path` were written into
+/// a route's `cache` block and silently did nothing.
+#[derive(PartialEq, Eq)]
+enum Nesting {
+    /// Matches wherever the name appears. Correct when the name is unique.
+    Anywhere,
+    /// Matches only as a top-level block.
+    Root,
+    /// Matches only as a direct child of the named block.
+    In(&'static str),
+}
+
 /// A block whose full set of valid keys is known.
 struct ClosedBlock {
     /// The block's node name in KDL.
     name: &'static str,
+    /// Where this key list applies.
+    nesting: Nesting,
     /// Every key the parser reads inside it, including nested block names.
     keys: &'static [&'static str],
+}
+
+impl ClosedBlock {
+    /// Whether this entry describes a node of `name` directly inside `parent`.
+    fn matches(&self, name: &str, parent: Option<&str>) -> bool {
+        self.name == name
+            && match self.nesting {
+                Nesting::Anywhere => true,
+                Nesting::Root => parent.is_none(),
+                Nesting::In(required) => parent == Some(required),
+            }
+    }
+}
+
+/// The entry describing this node, preferring a nesting-qualified match.
+///
+/// A qualified entry is always more specific than `Anywhere`, so it wins.
+fn block_for<'a>(name: &str, parent: Option<&str>) -> Option<&'a ClosedBlock> {
+    let candidates = CLOSED_BLOCKS.iter().filter(|b| b.matches(name, parent));
+    let mut fallback = None;
+    for block in candidates {
+        if block.nesting == Nesting::Anywhere {
+            fallback = Some(block);
+        } else {
+            return Some(block);
+        }
+    }
+    fallback
 }
 
 /// Blocks this check inspects.
@@ -44,6 +93,7 @@ struct ClosedBlock {
 const CLOSED_BLOCKS: &[ClosedBlock] = &[
     ClosedBlock {
         name: "connection-pool",
+        nesting: Nesting::Anywhere,
         keys: &[
             "max-connections",
             "max-idle",
@@ -56,6 +106,7 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
     },
     ClosedBlock {
         name: "timeouts",
+        nesting: Nesting::Anywhere,
         keys: &[
             "connect-secs",
             "request-secs",
@@ -70,6 +121,7 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
     },
     ClosedBlock {
         name: "ruleset",
+        nesting: Nesting::Anywhere,
         keys: &[
             "crs-version",
             "custom-rules-dir",
@@ -85,23 +137,104 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
     // the change rather than here.
     ClosedBlock {
         name: "route",
+        nesting: Nesting::Anywhere,
         keys: crate::kdl::routes::RECOGNIZED_ROUTE_CHILDREN,
     },
     ClosedBlock {
         name: "system",
+        nesting: Nesting::Anywhere,
         keys: crate::kdl::server::RECOGNIZED_SYSTEM_KEYS,
     },
     ClosedBlock {
         // Deprecated spelling of `system`, parsed by the same function.
         name: "server",
+        nesting: Nesting::Anywhere,
         keys: crate::kdl::server::RECOGNIZED_SYSTEM_KEYS,
     },
     ClosedBlock {
         name: "listener",
+        nesting: Nesting::Anywhere,
         keys: crate::kdl::server::RECOGNIZED_LISTENER_KEYS,
     },
     ClosedBlock {
+        // Storage backend. Distinct from the per-route `cache` policy below:
+        // they share a name and not one key.
+        name: "cache",
+        nesting: Nesting::Root,
+        keys: &[
+            "enabled",
+            "backend",
+            "max-size",
+            "eviction-limit",
+            "lock-timeout",
+            "disk-path",
+            "disk-shards",
+            "disk-max-size",
+            "status-header",
+            "status-header-name",
+        ],
+    },
+    ClosedBlock {
+        // Per-route cache policy. `backend`, `disk-path` and the other storage
+        // settings belong in the top-level block and do nothing here -- #90.
+        name: "cache",
+        nesting: Nesting::In("route"),
+        keys: &[
+            "enabled",
+            "default-ttl-secs",
+            "max-size-bytes",
+            "cache-private",
+            "stale-while-revalidate-secs",
+            "stale-if-error-secs",
+            "cacheable-methods",
+            "cacheable-status-codes",
+            "exclude-extensions",
+            "exclude-paths",
+            "ignore-query-params",
+            "vary-headers",
+        ],
+    },
+    ClosedBlock {
+        name: "sni",
+        nesting: Nesting::Anywhere,
+        keys: &[
+            "hostnames",
+            "priority-hostnames",
+            "cert-file",
+            "key-file",
+            "acme",
+        ],
+    },
+    ClosedBlock {
+        name: "sni-certs",
+        nesting: Nesting::Anywhere,
+        keys: &["cert-folder", "reload-mode", "reload-interval"],
+    },
+    ClosedBlock {
+        name: "acme",
+        nesting: Nesting::Anywhere,
+        keys: &[
+            "email",
+            "domains",
+            "storage",
+            "staging",
+            "server-url",
+            "challenge-type",
+            "dns-provider",
+            "key-type",
+            "renew-before-days",
+            "eab",
+        ],
+    },
+    ClosedBlock {
+        // External Account Binding, nested inside `acme`.
+        name: "eab",
+        nesting: Nesting::Anywhere,
+        keys: &["kid", "hmac-key"],
+    },
+    ClosedBlock {
         name: "policies",
+        nesting: Nesting::Anywhere,
         keys: &[
             "request-headers",
             "response-headers",
@@ -126,21 +259,24 @@ pub fn check_unknown_keys(kdl_source: &str, result: &mut ValidationResult) {
     };
 
     for node in document.nodes() {
-        walk(node, result);
+        walk(node, None, result);
     }
 }
 
 /// Depth-first walk, checking any node that names a closed block.
-fn walk(node: &kdl::KdlNode, result: &mut ValidationResult) {
+///
+/// `parent` is the name of the block this node sits directly inside, or `None`
+/// at the top level. It is what lets two blocks share a name and keep separate
+/// key lists -- see [`Nesting`].
+fn walk(node: &kdl::KdlNode, parent: Option<&str>, result: &mut ValidationResult) {
     let name = node.name().value();
 
-    if let Some(block) = CLOSED_BLOCKS.iter().find(|b| b.name == name) {
+    if let Some(block) = block_for(name, parent) {
         if let Some(children) = node.children() {
             for child in children.nodes() {
                 let key = child.name().value();
                 if !block.keys.contains(&key) {
-                    result
-                        .add_warning(ValidationWarning::new(unknown_key_message(block.name, key)));
+                    result.add_warning(ValidationWarning::new(unknown_key_message(block, key)));
                 }
                 check_run_together(block, child, result);
             }
@@ -149,7 +285,7 @@ fn walk(node: &kdl::KdlNode, result: &mut ValidationResult) {
 
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            walk(child, result);
+            walk(child, Some(name), result);
         }
     }
 }
@@ -202,20 +338,55 @@ fn run_together_message(block: &str, key: &str, swallowed: &str) -> String {
     )
 }
 
-/// Build the warning, with a suggestion when one key is clearly meant.
-fn unknown_key_message(block: &str, key: &str) -> String {
-    match closest_key(block, key) {
-        Some(suggestion) => format!(
-            "'{key}' is not a setting in the '{block}' block and is being ignored. \
-             Did you mean '{suggestion}'?"
-        ),
-        None => format!("'{key}' is not a setting in the '{block}' block and is being ignored."),
+/// How to refer to a block in a message, given where it has to appear.
+fn describe(block: &ClosedBlock) -> String {
+    match block.nesting {
+        Nesting::Root => format!("the top-level '{}' block", block.name),
+        Nesting::In(parent) => format!("a '{parent}' block's '{}' block", block.name),
+        Nesting::Anywhere => format!("the '{}' block", block.name),
     }
 }
 
+/// Build the warning, with a suggestion when one key is clearly meant.
+fn unknown_key_message(block: &ClosedBlock, key: &str) -> String {
+    // A key that is valid in a *same-named* block elsewhere is not a typo, it
+    // is in the wrong place -- `disk-path` in a route's `cache` rather than the
+    // top-level one. Saying where it belongs is far more use than an
+    // edit-distance guess, which would otherwise suggest the key back to itself.
+    if let Some(other) = sibling_block_defining(block, key) {
+        return format!(
+            "'{key}' is a setting of {}, not of {}, so it is ignored here.",
+            describe(other),
+            describe(block)
+        );
+    }
+
+    match closest_key(block, key) {
+        Some(suggestion) => format!(
+            "'{key}' is not a setting in the '{}' block and is being ignored. \
+             Did you mean '{suggestion}'?",
+            block.name
+        ),
+        None => format!(
+            "'{key}' is not a setting in the '{}' block and is being ignored.",
+            block.name
+        ),
+    }
+}
+
+/// A block of the same name, in a different position, that does define `key`.
+fn sibling_block_defining<'a>(block: &ClosedBlock, key: &str) -> Option<&'a ClosedBlock> {
+    CLOSED_BLOCKS
+        .iter()
+        .find(|b| b.name == block.name && b.nesting != block.nesting && b.keys.contains(&key))
+}
+
 /// The nearest known key, when it is near enough to be worth naming.
-fn closest_key(block: &str, key: &str) -> Option<&'static str> {
-    let candidates = CLOSED_BLOCKS.iter().find(|b| b.name == block)?.keys;
+///
+/// Scoped to this block's own key list, so a block sharing a name with another
+/// cannot borrow its keys as suggestions.
+fn closest_key(block: &ClosedBlock, key: &str) -> Option<&'static str> {
+    let candidates = block.keys;
 
     // A third of the length, so short keys need a close match and long ones
     // tolerate a suffix like `-secs`. Beyond that a suggestion is a guess, and
@@ -577,6 +748,217 @@ mod tests {
             result.warnings.is_empty(),
             "named entries are properties, not swallowed nodes: {:?}",
             warning_texts(&result)
+        );
+    }
+
+    /// The #90 case: storage settings written into a route's cache policy,
+    /// where they parse and do nothing. Reporting these is the whole reason the
+    /// two `cache` blocks need separate key lists.
+    #[test]
+    fn storage_settings_in_a_route_cache_block_are_reported() {
+        let kdl = r#"
+            route "app" {
+                cache {
+                    enabled #true
+                    backend "disk"
+                    disk-path "/etc/zentinel/cache"
+                    disk-shards 16
+                }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+
+        for key in ["backend", "disk-path", "disk-shards"] {
+            assert!(
+                warnings.iter().any(|w| w.contains(&format!("'{key}'"))),
+                "{key} belongs to the top-level cache block, not a route's: {warnings:?}"
+            );
+        }
+        assert!(
+            !warnings.iter().any(|w| w.contains("'enabled'")),
+            "enabled is valid in both: {warnings:?}"
+        );
+    }
+
+    /// Each `cache` block accepts its own keys and only its own.
+    #[test]
+    fn the_two_cache_blocks_keep_separate_key_lists() {
+        let top_level = r#"
+            cache {
+                enabled #true
+                backend "disk"
+                disk-path "/var/cache/zentinel"
+                max-size 1073741824
+                status-header #true
+            }
+        "#;
+        assert!(
+            warnings_for(top_level).is_empty(),
+            "{:?}",
+            warnings_for(top_level)
+        );
+
+        let per_route = r#"
+            route "app" {
+                cache {
+                    enabled #true
+                    default-ttl-secs 86400
+                    stale-if-error-secs 300
+                    vary-headers "Accept"
+                }
+            }
+        "#;
+        assert!(
+            warnings_for(per_route).is_empty(),
+            "{:?}",
+            warnings_for(per_route)
+        );
+    }
+
+    /// Route policy settings in the top-level block are equally wrong, in the
+    /// other direction.
+    #[test]
+    fn policy_settings_in_the_top_level_cache_block_are_reported() {
+        let kdl = r#"
+            cache {
+                backend "memory"
+                default-ttl-secs 3600
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings.iter().any(|w| w.contains("'default-ttl-secs'")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn tls_certificate_blocks_are_checked() {
+        let valid = r#"
+            tls {
+                sni {
+                    hostnames "example.com"
+                    cert-file "/c.crt"
+                    key-file "/c.key"
+                }
+                sni-certs {
+                    cert-folder "/etc/certs/dynamic/"
+                    reload-mode "watch"
+                    reload-interval "30s"
+                }
+            }
+        "#;
+        assert!(warnings_for(valid).is_empty(), "{:?}", warnings_for(valid));
+
+        // `hostname` is the singular typo of a real key; `cert-dir` is not a key.
+        let typos = r#"
+            tls {
+                sni { hostname "example.com" }
+                sni-certs { cert-dir "/etc/certs/" }
+            }
+        "#;
+        let warnings = warnings_for(typos);
+        assert!(
+            warnings.iter().any(|w| w.contains("'hostname'")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("'cert-dir'")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn acme_and_its_eab_block_keep_separate_keys() {
+        let valid = r#"
+            acme {
+                email "admin@example.com"
+                domains "example.com"
+                storage "/var/lib/zentinel/acme"
+                challenge-type "http-01"
+                eab {
+                    kid "abc"
+                    hmac-key "def"
+                }
+            }
+        "#;
+        assert!(warnings_for(valid).is_empty(), "{:?}", warnings_for(valid));
+
+        // `kid` is an eab key, not an acme one.
+        let misplaced = r#"
+            acme {
+                email "admin@example.com"
+                kid "abc"
+            }
+        "#;
+        assert!(
+            warnings_for(misplaced).iter().any(|w| w.contains("'kid'")),
+            "{:?}",
+            warnings_for(misplaced)
+        );
+    }
+
+    /// A run-together line inside one of the newly closed blocks is caught by
+    /// the same check, since it reads the block's key list.
+    #[test]
+    fn run_together_lines_are_caught_in_the_new_blocks() {
+        let kdl = r#"
+            tls {
+                sni-certs { cert-folder "/etc/certs/" reload-mode "watch" }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("'reload-mode'") && w.contains("'cert-folder'")),
+            "{warnings:?}"
+        );
+    }
+
+    /// A misplaced key must be told where it belongs, not offered an
+    /// edit-distance guess. Looking up suggestions by block *name* alone found
+    /// the sibling list and produced "'backend' ... Did you mean 'backend'?",
+    /// which reads as a linter malfunction.
+    #[test]
+    fn a_misplaced_key_names_the_block_it_belongs_to() {
+        let kdl = r#"
+            route "app" {
+                cache { disk-path "/var/cache" }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+        let warning = &warnings[0];
+        assert!(
+            warning.contains("top-level 'cache'"),
+            "should say where it belongs: {warning}"
+        );
+        assert!(
+            !warning.contains("Did you mean"),
+            "a misplaced key is not a typo: {warning}"
+        );
+    }
+
+    /// Suggestions must come from the block actually being checked, never from
+    /// a same-named block elsewhere.
+    #[test]
+    fn suggestions_do_not_leak_between_same_named_blocks() {
+        // `disk-pathh` is a typo of a *top-level* key, inside a route's cache.
+        // It is not a key of either list, so the only honest suggestion comes
+        // from the route cache's own keys -- or none at all.
+        let kdl = r#"
+            route "app" {
+                cache { disk-pathh "/var/cache" }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            !warnings[0].contains("'disk-path'"),
+            "suggestion leaked from the top-level block: {}",
+            warnings[0]
         );
     }
 
