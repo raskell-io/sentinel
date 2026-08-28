@@ -515,7 +515,7 @@ pub fn lint_config(config_kdl: &str) -> JsValue {
         .iter()
         .any(|w| matches!(w.severity, zentinel_config_inspect::Severity::Error));
 
-    let warnings: Vec<LintWarning> = topology
+    let mut warnings: Vec<LintWarning> = topology
         .warnings
         .iter()
         .map(|w| LintWarning {
@@ -525,6 +525,30 @@ pub fn lint_config(config_kdl: &str) -> JsValue {
             context: w.context.clone(),
         })
         .collect();
+
+    // Settings that parse and are then read by nothing: unknown keys, keys
+    // swallowed by a run-together line, and keys written into the wrong one of
+    // two same-named blocks. These work from the KDL source rather than the
+    // parsed config, because by the time a `Config` exists the evidence is gone
+    // -- so the playground has to check the text it was given, exactly as
+    // `zentinel lint` does.
+    let mut key_result = zentinel_config::validate::ValidationResult::default();
+    zentinel_config::validate::unknown_keys::check_unknown_keys(config_kdl, &mut key_result);
+    warnings.extend(key_result.warnings.iter().map(|w| LintWarning {
+        severity: "warning".to_string(),
+        code: "unknown-key".to_string(),
+        message: w.message.clone(),
+        context: Vec::new(),
+    }));
+
+    // Best-practice checks, the same set the CLI reports.
+    let practice = zentinel_config::validate::lint::lint_config(&config);
+    warnings.extend(practice.warnings.iter().map(|w| LintWarning {
+        severity: "warning".to_string(),
+        code: "best-practice".to_string(),
+        message: w.message.clone(),
+        context: Vec::new(),
+    }));
 
     serde_wasm_bindgen::to_value(&LintResponse {
         warnings,
