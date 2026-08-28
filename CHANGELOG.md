@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_8](#26088---2026-08-28) | 0.6.31 | 2026-08-28 | Configuration checking reaches the remaining blocks and the browser playground, which was running a different set of checks entirely; agent `type` is read as a child node as well as a property |
 | [26.08_7](#26087---2026-08-27) | 0.6.30 | 2026-08-27 | `zentinel lint` now reports settings that parse but are read by nothing: run-together lines, and keys written into the wrong one of two same-named blocks |
 | [26.08_6](#26086---2026-08-27) | 0.6.29 | 2026-08-27 | Listener `namespace` isolation and per-listener timeouts now work on wildcard binds — both were silently ignored on `0.0.0.0` listeners; certificate reloads report what changed instead of only counts |
 | [26.08_5](#26085---2026-08-24) | 0.6.28 | 2026-08-24 | MCP and A2A policy is now enforced — it was parsed and ignored in 26.08_4; `cargo install zentinel-proxy` works again; unknown-key checking extended to `route` and `system`; **breaking**: dead buffering fields removed |
@@ -71,6 +72,48 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.08_8] - 2026-08-28
+
+**Crate version:** 0.6.31
+
+> Configuration checking only — nothing about how the proxy handles traffic
+> changes. As in 26.08_7: if `zentinel lint` starts warning about a config you
+> have been running, the setting was already being ignored. The warning is new,
+> the behaviour is not, and no config that loaded before will fail to load.
+
+### Added
+- **Checking extended to the remaining configuration blocks**, and now covering
+  thirty-five in total: `health-check` and its per-type settings, the inference
+  `readiness` block and its four sub-blocks, `agent` and its transport blocks,
+  an agent transport's `tls`, the global `rate-limits` block, and rate-limit
+  filters. (#365, #409, #410, #411)
+- **Settings are checked against the block they are actually in.** Several block
+  names mean more than one thing — `cache` at the top level configures storage
+  and inside a route configures policy; `tls` means one thing on a listener,
+  another on an upstream and a third on an agent transport; `type "http"` and
+  `type "grpc"` accept different health-check settings. Each is now checked
+  against its own list rather than a merged one, and a setting placed in the
+  wrong one is told where it belongs rather than offered a spelling suggestion.
+  (#365, #405, #409, #411)
+- **The configuration playground runs the same checks as the CLI.** It reported
+  only topology warnings, so a configuration could look clean in the browser
+  while `zentinel lint` reported settings the proxy ignores. The checks needed
+  nothing but the configuration text, but sat behind a feature flag that pulls
+  in the async runtime and X.509 parsing and cannot build for WebAssembly; the
+  flag now gates only the checks that genuinely need it. (#365, #411)
+
+### Fixed
+- **An agent's `type` written as a child node was ignored.** The documented form
+  is a property (`agent "waf" type="waf"`), and four shipped configurations —
+  including the default `zentinel.kdl` — used a `type "waf"` child node instead,
+  which silently produced an agent type of `Custom(<id>)` rather than the type
+  named. Both forms are now read, the same way `unix-socket`, `grpc` and `http`
+  already accept either a child node or a bare argument. The agent type is
+  reported in logs and by the config endpoint and affects no routing or security
+  decision, so nothing changes beyond those two reporting it correctly. (#411)
 
 ---
 
