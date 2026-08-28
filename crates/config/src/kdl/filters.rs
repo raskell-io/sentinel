@@ -67,6 +67,39 @@ pub fn parse_single_filter_definition(node: &kdl::KdlNode) -> Result<Filter> {
     }
 }
 
+/// Every setting a `filter` with `type "rate-limit"` reads.
+///
+/// Includes the backend settings, which `parse_rate_limit_backend` reads from
+/// the same node rather than from a nested block. Both spellings of the two
+/// aliased settings are listed, because both are accepted.
+pub(crate) const RECOGNIZED_RATE_LIMIT_FILTER_KEYS: &[&str] = &[
+    "type",
+    "max-rps",
+    "burst",
+    "key",
+    "on-limit",
+    "status-code",
+    "message",
+    "max-delay-ms",
+    "max-keys",
+    // Backend selection and its settings.
+    "backend",
+    "redis-url",
+    "redis-prefix",
+    "redis-pool-size",
+    "redis-timeout-ms",
+    "redis-fallback",
+    "redis-fallback-local",
+    "memcached-url",
+    "memcached-prefix",
+    "memcached-pool-size",
+    "memcached-timeout-ms",
+    "memcached-ttl",
+    "memcached-ttl-secs",
+    "memcached-fallback",
+    "memcached-fallback-local",
+];
+
 fn parse_rate_limit_filter(node: &kdl::KdlNode) -> Result<Filter> {
     let max_rps = get_int_entry(node, "max-rps")
         .map(|v| v as u32)

@@ -12,7 +12,7 @@
 //! - `namespace`: Namespace and service parsing
 
 mod circuitbreaker_helper;
-mod filters;
+pub(crate) mod filters;
 mod helpers;
 mod namespace;
 mod retrypolicy_helper;
@@ -315,6 +315,42 @@ use std::path::PathBuf;
 ///     }
 /// }
 /// ```
+/// Every child node `parse_single_agent` reads.
+///
+/// `config` holds arbitrary agent-specific settings forwarded verbatim, so it
+/// is a valid key here but is not itself a closed block.
+pub(crate) const RECOGNIZED_AGENT_KEYS: &[&str] = &[
+    // Accepted as a child node as well as the documented `type=` property.
+    "type",
+    "unix-socket",
+    "grpc",
+    "http",
+    "timeout-ms",
+    "failure-mode",
+    "events",
+    "circuit-breaker",
+    "max-request-body-bytes",
+    "max-response-body-bytes",
+    "request-body-mode",
+    "response-body-mode",
+    "chunk-timeout-ms",
+    "config",
+    "max-concurrent-calls",
+    // Deprecated: parsed, warned about, and otherwise ignored.
+    "protocol-version",
+];
+
+/// Settings accepted inside an agent's `tls` block.
+pub(crate) const RECOGNIZED_AGENT_TLS_KEYS: &[&str] =
+    &["ca-cert", "client-cert", "client-key", "tls-insecure"];
+
+/// Every setting the top-level `rate-limits` block reads.
+pub(crate) const RECOGNIZED_RATE_LIMITS_KEYS: &[&str] =
+    &["default-rps", "default-burst", "key", "global"];
+
+/// Settings accepted inside `rate-limits > global`.
+pub(crate) const RECOGNIZED_GLOBAL_LIMIT_KEYS: &[&str] = &["max-rps", "burst", "key"];
+
 pub fn parse_agents(node: &kdl::KdlNode) -> Result<Vec<AgentConfig>> {
     let mut agents = Vec::new();
 
@@ -423,11 +459,17 @@ fn parse_single_agent(node: &kdl::KdlNode) -> Result<AgentConfig> {
     let id = get_first_arg_string(node)
         .ok_or_else(|| anyhow::anyhow!("Agent requires an ID as first argument"))?;
 
-    // Get agent type from attribute
+    // Get agent type, accepting either the property form
+    // (`agent "waf" type="waf"`) or a `type` child node. The property form is
+    // what the documentation shows; the child form is what four shipped configs
+    // used, where it silently produced `Custom(<id>)` instead of the declared
+    // type. Both are accepted here for the same reason `unix-socket` accepts a
+    // child `path` or a bare argument.
     let agent_type = match node
         .get("type")
         .and_then(|v| v.as_string())
         .map(|s| s.to_string())
+        .or_else(|| get_string_entry(node, "type"))
     {
         Some(t) => match t.as_str() {
             "waf" => AgentType::Waf,
@@ -1479,6 +1521,68 @@ fn parse_tracing_backend(node: &kdl::KdlNode) -> Result<crate::observability::Tr
 
 #[cfg(test)]
 mod tests {
+    /// `type` is documented as a property but four shipped configs wrote it as
+    /// a child node, where it silently produced `Custom(<id>)` instead of the
+    /// declared type. Both forms are accepted.
+    #[test]
+    fn agent_type_is_read_from_a_property_or_a_child_node() {
+        fn agent_type_of(agents_block: &str) -> crate::agents::AgentType {
+            let kdl = format!(
+                r#"
+                schema-version "1.0"
+                system {{
+                    worker-threads 1
+                }}
+                listeners {{
+                    listener "l" {{
+                        address "127.0.0.1:8080"
+                    }}
+                }}
+                routes {{
+                    route "r" {{
+                        matches {{
+                            path "/"
+                        }}
+                        service-type "builtin"
+                        builtin-handler "health"
+                    }}
+                }}
+                {agents_block}
+                "#
+            );
+            crate::Config::from_kdl(&kdl)
+                .expect("config parses")
+                .agents
+                .remove(0)
+                .agent_type
+        }
+
+        let property = agent_type_of(
+            r#"agents {
+                   agent "a1" type="waf" {
+                       unix-socket "/tmp/a.sock"
+                   }
+               }"#,
+        );
+        let child = agent_type_of(
+            r#"agents {
+                   agent "a1" {
+                       type "waf"
+                       unix-socket "/tmp/a.sock"
+                   }
+               }"#,
+        );
+
+        assert!(
+            matches!(property, crate::agents::AgentType::Waf),
+            "property form: got {property:?}"
+        );
+        assert!(
+            matches!(child, crate::agents::AgentType::Waf),
+            "child form was Custom(<id>) before this fix; got {child:?}"
+        );
+    }
+
     use super::*;
     use zentinel_common::CircuitBreakerConfig;
 

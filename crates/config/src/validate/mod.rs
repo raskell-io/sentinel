@@ -3,11 +3,18 @@
 //! This module provides comprehensive validation for Zentinel configurations,
 //! including network connectivity, certificate validation, and best practices linting.
 
-pub mod agents;
-pub mod certs;
+// The pure checks -- key names and best practices -- work on a parsed config
+// and a KDL document, so they are available everywhere, including WASM. The
+// rest reach the network, the filesystem and X.509, and need the runtime.
 pub mod lint;
-pub mod network;
 pub mod unknown_keys;
+
+#[cfg(feature = "validation")]
+pub mod agents;
+#[cfg(feature = "validation")]
+pub mod certs;
+#[cfg(feature = "validation")]
+pub mod network;
 
 use std::fmt;
 
