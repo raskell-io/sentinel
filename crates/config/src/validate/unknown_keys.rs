@@ -323,6 +323,31 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         keys: crate::kdl::upstreams::RECOGNIZED_TCP_CHECK_KEYS,
     },
     ClosedBlock {
+        name: "readiness",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::upstreams::RECOGNIZED_READINESS_KEYS,
+    },
+    ClosedBlock {
+        name: "inference-probe",
+        nesting: Nesting::In("readiness"),
+        keys: crate::kdl::upstreams::RECOGNIZED_INFERENCE_PROBE_KEYS,
+    },
+    ClosedBlock {
+        name: "model-status",
+        nesting: Nesting::In("readiness"),
+        keys: crate::kdl::upstreams::RECOGNIZED_MODEL_STATUS_KEYS,
+    },
+    ClosedBlock {
+        name: "queue-depth",
+        nesting: Nesting::In("readiness"),
+        keys: crate::kdl::upstreams::RECOGNIZED_QUEUE_DEPTH_KEYS,
+    },
+    ClosedBlock {
+        name: "warmth-detection",
+        nesting: Nesting::In("readiness"),
+        keys: crate::kdl::upstreams::RECOGNIZED_WARMTH_DETECTION_KEYS,
+    },
+    ClosedBlock {
         name: "policies",
         nesting: Nesting::Anywhere,
         keys: &[
@@ -1286,6 +1311,130 @@ mod tests {
                 .any(|w| w.contains("'path'")),
             "{:?}",
             warnings_for(with_settings)
+        );
+    }
+
+    #[test]
+    fn a_fully_populated_readiness_block_produces_no_warnings() {
+        let kdl = r#"
+            health-check {
+                type "inference" {
+                    endpoint "/v1/models"
+                    readiness {
+                        inference-probe {
+                            endpoint "/v1/completions"
+                            model "gpt-4"
+                            prompt "."
+                            max-tokens 1
+                            timeout-secs 30
+                            max-latency-ms 5000
+                        }
+                        model-status {
+                            endpoint-pattern "/v1/models/{model}/status"
+                            models "gpt-4" "claude-3"
+                            expected-status "ready"
+                            status-field "status"
+                            timeout-secs 5
+                        }
+                        queue-depth {
+                            header "X-Queue-Depth"
+                            body-field "queue"
+                            endpoint "/metrics"
+                            degraded-threshold 50
+                            unhealthy-threshold 200
+                            timeout-secs 5
+                        }
+                        warmth-detection {
+                            sample-size 10
+                            cold-threshold-multiplier 3.0
+                            idle-cold-timeout-secs 300
+                            cold-action "mark-degraded"
+                        }
+                    }
+                }
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    /// The reason this block was left until last: a mechanical scan of
+    /// `parse_inference_readiness` reports its match-arm values and string
+    /// defaults as if they were settings. They are not, and a config using them
+    /// as settings must be reported.
+    #[test]
+    fn values_of_settings_are_not_themselves_settings() {
+        // `log-only`/`mark-degraded`/`mark-unhealthy` are values of `cold-action`.
+        let kdl = r#"
+            readiness {
+                warmth-detection {
+                    log-only #true
+                    mark-degraded #true
+                }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings.iter().any(|w| w.contains("'log-only'")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("'mark-degraded'")),
+            "{warnings:?}"
+        );
+
+        // `ready` and `status` are the *defaults* of `expected-status` and
+        // `status-field`, not settings in their own right.
+        let defaults_as_keys = r#"
+            readiness {
+                model-status {
+                    ready "yes"
+                    status "up"
+                }
+            }
+        "#;
+        let warnings = warnings_for(defaults_as_keys);
+        assert!(
+            warnings.iter().any(|w| w.contains("'ready'")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("'status'")),
+            "{warnings:?}"
+        );
+    }
+
+    /// `readiness` holds sub-blocks and nothing else.
+    #[test]
+    fn a_setting_directly_inside_readiness_is_reported() {
+        let kdl = r#"
+            readiness {
+                timeout-secs 30
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("'timeout-secs'"), "{}", warnings[0]);
+    }
+
+    /// `endpoint` and `timeout-secs` are valid in several readiness sub-blocks
+    /// and mean different things in each; none of them may borrow another's
+    /// settings.
+    #[test]
+    fn readiness_sub_blocks_do_not_share_settings() {
+        let kdl = r#"
+            readiness {
+                inference-probe { degraded-threshold 50 }
+                queue-depth { prompt "." }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings.iter().any(|w| w.contains("'degraded-threshold'")),
+            "a queue-depth setting on an inference probe: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("'prompt'")),
+            "an inference-probe setting on queue-depth: {warnings:?}"
         );
     }
 
