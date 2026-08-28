@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_9](#26089---2026-08-28) | 0.6.32 | 2026-08-28 | Configuration checking now covers the observability blocks, completing #365; three settings the documentation describes and no parser reads are removed from the shipped configs |
 | [26.08_8](#26088---2026-08-28) | 0.6.31 | 2026-08-28 | Configuration checking reaches the remaining blocks and the browser playground, which was running a different set of checks entirely; agent `type` is read as a child node as well as a property |
 | [26.08_7](#26087---2026-08-27) | 0.6.30 | 2026-08-27 | `zentinel lint` now reports settings that parse but are read by nothing: run-together lines, and keys written into the wrong one of two same-named blocks |
 | [26.08_6](#26086---2026-08-27) | 0.6.29 | 2026-08-27 | Listener `namespace` isolation and per-listener timeouts now work on wildcard binds — both were silently ignored on `0.0.0.0` listeners; certificate reloads report what changed instead of only counts |
@@ -72,6 +73,37 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.08_9] - 2026-08-28
+
+**Crate version:** 0.6.32
+
+> Configuration checking only — nothing about how the proxy handles traffic
+> changes. As before: a setting that starts being reported was already being
+> ignored, and no config that loaded before will fail to load.
+
+### Added
+- **Observability blocks are checked**, completing the block list from #365:
+  `observability`, `logging`, `access-log`, `error-log`, `audit-log`, `metrics`,
+  `tracing`, and a tracing `backend`. The access log takes `format` where the
+  error log takes `level` — two blocks that look alike and accept different
+  settings — so each is checked against its own list. Forty-three blocks are now
+  covered in total. (#365, #416)
+
+### Fixed
+- **Three settings that no parser reads are removed from the shipped configs.**
+  `timestamps` in `logging`, `include-trace-id` in `access-log`, and `enabled` in
+  `tracing` appeared across seven configurations, `config/zentinel.kdl` included.
+  Every occurrence was `#true`, so nothing changes behaviourally — they were
+  already doing nothing. All three are also described in the documentation, and
+  whether they should be implemented or de-documented is tracked in #415. (#416)
+
+  Worth calling out if you use it: **tracing is switched on by the presence of
+  the `tracing` block**, not by `enabled`. A configuration reading
+  `tracing { enabled #false }` gets tracing regardless. `zentinel lint` now
+  reports that setting rather than passing over it.
 
 ---
 
