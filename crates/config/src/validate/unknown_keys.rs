@@ -1797,11 +1797,15 @@ mod tests {
         );
     }
 
-    /// Three settings that the documentation describes and no parser reads.
-    /// They shipped in seven configs; removing them from those configs is not
-    /// enough on its own, so the check has to keep reporting them.
+    /// `timestamps` is documented for the application log and read by nothing.
+    ///
+    /// It is the last of the three from #415 still unimplemented: the tracing
+    /// `enabled` switch and the access log's `include-trace-id` are now parsed,
+    /// so only this one should still be reported. Honouring it would mean
+    /// starting the log subscriber after the configuration is read, which would
+    /// lose the diagnostics emitted while finding that configuration.
     #[test]
-    fn documented_but_unimplemented_observability_settings_are_reported() {
+    fn the_unread_timestamps_setting_is_still_reported() {
         let kdl = r#"
             observability {
                 logging {
@@ -1819,10 +1823,14 @@ mod tests {
             }
         "#;
         let warnings = warnings_for(kdl);
-        for key in ["timestamps", "include-trace-id", "enabled"] {
+        assert!(
+            warnings.iter().any(|w| w.contains("'timestamps'")),
+            "timestamps is documented but read by nothing: {warnings:?}"
+        );
+        for key in ["include-trace-id", "enabled"] {
             assert!(
-                warnings.iter().any(|w| w.contains(&format!("'{key}'"))),
-                "{key} is documented but read by nothing: {warnings:?}"
+                !warnings.iter().any(|w| w.contains(&format!("'{key}'"))),
+                "{key} is parsed now and must not be reported: {warnings:?}"
             );
         }
     }
