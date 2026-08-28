@@ -45,6 +45,17 @@ enum Nesting {
     Root,
     /// Matches only as a direct child of the named block.
     In(&'static str),
+    /// Matches a node inside `parent` carrying a child node `child` whose value
+    /// is `value`.
+    ///
+    /// For blocks discriminated by a setting rather than by their own argument:
+    /// a `filter` block's valid settings depend on its `type` child, while its
+    /// own argument is just the filter's id.
+    InWithChild {
+        parent: &'static str,
+        child: &'static str,
+        value: &'static str,
+    },
     /// Matches a node inside `parent` whose own first argument is `arg`.
     ///
     /// For blocks whose valid keys depend on the value they carry:
@@ -81,6 +92,11 @@ impl ClosedBlock {
                 parent: required,
                 arg,
             } => parent == Some(required) && first_arg(node) == Some(arg),
+            Nesting::InWithChild {
+                parent: required,
+                child,
+                value,
+            } => parent == Some(required) && child_value(node, child) == Some(value),
         }
     }
 
@@ -89,9 +105,18 @@ impl ClosedBlock {
         match self.nesting {
             Nesting::Anywhere => 0,
             Nesting::Root | Nesting::In(_) => 1,
-            Nesting::InWithArg { .. } => 2,
+            Nesting::InWithArg { .. } | Nesting::InWithChild { .. } => 2,
         }
     }
+}
+
+/// The value of a node's named child, if it has one.
+fn child_value<'a>(node: &'a kdl::KdlNode, child: &str) -> Option<&'a str> {
+    node.children()?
+        .nodes()
+        .iter()
+        .find(|n| n.name().value() == child)
+        .and_then(first_arg)
 }
 
 /// A node's first argument as a string, if it has one.
@@ -348,6 +373,62 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         keys: crate::kdl::upstreams::RECOGNIZED_WARMTH_DETECTION_KEYS,
     },
     ClosedBlock {
+        name: "agent",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_AGENT_KEYS,
+    },
+    // An agent's transport blocks. Each also accepts its address as a bare
+    // argument (`grpc "http://..."`), which needs no key at all.
+    ClosedBlock {
+        name: "unix-socket",
+        nesting: Nesting::In("agent"),
+        keys: &["path"],
+    },
+    ClosedBlock {
+        name: "grpc",
+        nesting: Nesting::In("agent"),
+        keys: &["address", "tls"],
+    },
+    ClosedBlock {
+        name: "http",
+        nesting: Nesting::In("agent"),
+        keys: &["url", "tls"],
+    },
+    // An agent transport's `tls` block -- a third meaning of the name, after
+    // the listener's and the upstream's.
+    ClosedBlock {
+        name: "tls",
+        nesting: Nesting::In("grpc"),
+        keys: crate::kdl::RECOGNIZED_AGENT_TLS_KEYS,
+    },
+    ClosedBlock {
+        name: "tls",
+        nesting: Nesting::In("http"),
+        keys: crate::kdl::RECOGNIZED_AGENT_TLS_KEYS,
+    },
+    ClosedBlock {
+        name: "rate-limits",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_RATE_LIMITS_KEYS,
+    },
+    ClosedBlock {
+        name: "global",
+        nesting: Nesting::In("rate-limits"),
+        keys: crate::kdl::RECOGNIZED_GLOBAL_LIMIT_KEYS,
+    },
+    // A filter's settings depend on its `type` child, not on its own argument,
+    // which is just the filter's id. Only rate-limit filters are described
+    // here; a filter of any other type matches nothing and is left unchecked.
+    ClosedBlock {
+        name: "filter",
+        nesting: Nesting::InWithChild {
+            parent: "filters",
+            child: "type",
+            value: "rate-limit",
+        },
+        keys: crate::kdl::filters::RECOGNIZED_RATE_LIMIT_FILTER_KEYS,
+    },
+    ClosedBlock {
         name: "policies",
         nesting: Nesting::Anywhere,
         keys: &[
@@ -460,6 +541,9 @@ fn describe(block: &ClosedBlock) -> String {
         Nesting::In(parent) => format!("a '{parent}' block's '{}' block", block.name),
         Nesting::InWithArg { parent, arg } => {
             format!("a '{parent}' block's '{} \"{arg}\"' block", block.name)
+        }
+        Nesting::InWithChild { child, value, .. } => {
+            format!("a '{}' block with {child} \"{value}\"", block.name)
         }
         Nesting::Anywhere => format!("the '{}' block", block.name),
     }
@@ -1436,6 +1520,170 @@ mod tests {
             warnings.iter().any(|w| w.contains("'prompt'")),
             "an inference-probe setting on queue-depth: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn a_valid_agent_produces_no_warnings() {
+        let kdl = r#"
+            agents {
+                agent "waf-agent" type="waf" {
+                    unix-socket "/var/run/zentinel/waf.sock"
+                    events "request_headers" "request_body"
+                    timeout-ms 200
+                    failure-mode "closed"
+                    max-concurrent-calls 100
+                    circuit-breaker {
+                        failure-threshold 5
+                    }
+                    config {
+                        anything-goes-here #true
+                    }
+                }
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    #[test]
+    fn an_unknown_agent_key_is_reported() {
+        let kdl = r#"
+            agents {
+                agent "a" {
+                    timeout-msec 200
+                }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings.iter().any(|w| w.contains("'timeout-msec'")),
+            "{warnings:?}"
+        );
+    }
+
+    /// An agent transport's `tls` is the third distinct meaning of that block
+    /// name, after the listener's and the upstream's.
+    #[test]
+    fn agent_transport_tls_has_its_own_keys() {
+        let valid = r#"
+            agents {
+                agent "a" {
+                    grpc {
+                        address "http://localhost:50051"
+                        tls {
+                            ca-cert "/ca.crt"
+                            client-cert "/c.crt"
+                            client-key "/c.key"
+                            tls-insecure #false
+                        }
+                    }
+                }
+            }
+        "#;
+        assert!(warnings_for(valid).is_empty(), "{:?}", warnings_for(valid));
+
+        // `cert-file` is a listener TLS key; `sni` is an upstream one.
+        let wrong = r#"
+            agents {
+                agent "a" {
+                    grpc {
+                        address "http://localhost:50051"
+                        tls {
+                            cert-file "/c.crt"
+                            sni "x"
+                        }
+                    }
+                }
+            }
+        "#;
+        let warnings = warnings_for(wrong);
+        assert!(
+            warnings.iter().any(|w| w.contains("'cert-file'")),
+            "{warnings:?}"
+        );
+        assert!(warnings.iter().any(|w| w.contains("'sni'")), "{warnings:?}");
+    }
+
+    #[test]
+    fn the_global_rate_limits_block_is_checked() {
+        let valid = r#"
+            rate-limits {
+                default-rps 100
+                default-burst 10
+                key "client-ip"
+                global {
+                    max-rps 50000
+                    burst 1000
+                }
+            }
+        "#;
+        assert!(warnings_for(valid).is_empty(), "{:?}", warnings_for(valid));
+
+        // The shipped configs' spelling for the global limit is
+        // `max-requests-per-second-global`, which this block does not read.
+        let wrong = r#"
+            rate-limits {
+                max-requests-per-second-global 50000
+            }
+        "#;
+        assert!(
+            warnings_for(wrong)
+                .iter()
+                .any(|w| w.contains("'max-requests-per-second-global'")),
+            "{:?}",
+            warnings_for(wrong)
+        );
+    }
+
+    /// A filter's settings depend on its `type` child, not on its own argument
+    /// -- the argument is the filter's id.
+    #[test]
+    fn a_rate_limit_filter_is_checked_by_its_type_child() {
+        let valid = r#"
+            filters {
+                filter "my-limiter" {
+                    type "rate-limit"
+                    max-rps 100
+                    burst 10
+                    key "client-ip"
+                    on-limit "reject"
+                    status-code 429
+                    backend "redis"
+                    redis-url "redis://localhost"
+                    redis-fallback-local #true
+                }
+            }
+        "#;
+        assert!(warnings_for(valid).is_empty(), "{:?}", warnings_for(valid));
+
+        let typo = r#"
+            filters {
+                filter "my-limiter" {
+                    type "rate-limit"
+                    max-rp 100
+                }
+            }
+        "#;
+        let warnings = warnings_for(typo);
+        assert!(
+            warnings.iter().any(|w| w.contains("'max-rp'")),
+            "{warnings:?}"
+        );
+    }
+
+    /// Filters of a type this check does not describe are left alone rather
+    /// than measured against the wrong list.
+    #[test]
+    fn a_filter_of_another_type_is_not_checked() {
+        let kdl = r#"
+            filters {
+                filter "c" {
+                    type "cors"
+                    allow-origins "*"
+                    allow-methods "GET"
+                }
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
     }
 
     fn warning_texts(result: &ValidationResult) -> Vec<String> {
