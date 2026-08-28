@@ -293,6 +293,56 @@ async fn refresh_drops_breakers_for_removed_targets() {
     );
 }
 
+/// Sticky session affinity cookies are signed with a randomly generated HMAC
+/// key. Rebuilding the balancer on refresh must not rotate that key, or every
+/// outstanding cookie would stop verifying each time a backend appeared or
+/// disappeared — resetting all sessions on a churning backend set.
+#[tokio::test]
+async fn refresh_preserves_the_sticky_session_signing_key() {
+    let path = backends_file("sticky", &["127.0.0.1:19581"]);
+    let kdl = format!(
+        r#"
+schema-version "1.0"
+system {{ worker-threads 0 }}
+listeners {{ listener "http" {{ address "127.0.0.1:0" }} }}
+upstreams {{
+    upstream "discovered" {{
+        load-balancing "sticky" {{
+            cookie-name "zsession"
+            fallback "round-robin"
+        }}
+        discovery "file" {{
+            path "{}"
+            watch-interval 1
+        }}
+    }}
+}}
+routes {{
+    route "all" {{ matches {{ path-prefix "/" }} ; upstream "discovered" }}
+}}
+"#,
+        path.display()
+    );
+    let config = Config::from_kdl(&kdl).expect("sticky config parses");
+    let upstream = config.upstreams.get("discovered").expect("upstream parsed");
+    let pool = UpstreamPool::new(upstream.clone())
+        .await
+        .expect("pool builds");
+
+    let before = pool
+        .sticky_signing_key()
+        .expect("sticky upstream has a key");
+
+    rewrite_backends(&path, &["127.0.0.1:19581", "127.0.0.1:19582"]);
+    let refreshed = pool.refreshed().await.expect("target set changed");
+
+    assert_eq!(
+        refreshed.sticky_signing_key().expect("still sticky"),
+        before,
+        "the signing key must survive a discovery refresh"
+    );
+}
+
 /// A source that resolves to nothing leaves the pool empty rather than failing
 /// to build: a scaled-to-zero service should not stop the proxy from starting.
 #[tokio::test]

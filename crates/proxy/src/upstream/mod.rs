@@ -137,6 +137,16 @@ pub trait LoadBalancer: Send + Sync {
     /// Select next upstream target
     async fn select(&self, context: Option<&RequestContext>) -> ZentinelResult<TargetSelection>;
 
+    /// The key this balancer signs session-affinity cookies with, if it signs
+    /// any.
+    ///
+    /// Used to assert that rebuilding a pool — which service discovery does
+    /// whenever the target set changes — does not rotate the key and invalidate
+    /// every cookie already issued.
+    fn session_signing_key(&self) -> Option<[u8; 32]> {
+        None
+    }
+
     /// Report target health status
     async fn report_health(&self, address: &str, healthy: bool);
 
@@ -223,6 +233,14 @@ pub struct UpstreamPool {
     /// The configuration this pool was built from, needed to rebuild the load
     /// balancer when discovery changes the target set.
     config: UpstreamConfig,
+    /// Sticky-session runtime config, carrying the HMAC key that signs affinity
+    /// cookies.
+    ///
+    /// Held on the pool rather than derived per balancer because the key is
+    /// generated randomly: rebuilding it on a discovery refresh would invalidate
+    /// every outstanding affinity cookie, resetting all sessions each time a
+    /// backend appeared or disappeared.
+    sticky_runtime: Option<StickySessionRuntimeConfig>,
 }
 
 // Note: Active health checking is handled by the PassiveHealthChecker in health.rs
@@ -888,7 +906,19 @@ impl UpstreamPool {
             algorithm = ?config.load_balancing,
             "Creating load balancer"
         );
-        let load_balancer = Self::create_load_balancer(&config.load_balancing, &targets, &config)?;
+        // Built once and kept, so a discovery refresh can rebuild the balancer
+        // without rotating the key that signs affinity cookies.
+        let sticky_runtime = config
+            .sticky_session
+            .as_ref()
+            .map(StickySessionRuntimeConfig::from_config);
+
+        let load_balancer = Self::create_load_balancer(
+            &config.load_balancing,
+            &targets,
+            &config,
+            sticky_runtime.as_ref(),
+        )?;
 
         // Create connection pool configuration (Pingora handles actual pooling)
         debug!(
@@ -971,6 +1001,7 @@ impl UpstreamPool {
             discovery_interval,
             static_targets,
             config,
+            sticky_runtime,
         };
 
         info!(
@@ -1202,19 +1233,23 @@ impl UpstreamPool {
             }
         }
 
-        let load_balancer =
-            match Self::create_load_balancer(&self.config.load_balancing, &targets, &self.config) {
-                Ok(balancer) => balancer,
-                Err(e) => {
-                    error!(
-                        upstream_id = %self.id,
-                        error = %e,
-                        "Failed to rebuild load balancer after discovery refresh; \
-                         keeping current targets"
-                    );
-                    return None;
-                }
-            };
+        let load_balancer = match Self::create_load_balancer(
+            &self.config.load_balancing,
+            &targets,
+            &self.config,
+            self.sticky_runtime.as_ref(),
+        ) {
+            Ok(balancer) => balancer,
+            Err(e) => {
+                error!(
+                    upstream_id = %self.id,
+                    error = %e,
+                    "Failed to rebuild load balancer after discovery refresh; \
+                     keeping current targets"
+                );
+                return None;
+            }
+        };
 
         Some(UpstreamPool {
             id: self.id.clone(),
@@ -1233,6 +1268,7 @@ impl UpstreamPool {
             discovery_interval: self.discovery_interval,
             static_targets: self.static_targets.clone(),
             config: self.config.clone(),
+            sticky_runtime: self.sticky_runtime.clone(),
         })
     }
 
@@ -1253,6 +1289,7 @@ impl UpstreamPool {
         algorithm: &LoadBalancingAlgorithm,
         targets: &[UpstreamTarget],
         config: &UpstreamConfig,
+        sticky_runtime: Option<&StickySessionRuntimeConfig>,
     ) -> ZentinelResult<Arc<dyn LoadBalancer>> {
         let balancer: Arc<dyn LoadBalancer> = match algorithm {
             LoadBalancingAlgorithm::RoundRobin => {
@@ -1324,8 +1361,11 @@ impl UpstreamPool {
                     }
                 })?;
 
-                // Create runtime config with HMAC key
-                let runtime_config = StickySessionRuntimeConfig::from_config(sticky_config);
+                // Reuse the pool's existing key when rebuilding, so affinity
+                // cookies issued before the rebuild still verify.
+                let runtime_config = sticky_runtime
+                    .cloned()
+                    .unwrap_or_else(|| StickySessionRuntimeConfig::from_config(sticky_config));
 
                 // Create fallback load balancer
                 let fallback = Self::create_load_balancer_inner(&sticky_config.fallback, targets)?;
@@ -1844,6 +1884,15 @@ impl UpstreamPool {
             .await
             .get(target)
             .map(|breaker| breaker.state())
+    }
+
+    /// The key used to sign sticky-session affinity cookies, when this upstream
+    /// uses sticky load balancing.
+    ///
+    /// Exposed so tests can assert it survives a pool rebuild; rotating it would
+    /// invalidate every cookie already issued.
+    pub fn sticky_signing_key(&self) -> Option<[u8; 32]> {
+        self.load_balancer.session_signing_key()
     }
 
     /// Addresses of the pool's current targets, in selection order.

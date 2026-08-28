@@ -233,6 +233,10 @@ impl StickySessionBalancer {
 
 #[async_trait]
 impl LoadBalancer for StickySessionBalancer {
+    fn session_signing_key(&self) -> Option<[u8; 32]> {
+        Some(self.config.hmac_key)
+    }
+
     async fn select(&self, context: Option<&RequestContext>) -> ZentinelResult<TargetSelection> {
         trace!(
             has_context = context.is_some(),
