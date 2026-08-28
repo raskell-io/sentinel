@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_10](#260810---2026-08-28) | 0.6.33 | 2026-08-28 | `tracing { enabled #false }` now actually disables tracing, having previously been read by nothing; the access log's `include-trace-id` is honoured |
 | [26.08_9](#26089---2026-08-28) | 0.6.32 | 2026-08-28 | Configuration checking now covers the observability blocks, completing #365; three settings the documentation describes and no parser reads are removed from the shipped configs |
 | [26.08_8](#26088---2026-08-28) | 0.6.31 | 2026-08-28 | Configuration checking reaches the remaining blocks and the browser playground, which was running a different set of checks entirely; agent `type` is read as a child node as well as a property |
 | [26.08_7](#26087---2026-08-27) | 0.6.30 | 2026-08-27 | `zentinel lint` now reports settings that parse but are read by nothing: run-together lines, and keys written into the wrong one of two same-named blocks |
@@ -73,6 +74,37 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.08_10] - 2026-08-28
+
+**Crate version:** 0.6.33
+
+> **If any configuration of yours sets `tracing { enabled #false }`, tracing has
+> been running regardless, and stops after this upgrade.** That is the setting
+> doing what it says, but it is a change in behaviour: spans stop reaching the
+> collector, and anything downstream that expected them — dashboards, sampling
+> alerts, a trace-based SLO — goes quiet. Check before upgrading if you are not
+> sure which of your configurations set it.
+
+### Fixed
+- **`tracing { enabled }` is read.** Tracing was switched on by the *presence*
+  of the `tracing` block, and `enabled` was read by nothing, so a configuration
+  asking for it to be off got it anyway with no indication. An operator
+  disabling tracing to cut overhead, or to stop shipping spans to a collector
+  they no longer trust, did not get what they asked for. The setting defaults to
+  true, so a `tracing` block without it behaves exactly as before, and the skip
+  is now logged rather than silent. (#415, #420)
+- **`access-log { include-trace-id }` is read.** The access log writer already
+  consults a trace-id field flag, and the field list has no configuration syntax
+  of its own, so this setting was the only way to reach it — and nothing read
+  it, leaving the choice permanently at its default. (#415, #420)
+
+  `logging { timestamps }` remains unread and is still reported by
+  `zentinel lint`. Honouring it means starting the log subscriber after the
+  configuration is read, and it currently starts first so that configuration
+  discovery is logged at all; that trade is #415's remaining question.
 
 ---
 
