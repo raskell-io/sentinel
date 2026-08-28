@@ -305,13 +305,32 @@ Backend server pool configuration.
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `id` | `string` | **required** | Unique upstream identifier |
-| `targets` | `[UpstreamTarget]` | **required** | Backend targets |
+| `targets` | `[UpstreamTarget]` | **required** unless `discovery` is set | Backend targets |
+| `discovery` | `UpstreamDiscovery` | - | Service discovery source for targets |
 | `load-balancing` | `string` | `"round-robin"` | Load balancing algorithm |
 | `health-check` | `HealthCheck` | - | Health check configuration |
 | `connection-pool` | `ConnectionPoolConfig` | `{}` | Connection pool settings |
 | `timeouts` | `UpstreamTimeouts` | `{}` | Timeout settings |
 | `tls` | `UpstreamTlsConfig` | - | TLS configuration |
 | `http-version` | `HttpVersionConfig` | `{}` | HTTP version settings |
+
+### UpstreamDiscovery
+
+Written as `discovery "<kind>" { ... }`. Targets resolved from the source are
+added to any statically configured `targets`, and re-resolved on the interval
+below. Settings are checked against the named kind: a setting belonging to a
+different kind is a configuration error, not an ignored key.
+
+| Kind | Settings | Refresh |
+|------|----------|---------|
+| `static` | `backends` (one or more `host:port`) | never |
+| `dns` | `hostname`, `port`, `refresh-interval` (`30`) | `refresh-interval` |
+| `dns-srv` | `service`, `refresh-interval` (`30`) | `refresh-interval` |
+| `consul` | `address`, `service`, `datacenter`, `only-passing` (`#true`), `tag`, `refresh-interval` (`30`) | `refresh-interval` |
+| `kubernetes` | `namespace`, `service`, `port-name`, `kubeconfig`, `refresh-interval` (`30`) | `refresh-interval` |
+| `file` | `path`, `watch-interval` (`5`) | `watch-interval` |
+
+Intervals are in seconds and must be greater than zero.
 
 ### UpstreamTarget
 

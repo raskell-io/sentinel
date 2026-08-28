@@ -19,7 +19,14 @@ use zentinel_common::{
     types::{CircuitBreakerConfig, LoadBalancingAlgorithm},
     CircuitBreaker, UpstreamId,
 };
-use zentinel_config::UpstreamConfig;
+use zentinel_config::{UpstreamConfig, UpstreamDiscovery};
+
+use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
+use pingora_load_balancing::discovery::ServiceDiscovery;
+use pingora_load_balancing::Backend;
+use std::collections::BTreeSet;
+
+use crate::discovery::DiscoveryConfig;
 
 // ============================================================================
 // Internal Upstream Target Type
@@ -86,6 +93,7 @@ impl UpstreamTarget {
 // Load balancing algorithm implementations
 pub mod adaptive;
 pub mod consistent_hash;
+pub mod discovery_refresh;
 pub mod drain;
 pub mod health;
 pub mod inference_health;
@@ -200,6 +208,21 @@ pub struct UpstreamPool {
     circuit_breakers: Arc<RwLock<HashMap<String, CircuitBreaker>>>,
     /// Pool statistics
     stats: Arc<PoolStats>,
+    /// Resolved discovery source, kept so a refresh can re-resolve without
+    /// rebuilding the client (which for Consul and Kubernetes means not
+    /// re-establishing a connection every interval).
+    discovery: Option<Arc<dyn ServiceDiscovery + Send + Sync>>,
+    /// How often `discovery` is re-resolved. `None` when there is no discovery
+    /// source, or when it is one that cannot change (`static`).
+    discovery_interval: Option<Duration>,
+    /// Targets that came from the configuration rather than from discovery.
+    ///
+    /// Kept separately because a refresh replaces the discovered targets and
+    /// must not drop the configured ones alongside them.
+    static_targets: Vec<UpstreamTarget>,
+    /// The configuration this pool was built from, needed to rebuild the load
+    /// balancer when discovery changes the target set.
+    config: UpstreamConfig,
 }
 
 // Note: Active health checking is handled by the PassiveHealthChecker in health.rs
@@ -210,6 +233,7 @@ pub struct UpstreamPool {
 ///
 /// Note: Actual connection pooling is handled by Pingora internally.
 /// This struct holds configuration that is applied to peer options.
+#[derive(Clone)]
 pub struct ConnectionPoolConfig {
     /// Maximum connections per target (informational - Pingora manages actual pooling)
     pub max_connections: usize,
@@ -228,6 +252,7 @@ pub struct ConnectionPoolConfig {
 }
 
 /// HTTP version configuration for upstream connections
+#[derive(Clone)]
 pub struct HttpVersionOptions {
     /// Minimum HTTP version (1 or 2)
     pub min_version: u8,
@@ -808,21 +833,45 @@ impl UpstreamPool {
         );
 
         // Convert config targets to internal targets
-        let targets: Vec<UpstreamTarget> = config
+        let static_targets: Vec<UpstreamTarget> = config
             .targets
             .iter()
             .filter_map(UpstreamTarget::from_config)
             .collect();
 
+        // Resolve the discovery source, if one is configured, before the pool
+        // starts serving traffic. Discovered targets are added to the
+        // configured ones rather than replacing them, so a fixed backend can be
+        // pinned alongside a discovered set.
+        let (discovery, discovery_interval, discovered) =
+            Self::resolve_discovery(&config, &id).await;
+
+        let mut targets = static_targets.clone();
+        targets.extend(discovered);
+
         if targets.is_empty() {
-            error!(
-                upstream_id = %config.id,
-                "No valid upstream targets configured"
-            );
-            return Err(ZentinelError::Config {
-                message: "No valid upstream targets".to_string(),
-                source: None,
-            });
+            if discovery.is_some() {
+                // The source answered, and answered with nothing. That is a
+                // live condition (a scaled-to-zero deployment, a service with
+                // no passing instances) rather than a broken configuration, so
+                // the pool starts empty and recovers on the next refresh.
+                // Requests to it fail with "no healthy targets" until then.
+                warn!(
+                    upstream_id = %config.id,
+                    discovery = config.discovery.as_ref().map(|d| d.kind()).unwrap_or("none"),
+                    "Service discovery returned no backends; upstream starts with no targets \
+                     and will recover on the next refresh"
+                );
+            } else {
+                error!(
+                    upstream_id = %config.id,
+                    "No valid upstream targets configured"
+                );
+                return Err(ZentinelError::Config {
+                    message: "No valid upstream targets".to_string(),
+                    source: None,
+                });
+            }
         }
 
         for target in &targets {
@@ -919,6 +968,10 @@ impl UpstreamPool {
             tls_config,
             circuit_breakers: Arc::new(RwLock::new(circuit_breakers)),
             stats: Arc::new(PoolStats::default()),
+            discovery,
+            discovery_interval,
+            static_targets,
+            config,
         };
 
         info!(
@@ -928,6 +981,251 @@ impl UpstreamPool {
         );
 
         Ok(pool)
+    }
+
+    /// Translate the configuration's discovery block into the runtime one.
+    fn discovery_config(discovery: &UpstreamDiscovery) -> DiscoveryConfig {
+        match discovery {
+            UpstreamDiscovery::Static { backends } => DiscoveryConfig::Static {
+                backends: backends.clone(),
+            },
+            UpstreamDiscovery::Dns {
+                hostname,
+                port,
+                refresh_interval_secs,
+            } => DiscoveryConfig::Dns {
+                hostname: hostname.clone(),
+                port: *port,
+                refresh_interval: Duration::from_secs(*refresh_interval_secs),
+            },
+            UpstreamDiscovery::DnsSrv {
+                service,
+                refresh_interval_secs,
+            } => DiscoveryConfig::DnsSrv {
+                service: service.clone(),
+                refresh_interval: Duration::from_secs(*refresh_interval_secs),
+            },
+            UpstreamDiscovery::Consul {
+                address,
+                service,
+                datacenter,
+                only_passing,
+                refresh_interval_secs,
+                tag,
+            } => DiscoveryConfig::Consul {
+                address: address.clone(),
+                service: service.clone(),
+                datacenter: datacenter.clone(),
+                only_passing: *only_passing,
+                refresh_interval: Duration::from_secs(*refresh_interval_secs),
+                tag: tag.clone(),
+            },
+            UpstreamDiscovery::Kubernetes {
+                namespace,
+                service,
+                port_name,
+                refresh_interval_secs,
+                kubeconfig,
+            } => DiscoveryConfig::Kubernetes {
+                namespace: namespace.clone(),
+                service: service.clone(),
+                port_name: port_name.clone(),
+                refresh_interval: Duration::from_secs(*refresh_interval_secs),
+                kubeconfig: kubeconfig.clone(),
+            },
+            UpstreamDiscovery::File {
+                path,
+                watch_interval_secs,
+            } => DiscoveryConfig::File {
+                path: path.clone(),
+                watch_interval: Duration::from_secs(*watch_interval_secs),
+            },
+        }
+    }
+
+    /// Convert the backends a discovery source returned into pool targets.
+    ///
+    /// Unix-socket backends are skipped: discovery describes networked service
+    /// registries, and a pool target is an address/port pair.
+    fn targets_from_backends(backends: &BTreeSet<Backend>) -> Vec<UpstreamTarget> {
+        backends
+            .iter()
+            .filter_map(|backend| match &backend.addr {
+                PingoraSocketAddr::Inet(addr) => Some(UpstreamTarget {
+                    address: addr.ip().to_string(),
+                    port: addr.port(),
+                    weight: u32::try_from(backend.weight).unwrap_or(1).max(1),
+                }),
+                PingoraSocketAddr::Unix(_) => None,
+            })
+            .collect()
+    }
+
+    /// Build the configured discovery source and resolve it once.
+    ///
+    /// A source that fails to answer is logged and treated as returning
+    /// nothing: the pool falls back to whatever targets the configuration
+    /// lists, and the refresh task retries on the next interval. Failing the
+    /// whole pool here would mean one unreachable registry could stop the proxy
+    /// from starting at all, taking every other upstream down with it.
+    async fn resolve_discovery(
+        config: &UpstreamConfig,
+        id: &UpstreamId,
+    ) -> (
+        Option<Arc<dyn ServiceDiscovery + Send + Sync>>,
+        Option<Duration>,
+        Vec<UpstreamTarget>,
+    ) {
+        let Some(spec) = config.discovery.as_ref() else {
+            return (None, None, Vec::new());
+        };
+
+        let source = crate::discovery::build_discovery(id.as_str(), Self::discovery_config(spec));
+
+        // `static` never changes, so it is resolved once and never scheduled.
+        let interval = match spec.refresh_interval_secs() {
+            0 => None,
+            secs => Some(Duration::from_secs(secs)),
+        };
+
+        let targets = match source.discover().await {
+            Ok((backends, _healthy)) => {
+                let targets = Self::targets_from_backends(&backends);
+                info!(
+                    upstream_id = %config.id,
+                    discovery = spec.kind(),
+                    discovered = targets.len(),
+                    refresh_interval_secs = interval.map(|i| i.as_secs()).unwrap_or(0),
+                    "Resolved service discovery"
+                );
+                targets
+            }
+            Err(e) => {
+                error!(
+                    upstream_id = %config.id,
+                    discovery = spec.kind(),
+                    error = %e,
+                    "Service discovery failed; using configured targets only"
+                );
+                Vec::new()
+            }
+        };
+
+        (Some(source), interval, targets)
+    }
+
+    /// How often this pool's discovery source should be re-resolved, if at all.
+    pub fn discovery_refresh_interval(&self) -> Option<Duration> {
+        self.discovery_interval
+    }
+
+    /// Re-resolve discovery and, when the target set has changed, build the
+    /// pool that should replace this one.
+    ///
+    /// Returns `None` when there is nothing to do — no discovery source, the
+    /// source failed, or it resolved to the same targets the pool already has.
+    /// Callers install the returned pool in place of this one; the two share
+    /// their circuit breakers and statistics, so a backend that was failing
+    /// before the refresh is still failing after it.
+    ///
+    /// # Errors
+    ///
+    /// Never fails: a discovery source that cannot be reached leaves the pool
+    /// serving its current targets rather than emptying it.
+    pub async fn refreshed(&self) -> Option<UpstreamPool> {
+        let source = self.discovery.as_ref()?;
+
+        let (backends, _healthy) = match source.discover().await {
+            Ok(result) => result,
+            Err(e) => {
+                warn!(
+                    upstream_id = %self.id,
+                    error = %e,
+                    "Service discovery refresh failed; keeping current targets"
+                );
+                return None;
+            }
+        };
+
+        let mut targets = self.static_targets.clone();
+        targets.extend(Self::targets_from_backends(&backends));
+
+        if Self::same_targets(&self.targets, &targets) {
+            return None;
+        }
+
+        let previous: Vec<String> = self.targets.iter().map(|t| t.full_address()).collect();
+        let current: Vec<String> = targets.iter().map(|t| t.full_address()).collect();
+        let added: Vec<&String> = current.iter().filter(|a| !previous.contains(a)).collect();
+        let removed: Vec<&String> = previous.iter().filter(|a| !current.contains(a)).collect();
+
+        info!(
+            upstream_id = %self.id,
+            added = ?added,
+            removed = ?removed,
+            target_count = targets.len(),
+            "Service discovery changed upstream targets"
+        );
+
+        // Reconcile circuit breakers in place: surviving targets keep the
+        // breaker they already had (and therefore their open/closed state),
+        // targets that went away lose theirs so the map cannot grow without
+        // bound as backends churn, and new targets start closed.
+        let cb_config = self.config.circuit_breaker.unwrap_or_default();
+        {
+            let mut breakers = self.circuit_breakers.write().await;
+            breakers.retain(|address, _| current.iter().any(|a| a == address));
+            for address in &current {
+                breakers
+                    .entry(address.clone())
+                    .or_insert_with(|| CircuitBreaker::new(cb_config));
+            }
+        }
+
+        let load_balancer =
+            match Self::create_load_balancer(&self.config.load_balancing, &targets, &self.config) {
+                Ok(balancer) => balancer,
+                Err(e) => {
+                    error!(
+                        upstream_id = %self.id,
+                        error = %e,
+                        "Failed to rebuild load balancer after discovery refresh; \
+                         keeping current targets"
+                    );
+                    return None;
+                }
+            };
+
+        Some(UpstreamPool {
+            id: self.id.clone(),
+            targets,
+            load_balancer,
+            pool_config: self.pool_config.clone(),
+            http_version: self.http_version.clone(),
+            tls_enabled: self.tls_enabled,
+            tls_sni: self.tls_sni.clone(),
+            tls_config: self.tls_config.clone(),
+            // Shared, not copied: breaker state and counters must survive the
+            // swap or a flapping backend would look healthy on every refresh.
+            circuit_breakers: Arc::clone(&self.circuit_breakers),
+            stats: Arc::clone(&self.stats),
+            discovery: self.discovery.clone(),
+            discovery_interval: self.discovery_interval,
+            static_targets: self.static_targets.clone(),
+            config: self.config.clone(),
+        })
+    }
+
+    /// Whether two target sets are the same, ignoring order.
+    fn same_targets(a: &[UpstreamTarget], b: &[UpstreamTarget]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut a: Vec<(String, u32)> = a.iter().map(|t| (t.full_address(), t.weight)).collect();
+        let mut b: Vec<(String, u32)> = b.iter().map(|t| (t.full_address(), t.weight)).collect();
+        a.sort();
+        b.sort();
+        a == b
     }
 
     /// Create load balancer based on algorithm
@@ -1514,6 +1812,25 @@ impl UpstreamPool {
     }
 
     /// Get target count
+    /// Circuit-breaker state for a target, or `None` when the pool has no
+    /// breaker for that address — which for a discovery-backed pool means the
+    /// target is not currently in the resolved set.
+    pub async fn circuit_breaker_state(
+        &self,
+        target: &str,
+    ) -> Option<zentinel_common::types::CircuitBreakerState> {
+        self.circuit_breakers
+            .read()
+            .await
+            .get(target)
+            .map(|breaker| breaker.state())
+    }
+
+    /// Addresses of the pool's current targets, in selection order.
+    pub fn target_addresses(&self) -> Vec<String> {
+        self.targets.iter().map(|t| t.full_address()).collect()
+    }
+
     pub fn target_count(&self) -> usize {
         self.targets.len()
     }

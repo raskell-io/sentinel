@@ -738,11 +738,14 @@ fn validate_upstreams(config: &Config, errors: &mut Vec<String>) {
             "Validating upstream"
         );
 
-        if upstream.targets.is_empty() {
+        // An upstream backed by service discovery gets its targets at runtime,
+        // so an empty list here is expected rather than a misconfiguration.
+        if upstream.targets.is_empty() && upstream.discovery.is_none() {
             warn!(upstream_id = %upstream_id, "Upstream has no targets");
             errors.push(format!(
                 "Upstream '{}' has no targets defined.\n\
-                 Each upstream must have at least one target.",
+                 Each upstream must have at least one target, or a discovery \
+                 block that supplies them.",
                 upstream_id
             ));
         }
@@ -1435,6 +1438,7 @@ mod tests {
             timeouts: UpstreamTimeouts::default(),
             tls: None,
             http_version: HttpVersionConfig::default(),
+            discovery: None,
         }
     }
 
@@ -2186,6 +2190,7 @@ mod tests {
             timeouts: UpstreamTimeouts::default(),
             tls: None,
             http_version: HttpVersionConfig::default(),
+            discovery: None,
         };
 
         // --- Filter types ---

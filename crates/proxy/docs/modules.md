@@ -449,10 +449,45 @@ Service discovery backends.
 
 ```rust
 impl DiscoveryManager {
-    pub async fn get_backends(&self, upstream: &str) -> Vec<Backend>;
-    pub async fn refresh(&self, upstream: &str);
+    pub fn register(&self, upstream_id: &str, config: DiscoveryConfig) -> Result<(), Box<Error>>;
+    pub fn get(&self, upstream_id: &str) -> Option<Arc<dyn ServiceDiscovery + Send + Sync>>;
+    pub async fn discover(&self, upstream_id: &str)
+        -> Option<Result<(BTreeSet<Backend>, HashMap<u64, bool>)>>;
+    pub fn remove(&self, upstream_id: &str);
+    pub fn count(&self) -> usize;
 }
 ```
+
+**How it reaches the request path**
+
+An `UpstreamPool` holds its own discovery source rather than going through the
+manager: `build_discovery` (the body `DiscoveryManager::register` also uses)
+constructs it, and `UpstreamPool::new` resolves it before the pool serves any
+traffic. Discovered targets are appended to the pool's statically configured
+ones.
+
+`upstream::discovery_refresh` then keeps them current. It is a single supervisor
+task, started in `ZentinelProxy::new`, that reads the upstream registries on each
+tick and refreshes any pool whose interval has elapsed:
+
+```rust
+// crates/proxy/src/upstream/mod.rs
+impl UpstreamPool {
+    pub fn discovery_refresh_interval(&self) -> Option<Duration>;
+    pub async fn refreshed(&self) -> Option<UpstreamPool>;
+}
+```
+
+`refreshed()` returns a replacement pool only when the target set actually
+changed. The replacement shares the original's circuit breakers and statistics,
+so breaker state survives the swap; breakers for targets that disappeared are
+dropped so the map stays bounded as backends churn. The supervisor installs the
+replacement with `Registry::insert` / `ScopedRegistry::replace_item`, which is
+the same swap the `SIGHUP` reload path performs.
+
+Reading the registries on each tick — rather than holding an `Arc<UpstreamPool>`
+per task — is what keeps this correct across a config reload, which replaces
+every pool wholesale.
 
 **Configuration:**
 

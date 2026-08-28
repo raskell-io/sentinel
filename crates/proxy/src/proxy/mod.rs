@@ -217,6 +217,14 @@ impl ZentinelProxy {
         let scoped_upstream_pools =
             Self::create_scoped_upstream_pools(&flattened, &mut health_check_runner).await?;
 
+        // Keep discovery-backed pools up to date. The supervisor reads both
+        // registries on each tick, so it also covers pools installed by a later
+        // config reload; it is a no-op when no upstream uses discovery.
+        crate::upstream::discovery_refresh::spawn(
+            upstream_pools.clone(),
+            scoped_upstream_pools.clone(),
+        );
+
         let health_check_runner = Arc::new(health_check_runner);
 
         // Create passive health checker

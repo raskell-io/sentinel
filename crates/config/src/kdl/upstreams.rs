@@ -9,7 +9,9 @@ use zentinel_common::types::{HealthCheckType, LoadBalancingAlgorithm};
 
 use crate::{kdl::circuitbreaker_helper::parse_circuit_breaker_faildefault, upstreams::*};
 
-use super::helpers::{get_first_arg_string, get_int_entry, parse_upstream_targets};
+use super::helpers::{
+    get_bool_entry, get_first_arg_string, get_int_entry, get_string_entry, parse_upstream_targets,
+};
 
 //Parse a single upstream block
 /// Every child node `parse_upstream` reads.
@@ -34,6 +36,30 @@ pub(crate) const RECOGNIZED_UPSTREAM_KEYS: &[&str] = &[
     "timeouts",
     "tls",
     "circuit-breaker",
+    "discovery",
+];
+
+/// Settings accepted inside `discovery "<kind>" { ... }`.
+///
+/// This is the union across every discovery backend rather than a per-kind
+/// list, because the lint matches on the block name and not on its argument.
+/// A key that belongs to a different backend than the one named is caught by
+/// `parse_discovery`, which rejects it with the kind in the message.
+pub(crate) const RECOGNIZED_DISCOVERY_KEYS: &[&str] = &[
+    "backends",
+    "hostname",
+    "port",
+    "service",
+    "refresh-interval",
+    "address",
+    "datacenter",
+    "only-passing",
+    "tag",
+    "namespace",
+    "port-name",
+    "kubeconfig",
+    "path",
+    "watch-interval",
 ];
 
 /// Every child node `parse_health_check` reads directly.
@@ -149,9 +175,18 @@ pub fn parse_upstream(child: &kdl::KdlNode) -> Result<UpstreamConfig> {
         // `parse_upstream_targets`).
         let targets = parse_upstream_targets(child);
 
-        if targets.is_empty() {
+        // Service discovery, which may supply the targets instead of (or in
+        // addition to) statically configured ones.
+        let discovery = child
+            .children()
+            .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "discovery"))
+            .map(|n| parse_discovery(n, &id))
+            .transpose()?;
+
+        if targets.is_empty() && discovery.is_none() {
             return Err(anyhow::anyhow!(
-                "Upstream '{}' requires at least one target, e.g., target \"127.0.0.1:8081\"",
+                "Upstream '{}' requires at least one target, e.g., target \"127.0.0.1:8081\", \
+                 or a discovery block, e.g., discovery \"dns\" {{ hostname \"api.internal\"; port 8080 }}",
                 id
             ));
         }
@@ -285,6 +320,7 @@ pub fn parse_upstream(child: &kdl::KdlNode) -> Result<UpstreamConfig> {
             timeouts,
             tls,
             http_version,
+            discovery,
         })
     } else {
         Err(anyhow!("Child is not upstream stanza"))
@@ -597,6 +633,190 @@ fn find_bool_entry_from_node(node: &kdl::KdlNode, name: &str) -> Option<bool> {
         .and_then(|c| c.nodes().iter().find(|n| n.name().value() == name))
         .and_then(|n| n.entries().first())
         .and_then(|e| e.value().as_bool())
+}
+
+/// Keys each discovery backend accepts, used to reject settings that belong to
+/// a different backend than the one named.
+const STATIC_DISCOVERY_KEYS: &[&str] = &["backends"];
+const DNS_DISCOVERY_KEYS: &[&str] = &["hostname", "port", "refresh-interval"];
+const DNS_SRV_DISCOVERY_KEYS: &[&str] = &["service", "refresh-interval"];
+const CONSUL_DISCOVERY_KEYS: &[&str] = &[
+    "address",
+    "service",
+    "datacenter",
+    "only-passing",
+    "refresh-interval",
+    "tag",
+];
+const KUBERNETES_DISCOVERY_KEYS: &[&str] = &[
+    "namespace",
+    "service",
+    "port-name",
+    "refresh-interval",
+    "kubeconfig",
+];
+const FILE_DISCOVERY_KEYS: &[&str] = &["path", "watch-interval"];
+
+/// Reject any child of a `discovery` block that the named backend does not use.
+///
+/// The unknown-key lint only knows the union of all backends' keys, so without
+/// this a `hostname` under `discovery "consul"` would parse, validate clean, and
+/// be silently dropped — the failure shape this whole feature exists to avoid.
+fn reject_foreign_discovery_keys(
+    node: &kdl::KdlNode,
+    kind: &str,
+    allowed: &[&str],
+    upstream_id: &str,
+) -> Result<()> {
+    let Some(children) = node.children() else {
+        return Ok(());
+    };
+    for child in children.nodes() {
+        let name = child.name().value();
+        if !allowed.contains(&name) {
+            return Err(anyhow!(
+                "Upstream '{}': '{}' is not a setting of discovery \"{}\" (accepted: {})",
+                upstream_id,
+                name,
+                kind,
+                allowed.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Read a required string child node, naming the block in the error.
+fn required_string(
+    node: &kdl::KdlNode,
+    key: &str,
+    kind: &str,
+    upstream_id: &str,
+) -> Result<String> {
+    get_string_entry(node, key).ok_or_else(|| {
+        anyhow!(
+            "Upstream '{}': discovery \"{}\" requires '{}'",
+            upstream_id,
+            kind,
+            key
+        )
+    })
+}
+
+/// Read a refresh interval in seconds, rejecting zero.
+///
+/// Zero would busy-loop the refresh task, so it is an error rather than a
+/// value that silently becomes the default.
+fn refresh_secs(node: &kdl::KdlNode, key: &str, default: u64, upstream_id: &str) -> Result<u64> {
+    match get_int_entry(node, key) {
+        None => Ok(default),
+        Some(v) if v <= 0 => Err(anyhow!(
+            "Upstream '{}': '{}' must be greater than zero (got {})",
+            upstream_id,
+            key,
+            v
+        )),
+        Some(v) => Ok(v as u64),
+    }
+}
+
+/// Parse a `discovery "<kind>" { ... }` block.
+///
+/// The backend is named by the block's first argument; its settings are child
+/// nodes. Anything that does not belong to that backend is an error rather than
+/// a silently ignored key.
+pub(crate) fn parse_discovery(node: &kdl::KdlNode, upstream_id: &str) -> Result<UpstreamDiscovery> {
+    let kind = get_first_arg_string(node).ok_or_else(|| {
+        anyhow!(
+            "Upstream '{}': discovery requires a type argument, e.g., discovery \"dns\" {{ ... }}",
+            upstream_id
+        )
+    })?;
+
+    match kind.as_str() {
+        "static" => {
+            reject_foreign_discovery_keys(node, &kind, STATIC_DISCOVERY_KEYS, upstream_id)?;
+            let backends = node
+                .children()
+                .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "backends"))
+                .map(|n| {
+                    n.entries()
+                        .iter()
+                        .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if backends.is_empty() {
+                return Err(anyhow!(
+                    "Upstream '{}': discovery \"static\" requires a non-empty 'backends' list",
+                    upstream_id
+                ));
+            }
+            Ok(UpstreamDiscovery::Static { backends })
+        }
+        "dns" => {
+            reject_foreign_discovery_keys(node, &kind, DNS_DISCOVERY_KEYS, upstream_id)?;
+            let hostname = required_string(node, "hostname", &kind, upstream_id)?;
+            let port = get_int_entry(node, "port").ok_or_else(|| {
+                anyhow!(
+                    "Upstream '{}': discovery \"dns\" requires 'port'",
+                    upstream_id
+                )
+            })?;
+            let port = u16::try_from(port).map_err(|_| {
+                anyhow!(
+                    "Upstream '{}': discovery port {} is out of range",
+                    upstream_id,
+                    port
+                )
+            })?;
+            Ok(UpstreamDiscovery::Dns {
+                hostname,
+                port,
+                refresh_interval_secs: refresh_secs(node, "refresh-interval", 30, upstream_id)?,
+            })
+        }
+        "dns-srv" => {
+            reject_foreign_discovery_keys(node, &kind, DNS_SRV_DISCOVERY_KEYS, upstream_id)?;
+            Ok(UpstreamDiscovery::DnsSrv {
+                service: required_string(node, "service", &kind, upstream_id)?,
+                refresh_interval_secs: refresh_secs(node, "refresh-interval", 30, upstream_id)?,
+            })
+        }
+        "consul" => {
+            reject_foreign_discovery_keys(node, &kind, CONSUL_DISCOVERY_KEYS, upstream_id)?;
+            Ok(UpstreamDiscovery::Consul {
+                address: required_string(node, "address", &kind, upstream_id)?,
+                service: required_string(node, "service", &kind, upstream_id)?,
+                datacenter: get_string_entry(node, "datacenter"),
+                only_passing: get_bool_entry(node, "only-passing").unwrap_or(true),
+                refresh_interval_secs: refresh_secs(node, "refresh-interval", 30, upstream_id)?,
+                tag: get_string_entry(node, "tag"),
+            })
+        }
+        "kubernetes" => {
+            reject_foreign_discovery_keys(node, &kind, KUBERNETES_DISCOVERY_KEYS, upstream_id)?;
+            Ok(UpstreamDiscovery::Kubernetes {
+                namespace: required_string(node, "namespace", &kind, upstream_id)?,
+                service: required_string(node, "service", &kind, upstream_id)?,
+                port_name: get_string_entry(node, "port-name"),
+                refresh_interval_secs: refresh_secs(node, "refresh-interval", 30, upstream_id)?,
+                kubeconfig: get_string_entry(node, "kubeconfig"),
+            })
+        }
+        "file" => {
+            reject_foreign_discovery_keys(node, &kind, FILE_DISCOVERY_KEYS, upstream_id)?;
+            Ok(UpstreamDiscovery::File {
+                path: required_string(node, "path", &kind, upstream_id)?,
+                watch_interval_secs: refresh_secs(node, "watch-interval", 5, upstream_id)?,
+            })
+        }
+        other => Err(anyhow!(
+            "Upstream '{}': unknown discovery type '{}' (accepted: static, dns, dns-srv, consul, kubernetes, file)",
+            upstream_id,
+            other
+        )),
+    }
 }
 
 /// Parse health check configuration
@@ -1280,5 +1500,145 @@ mod tests {
         let cbconfig = upstream.circuit_breaker;
 
         assert!(cbconfig.is_none());
+    }
+
+    /// Helper: parse one upstream carrying the given discovery block.
+    fn discovery_of(block: &str) -> Result<Option<UpstreamDiscovery>> {
+        let kdl = format!("upstreams {{\n    upstream \"u\" {{\n{block}\n    }}\n}}");
+        Ok(parse_kdl_upstreams(&kdl)?
+            .get("u")
+            .expect("upstream parsed")
+            .discovery
+            .clone())
+    }
+
+    #[test]
+    fn discovery_defaults_are_applied_when_intervals_are_omitted() {
+        let discovery = discovery_of("        discovery \"dns\" {\n            hostname \"api.internal\"\n            port 8080\n        }")
+            .expect("parses")
+            .expect("discovery present");
+        assert_eq!(
+            discovery,
+            UpstreamDiscovery::Dns {
+                hostname: "api.internal".to_string(),
+                port: 8080,
+                refresh_interval_secs: 30,
+            }
+        );
+        assert_eq!(discovery.refresh_interval_secs(), 30);
+        assert_eq!(discovery.kind(), "dns");
+    }
+
+    #[test]
+    fn file_discovery_defaults_to_a_five_second_watch() {
+        let discovery = discovery_of("        discovery \"file\" {\n            path \"/etc/zentinel/backends.txt\"\n        }")
+            .expect("parses")
+            .expect("discovery present");
+        assert_eq!(discovery.refresh_interval_secs(), 5);
+    }
+
+    #[test]
+    fn static_discovery_reports_no_refresh_interval() {
+        let discovery = discovery_of("        discovery \"static\" {\n            backends \"10.0.0.1:80\" \"10.0.0.2:80\"\n        }")
+            .expect("parses")
+            .expect("discovery present");
+        assert_eq!(
+            discovery,
+            UpstreamDiscovery::Static {
+                backends: vec!["10.0.0.1:80".to_string(), "10.0.0.2:80".to_string()],
+            }
+        );
+        assert_eq!(discovery.refresh_interval_secs(), 0);
+    }
+
+    #[test]
+    fn zero_refresh_interval_is_rejected() {
+        let message = discovery_of("        discovery \"dns\" {\n            hostname \"api.internal\"\n            port 8080\n            refresh-interval 0\n        }")
+            .expect_err("zero would busy-loop the refresh task")
+            .to_string();
+        assert!(
+            message.contains("refresh-interval"),
+            "error should name the key, got: {message}"
+        );
+    }
+
+    #[test]
+    fn missing_required_setting_is_rejected() {
+        let message = discovery_of("        discovery \"dns\" {\n            port 8080\n        }")
+            .expect_err("dns discovery needs a hostname")
+            .to_string();
+        assert!(
+            message.contains("hostname"),
+            "error should name the missing key, got: {message}"
+        );
+    }
+
+    #[test]
+    fn unknown_discovery_type_is_rejected() {
+        let message =
+            discovery_of("        discovery \"etcd\" {\n            address \"x\"\n        }")
+                .expect_err("etcd is not a discovery backend")
+                .to_string();
+        assert!(
+            message.contains("etcd"),
+            "error should name the unknown type, got: {message}"
+        );
+    }
+
+    #[test]
+    fn discovery_without_a_type_argument_is_rejected() {
+        let message = discovery_of("        discovery {\n            hostname \"api\"\n        }")
+            .expect_err("the backend has to be named")
+            .to_string();
+        assert!(
+            message.contains("discovery"),
+            "error should mention discovery, got: {message}"
+        );
+    }
+
+    #[test]
+    fn consul_optional_settings_round_trip() {
+        let discovery = discovery_of(
+            "        discovery \"consul\" {\n            address \"http://consul:8500\"\n            service \"api\"\n            datacenter \"dc2\"\n            only-passing #false\n            refresh-interval 15\n            tag \"canary\"\n        }",
+        )
+        .expect("parses")
+        .expect("discovery present");
+        assert_eq!(
+            discovery,
+            UpstreamDiscovery::Consul {
+                address: "http://consul:8500".to_string(),
+                service: "api".to_string(),
+                datacenter: Some("dc2".to_string()),
+                // Deliberately non-default: a value that silently reverted to
+                // `true` here would be invisible in any test that used the
+                // default.
+                only_passing: false,
+                refresh_interval_secs: 15,
+                tag: Some("canary".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn an_upstream_may_have_discovery_instead_of_targets() {
+        let upstreams = parse_kdl_upstreams(
+            "upstreams {\n    upstream \"u\" {\n        discovery \"file\" {\n            path \"/tmp/b.txt\"\n        }\n    }\n}",
+        )
+        .expect("an upstream backed by discovery needs no static targets");
+        assert!(upstreams["u"].targets.is_empty());
+        assert!(upstreams["u"].discovery.is_some());
+    }
+
+    #[test]
+    fn an_upstream_with_neither_targets_nor_discovery_is_rejected() {
+        let message = parse_kdl_upstreams(
+            "upstreams {\n    upstream \"u\" {\n        load-balancing \"round-robin\"\n    }\n}",
+        )
+        .expect_err("nothing to route to")
+        .to_string();
+        assert!(
+            message.contains("target") && message.contains("discovery"),
+            "error should offer both ways out, got: {message}"
+        );
     }
 }

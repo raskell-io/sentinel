@@ -65,7 +65,8 @@ Minimum supported: `1.0`
 | Property | Validation |
 |----------|------------|
 | `id` | Non-empty, unique |
-| `targets` | At least one target required |
+| `targets` | At least one target required, unless `discovery` is set |
+| `discovery` | Known kind; settings must belong to that kind; intervals `> 0` |
 | `targets[].address` | Valid host:port format |
 | `targets[].weight` | `> 0` |
 | `health-check.interval-secs` | `> 0` |

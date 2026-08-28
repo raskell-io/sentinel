@@ -179,6 +179,7 @@ pub fn translate_ingresses(
                         timeouts: UpstreamTimeouts::default(),
                         tls: None,
                         http_version: HttpVersionConfig::default(),
+                        discovery: None,
                     };
 
                     upstreams.insert(upstream_id.clone(), upstream);
@@ -240,6 +241,7 @@ pub fn translate_ingresses(
                         timeouts: UpstreamTimeouts::default(),
                         tls: None,
                         http_version: HttpVersionConfig::default(),
+                        discovery: None,
                     },
                 );
 

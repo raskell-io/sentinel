@@ -349,6 +349,7 @@ mod tests {
             timeouts: UpstreamTimeouts::default(),
             tls: None,
             http_version: HttpVersionConfig::default(),
+            discovery: None,
         }
     }
 
