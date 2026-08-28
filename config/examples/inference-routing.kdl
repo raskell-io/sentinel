@@ -325,7 +325,6 @@ observability {
             enabled #true
             file "/var/log/zentinel/inference-access.log"
             // Include token counts in access logs
-            include-trace-id #true
         }
     }
 }

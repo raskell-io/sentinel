@@ -340,7 +340,6 @@ observability {
         access-log {
             enabled #true
             file "/var/log/zentinel/access.log"
-            include-trace-id #true
             // Shadow requests are logged with shadow=true field
         }
     }
