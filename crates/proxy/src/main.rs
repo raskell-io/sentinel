@@ -723,20 +723,29 @@ fn run_server(
             .collect();
     }
 
-    // Initialize OpenTelemetry tracer if configured
+    // Initialize OpenTelemetry tracer if configured and enabled.
+    //
+    // The block's presence used to be the only switch, so `enabled #false` was
+    // read by nothing and tracing started anyway. It is honoured here, and the
+    // skip is logged: an operator who turned tracing off should be able to see
+    // that it took effect.
     if let Some(ref tracing_config) = config.observability.tracing {
-        match zentinel_proxy::otel::init_tracer(tracing_config) {
-            Ok(()) => {
-                info!(
-                    backend = ?tracing_config.backend,
-                    sampling_rate = tracing_config.sampling_rate,
-                    service_name = %tracing_config.service_name,
-                    "OpenTelemetry tracing enabled"
-                );
-            }
-            Err(e) => {
-                warn!("Failed to initialize OpenTelemetry tracer: {}", e);
-                warn!("Distributed tracing will be disabled");
+        if !tracing_config.enabled {
+            info!("Distributed tracing disabled by configuration (tracing.enabled)");
+        } else {
+            match zentinel_proxy::otel::init_tracer(tracing_config) {
+                Ok(()) => {
+                    info!(
+                        backend = ?tracing_config.backend,
+                        sampling_rate = tracing_config.sampling_rate,
+                        service_name = %tracing_config.service_name,
+                        "OpenTelemetry tracing enabled"
+                    );
+                }
+                Err(e) => {
+                    warn!("Failed to initialize OpenTelemetry tracer: {}", e);
+                    warn!("Distributed tracing will be disabled");
+                }
             }
         }
     }

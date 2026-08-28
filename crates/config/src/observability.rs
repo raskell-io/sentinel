@@ -297,6 +297,15 @@ impl Default for AuditLogConfig {
 /// Tracing configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracingConfig {
+    /// Whether to start the tracer.
+    ///
+    /// Tracing used to be switched on by the presence of the `tracing` block
+    /// alone, so a configuration saying `enabled #false` still got tracing. It
+    /// is honoured now, and defaults to true so that a block without it behaves
+    /// as it always has.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
     /// Tracing backend
     pub backend: TracingBackend,
 

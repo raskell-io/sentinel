@@ -1296,8 +1296,13 @@ pub(crate) const RECOGNIZED_LOGGING_KEYS: &[&str] =
     &["level", "format", "access-log", "error-log", "audit-log"];
 
 /// Settings `parse_access_log_config` reads.
-pub(crate) const RECOGNIZED_ACCESS_LOG_KEYS: &[&str] =
-    &["enabled", "file", "format", "buffer-size"];
+pub(crate) const RECOGNIZED_ACCESS_LOG_KEYS: &[&str] = &[
+    "enabled",
+    "file",
+    "format",
+    "buffer-size",
+    "include-trace-id",
+];
 
 /// Settings `parse_error_log_config` reads.
 ///
@@ -1320,7 +1325,8 @@ pub(crate) const RECOGNIZED_METRICS_KEYS: &[&str] =
     &["enabled", "address", "path", "high-cardinality"];
 
 /// Settings and blocks `parse_tracing_config` reads.
-pub(crate) const RECOGNIZED_TRACING_KEYS: &[&str] = &["backend", "sampling-rate", "service-name"];
+pub(crate) const RECOGNIZED_TRACING_KEYS: &[&str] =
+    &["enabled", "backend", "sampling-rate", "service-name"];
 
 /// Settings a tracing `backend` block reads.
 ///
@@ -1408,6 +1414,13 @@ fn parse_access_log_config(node: &kdl::KdlNode) -> Result<crate::observability::
     }
     if let Some(format) = get_string_entry(node, "format") {
         config.format = format;
+    }
+    // `include-trace-id` selects the trace id field in the access log line.
+    // The field list itself has no KDL syntax, so this is the only way to reach
+    // it -- and it was previously read by nothing at all.
+    if let Some(include_trace_id) = get_bool_entry(node, "include-trace-id") {
+        config.include_trace_id = include_trace_id;
+        config.fields.trace_id = include_trace_id;
     }
     if let Some(buffer_size) = get_int_entry(node, "buffer-size") {
         config.buffer_size = buffer_size as usize;
@@ -1508,11 +1521,13 @@ fn parse_tracing_config(node: &kdl::KdlNode) -> Result<crate::observability::Tra
 
     let backend = parse_tracing_backend(node)?;
 
+    let enabled = get_bool_entry(node, "enabled").unwrap_or(true);
     let sampling_rate = get_float_entry(node, "sampling-rate").unwrap_or(0.01);
     let service_name =
         get_string_entry(node, "service-name").unwrap_or_else(|| "zentinel".to_string());
 
     Ok(TracingConfig {
+        enabled,
         backend,
         sampling_rate,
         service_name,
@@ -1562,6 +1577,109 @@ fn parse_tracing_backend(node: &kdl::KdlNode) -> Result<crate::observability::Tr
 
 #[cfg(test)]
 mod tests {
+    /// Tracing used to be switched on by the presence of the block alone, so
+    /// `enabled #false` was read by nothing and tracing started regardless.
+    #[test]
+    fn tracing_enabled_is_read() {
+        fn tracing_of(body: &str) -> crate::observability::TracingConfig {
+            let kdl = format!(
+                r#"
+                schema-version "1.0"
+                system {{
+                    worker-threads 1
+                }}
+                listeners {{
+                    listener "l" {{
+                        address "127.0.0.1:8080"
+                    }}
+                }}
+                routes {{
+                    route "r" {{
+                        matches {{
+                            path "/"
+                        }}
+                        service-type "builtin"
+                        builtin-handler "health"
+                    }}
+                }}
+                observability {{
+                    tracing {{
+                        {body}
+                        backend "otlp" {{
+                            endpoint "http://localhost:4317"
+                        }}
+                    }}
+                }}
+                "#
+            );
+            crate::Config::from_kdl(&kdl)
+                .expect("config parses")
+                .observability
+                .tracing
+                .expect("tracing block present")
+        }
+
+        assert!(tracing_of("").enabled, "absent means enabled, as before");
+        assert!(tracing_of("enabled #true").enabled);
+        assert!(
+            !tracing_of("enabled #false").enabled,
+            "enabled #false must actually disable tracing"
+        );
+    }
+
+    /// `include-trace-id` selects the trace id field in the access log line.
+    /// The field list has no KDL syntax of its own, so this is the only way to
+    /// reach it.
+    #[test]
+    fn access_log_include_trace_id_is_read() {
+        fn access_log_of(body: &str) -> crate::observability::AccessLogConfig {
+            let kdl = format!(
+                r#"
+                schema-version "1.0"
+                system {{
+                    worker-threads 1
+                }}
+                listeners {{
+                    listener "l" {{
+                        address "127.0.0.1:8080"
+                    }}
+                }}
+                routes {{
+                    route "r" {{
+                        matches {{
+                            path "/"
+                        }}
+                        service-type "builtin"
+                        builtin-handler "health"
+                    }}
+                }}
+                observability {{
+                    logging {{
+                        access-log {{
+                            enabled #true
+                            {body}
+                        }}
+                    }}
+                }}
+                "#
+            );
+            crate::Config::from_kdl(&kdl)
+                .expect("config parses")
+                .observability
+                .logging
+                .access_log
+                .expect("access-log block present")
+        }
+
+        let on = access_log_of(r#"include-trace-id #true"#);
+        assert!(on.include_trace_id);
+        assert!(on.fields.trace_id, "the field the writer actually consults");
+
+        let off = access_log_of(r#"include-trace-id #false"#);
+        assert!(!off.include_trace_id);
+        assert!(!off.fields.trace_id);
+    }
+
     /// `type` is documented as a property but four shipped configs wrote it as
     /// a child node, where it silently produced `Custom(<id>)` instead of the
     /// declared type. Both forms are accepted.
