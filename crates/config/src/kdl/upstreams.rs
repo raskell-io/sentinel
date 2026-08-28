@@ -63,6 +63,61 @@ pub(crate) const RECOGNIZED_INFERENCE_CHECK_KEYS: &[&str] =
 /// unrecognised type as TCP.
 pub(crate) const RECOGNIZED_TCP_CHECK_KEYS: &[&str] = &[];
 
+/// Sub-blocks accepted inside a `readiness` block.
+///
+/// `readiness` holds nothing but these four; it has no settings of its own.
+pub(crate) const RECOGNIZED_READINESS_KEYS: &[&str] = &[
+    "inference-probe",
+    "model-status",
+    "queue-depth",
+    "warmth-detection",
+];
+
+/// Settings accepted inside `readiness > inference-probe`.
+pub(crate) const RECOGNIZED_INFERENCE_PROBE_KEYS: &[&str] = &[
+    "endpoint",
+    "model",
+    "prompt",
+    "max-tokens",
+    "timeout-secs",
+    "max-latency-ms",
+];
+
+/// Settings accepted inside `readiness > model-status`.
+///
+/// Note `expected-status` and `status-field` are *settings*; their defaults are
+/// the strings `"ready"` and `"status"`. Reading those defaults as key names is
+/// the mistake a mechanical scan of this function makes.
+pub(crate) const RECOGNIZED_MODEL_STATUS_KEYS: &[&str] = &[
+    "endpoint-pattern",
+    "models",
+    "expected-status",
+    "status-field",
+    "timeout-secs",
+];
+
+/// Settings accepted inside `readiness > queue-depth`.
+pub(crate) const RECOGNIZED_QUEUE_DEPTH_KEYS: &[&str] = &[
+    "header",
+    "body-field",
+    "endpoint",
+    "degraded-threshold",
+    "unhealthy-threshold",
+    "timeout-secs",
+];
+
+/// Settings accepted inside `readiness > warmth-detection`.
+///
+/// `cold-action` takes one of `log-only`, `mark-degraded` or `mark-unhealthy`
+/// (underscored spellings also accepted). Those are *values*, not settings, and
+/// do not belong in this list.
+pub(crate) const RECOGNIZED_WARMTH_DETECTION_KEYS: &[&str] = &[
+    "cold-action",
+    "sample-size",
+    "cold-threshold-multiplier",
+    "idle-cold-timeout-secs",
+];
+
 /// Every child node `parse_upstream_tls` reads.
 ///
 /// Distinct from a listener's `tls` block, which shares the name and no keys.
