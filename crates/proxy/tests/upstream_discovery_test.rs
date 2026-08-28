@@ -151,6 +151,27 @@ async fn static_targets_are_kept_alongside_discovered_ones() {
     );
 }
 
+/// A pinned target that the discovery source also returns must appear once.
+/// Listing it twice would silently double the share of traffic it receives.
+#[tokio::test]
+async fn a_pinned_target_that_is_also_discovered_appears_once() {
+    let path = backends_file("dedupe", &["127.0.0.1:19570", "127.0.0.1:19571"]);
+    let config = config_with_discovery(&path, Some("127.0.0.1:19570"));
+    let upstream = config.upstreams.get("discovered").expect("upstream parsed");
+
+    let pool = UpstreamPool::new(upstream.clone())
+        .await
+        .expect("pool builds");
+
+    let mut addresses = pool.target_addresses();
+    addresses.sort();
+    assert_eq!(
+        addresses,
+        vec!["127.0.0.1:19570".to_string(), "127.0.0.1:19571".to_string()],
+        "the overlapping address should not be listed twice"
+    );
+}
+
 /// A refresh that finds the same backends should not produce a replacement
 /// pool: swapping on every tick would churn the registry for no reason.
 #[tokio::test]

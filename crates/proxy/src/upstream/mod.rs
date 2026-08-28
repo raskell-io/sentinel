@@ -846,8 +846,7 @@ impl UpstreamPool {
         let (discovery, discovery_interval, discovered) =
             Self::resolve_discovery(&config, &id).await;
 
-        let mut targets = static_targets.clone();
-        targets.extend(discovered);
+        let targets = Self::merge_targets(&static_targets, discovered);
 
         if targets.is_empty() {
             if discovery.is_some() {
@@ -981,6 +980,27 @@ impl UpstreamPool {
         );
 
         Ok(pool)
+    }
+
+    /// Combine configured targets with discovered ones.
+    ///
+    /// A configured target that the discovery source also returns appears once,
+    /// keeping the configured entry: an operator who pinned a backend and gave
+    /// it a weight should not have that weight doubled just because the source
+    /// happens to list it too.
+    fn merge_targets(
+        static_targets: &[UpstreamTarget],
+        discovered: Vec<UpstreamTarget>,
+    ) -> Vec<UpstreamTarget> {
+        let mut targets = static_targets.to_vec();
+        let pinned: std::collections::HashSet<String> =
+            targets.iter().map(|t| t.full_address()).collect();
+        targets.extend(
+            discovered
+                .into_iter()
+                .filter(|t| !pinned.contains(&t.full_address())),
+        );
+        targets
     }
 
     /// Translate the configuration's discovery block into the runtime one.
@@ -1147,8 +1167,8 @@ impl UpstreamPool {
             }
         };
 
-        let mut targets = self.static_targets.clone();
-        targets.extend(Self::targets_from_backends(&backends));
+        let targets =
+            Self::merge_targets(&self.static_targets, Self::targets_from_backends(&backends));
 
         if Self::same_targets(&self.targets, &targets) {
             return None;
