@@ -418,6 +418,7 @@ mod tests {
             tls: None,
             http_version: Default::default(),
             circuit_breaker: None,
+            discovery: None,
         }
     }
 

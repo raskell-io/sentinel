@@ -1,7 +1,7 @@
 //! Periodic re-resolution of upstream service discovery.
 //!
-//! Pools whose targets come from a discovery source ([`UpstreamConfig::discovery`])
-//! are resolved once while the proxy starts and then re-resolved on the
+//! Pools whose targets come from a discovery source (an upstream's `discovery`
+//! block) are resolved once while the proxy starts and then re-resolved on the
 //! interval their source declares. This module owns that schedule.
 //!
 //! # Why one supervisor rather than a task per upstream
