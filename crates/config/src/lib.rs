@@ -52,7 +52,6 @@ pub mod resolution;
 pub mod routes;
 pub mod server;
 pub mod upstreams;
-#[cfg(feature = "validation")]
 pub mod validate;
 pub mod validation;
 pub mod waf;
