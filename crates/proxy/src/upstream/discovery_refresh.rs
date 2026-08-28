@@ -29,12 +29,20 @@ use zentinel_common::{Registry, ScopedRegistry};
 
 use super::UpstreamPool;
 
-/// How often the supervisor wakes to check which pools are due.
+/// How often the supervisor wakes while at least one pool uses discovery.
 ///
 /// Refresh intervals are configured in whole seconds, so a one-second tick
 /// resolves every interval exactly. The tick itself does no work beyond
 /// comparing deadlines when nothing is due.
 const TICK: Duration = Duration::from_secs(1);
+
+/// How often the supervisor wakes while no pool uses discovery.
+///
+/// The overwhelming majority of configurations have no discovery at all, and
+/// the supervisor still has to look because a reload can introduce it. Backing
+/// off to half a minute makes the idle case cost effectively nothing while
+/// still noticing a reload promptly.
+const IDLE_TICK: Duration = Duration::from_secs(30);
 
 /// Upper bound on a single refresh.
 ///
@@ -84,11 +92,8 @@ async fn run(global: Registry<UpstreamPool>, scoped: ScopedRegistry<UpstreamPool
     // When each pool is next due. Keyed by source and id so a namespaced
     // upstream and a global one of the same name keep separate schedules.
     let mut due: HashMap<(Source, String), Instant> = HashMap::new();
-    let mut ticker = tokio::time::interval(TICK);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
-        ticker.tick().await;
         let now = Instant::now();
 
         let mut live: Vec<(Source, String, Arc<UpstreamPool>, Duration)> = Vec::new();
@@ -101,6 +106,12 @@ async fn run(global: Registry<UpstreamPool>, scoped: ScopedRegistry<UpstreamPool
             if let Some(interval) = pool.discovery_refresh_interval() {
                 live.push((Source::Scoped, id, pool, interval));
             }
+        }
+
+        if live.is_empty() {
+            due.clear();
+            tokio::time::sleep(IDLE_TICK).await;
+            continue;
         }
 
         // Drop schedules for pools that are no longer registered, so the map
@@ -129,6 +140,8 @@ async fn run(global: Registry<UpstreamPool>, scoped: ScopedRegistry<UpstreamPool
                 refresh_one(source, id, pool, global, scoped).await;
             });
         }
+
+        tokio::time::sleep(TICK).await;
     }
 }
 
