@@ -324,7 +324,6 @@ routes {
 // Observability
 observability {
     tracing {
-        enabled #true
         backend "otlp" {
             endpoint "http://localhost:4317"
         }

@@ -429,6 +429,50 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         keys: crate::kdl::filters::RECOGNIZED_RATE_LIMIT_FILTER_KEYS,
     },
     ClosedBlock {
+        name: "observability",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_OBSERVABILITY_KEYS,
+    },
+    ClosedBlock {
+        name: "logging",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_LOGGING_KEYS,
+    },
+    ClosedBlock {
+        name: "access-log",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_ACCESS_LOG_KEYS,
+    },
+    ClosedBlock {
+        // Takes `level` where the access log takes `format`; the two look alike
+        // and accept different settings.
+        name: "error-log",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_ERROR_LOG_KEYS,
+    },
+    ClosedBlock {
+        name: "audit-log",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_AUDIT_LOG_KEYS,
+    },
+    ClosedBlock {
+        name: "metrics",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_METRICS_KEYS,
+    },
+    ClosedBlock {
+        name: "tracing",
+        nesting: Nesting::Anywhere,
+        keys: crate::kdl::RECOGNIZED_TRACING_KEYS,
+    },
+    ClosedBlock {
+        // Qualified: a rate-limit filter also has a `backend`, but that one is
+        // a scalar setting rather than a block.
+        name: "backend",
+        nesting: Nesting::In("tracing"),
+        keys: crate::kdl::RECOGNIZED_TRACING_BACKEND_KEYS,
+    },
+    ClosedBlock {
         name: "policies",
         nesting: Nesting::Anywhere,
         keys: &[
@@ -1684,6 +1728,117 @@ mod tests {
             }
         "#;
         assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    #[test]
+    fn a_valid_observability_block_produces_no_warnings() {
+        let kdl = r#"
+            observability {
+                logging {
+                    level "info"
+                    format "json"
+                    access-log {
+                        enabled #true
+                        file "/var/log/zentinel/access.log"
+                        format "json"
+                        buffer-size 8192
+                    }
+                    error-log {
+                        enabled #true
+                        file "/var/log/zentinel/error.log"
+                        level "warn"
+                        buffer-size 4096
+                    }
+                    audit-log {
+                        enabled #true
+                        file "/var/log/zentinel/audit.log"
+                        buffer-size 4096
+                        log-blocked #true
+                        log-agent-decisions #true
+                        log-waf-events #true
+                    }
+                }
+                metrics {
+                    enabled #true
+                    address "0.0.0.0:9090"
+                    path "/metrics"
+                    high-cardinality #false
+                }
+                tracing {
+                    backend "otlp" {
+                        endpoint "http://localhost:4317"
+                    }
+                    sampling-rate 0.1
+                    service-name "zentinel"
+                }
+            }
+        "#;
+        assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    /// The access log takes `format`, the error log takes `level`. The two
+    /// blocks look alike, so each borrowing the other's setting must be caught.
+    #[test]
+    fn the_two_log_blocks_do_not_share_settings() {
+        let kdl = r#"
+            logging {
+                access-log { level "warn" }
+                error-log { format "json" }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        assert!(
+            warnings.iter().any(|w| w.contains("'level'")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("'format'")),
+            "{warnings:?}"
+        );
+    }
+
+    /// Three settings that the documentation describes and no parser reads.
+    /// They shipped in seven configs; removing them from those configs is not
+    /// enough on its own, so the check has to keep reporting them.
+    #[test]
+    fn documented_but_unimplemented_observability_settings_are_reported() {
+        let kdl = r#"
+            observability {
+                logging {
+                    timestamps #true
+                    access-log {
+                        include-trace-id #true
+                    }
+                }
+                tracing {
+                    enabled #true
+                    backend "otlp" {
+                        endpoint "http://localhost:4317"
+                    }
+                }
+            }
+        "#;
+        let warnings = warnings_for(kdl);
+        for key in ["timestamps", "include-trace-id", "enabled"] {
+            assert!(
+                warnings.iter().any(|w| w.contains(&format!("'{key}'"))),
+                "{key} is documented but read by nothing: {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_observability_block_is_reported() {
+        let kdl = r#"
+            observability {
+                profiling { enabled #true }
+            }
+        "#;
+        assert!(
+            warnings_for(kdl).iter().any(|w| w.contains("'profiling'")),
+            "{:?}",
+            warnings_for(kdl)
+        );
     }
 
     fn warning_texts(result: &ValidationResult) -> Vec<String> {

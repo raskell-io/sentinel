@@ -1288,6 +1288,47 @@ fn parse_rate_limit_key(key: &str) -> Result<RateLimitKey> {
 ///     }
 /// }
 /// ```
+/// Blocks `parse_observability_config` reads. It has no settings of its own.
+pub(crate) const RECOGNIZED_OBSERVABILITY_KEYS: &[&str] = &["logging", "metrics", "tracing"];
+
+/// Settings and blocks `parse_logging_config` reads.
+pub(crate) const RECOGNIZED_LOGGING_KEYS: &[&str] =
+    &["level", "format", "access-log", "error-log", "audit-log"];
+
+/// Settings `parse_access_log_config` reads.
+pub(crate) const RECOGNIZED_ACCESS_LOG_KEYS: &[&str] =
+    &["enabled", "file", "format", "buffer-size"];
+
+/// Settings `parse_error_log_config` reads.
+///
+/// Note this takes `level` where the access log takes `format`: the two log
+/// blocks look alike and accept different settings.
+pub(crate) const RECOGNIZED_ERROR_LOG_KEYS: &[&str] = &["enabled", "file", "level", "buffer-size"];
+
+/// Settings `parse_audit_log_config` reads.
+pub(crate) const RECOGNIZED_AUDIT_LOG_KEYS: &[&str] = &[
+    "enabled",
+    "file",
+    "buffer-size",
+    "log-blocked",
+    "log-agent-decisions",
+    "log-waf-events",
+];
+
+/// Settings `parse_metrics_config` reads.
+pub(crate) const RECOGNIZED_METRICS_KEYS: &[&str] =
+    &["enabled", "address", "path", "high-cardinality"];
+
+/// Settings and blocks `parse_tracing_config` reads.
+pub(crate) const RECOGNIZED_TRACING_KEYS: &[&str] = &["backend", "sampling-rate", "service-name"];
+
+/// Settings a tracing `backend` block reads.
+///
+/// The backend kind is the node's own argument (`backend "otlp" { ... }`) and
+/// all three kinds -- otlp, jaeger, zipkin -- take the same single setting, so
+/// one list covers them.
+pub(crate) const RECOGNIZED_TRACING_BACKEND_KEYS: &[&str] = &["endpoint"];
+
 pub fn parse_observability_config(node: &kdl::KdlNode) -> Result<ObservabilityConfig> {
     let mut config = ObservabilityConfig::default();
 

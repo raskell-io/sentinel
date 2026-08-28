@@ -417,7 +417,6 @@ observability {
     logging {
         level "info"  // "trace", "debug", "info", "warn", "error"
         format "json"  // "json" or "pretty"
-        timestamps #true
 
         // Access log - all HTTP requests with trace_id for correlation
         access-log {
@@ -425,7 +424,6 @@ observability {
             file "/var/log/zentinel/access.log"
             format "json"  // "json" or "combined"
             buffer-size 8192
-            include-trace-id #true
         }
 
         // Error log - warnings and errors
