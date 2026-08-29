@@ -45,11 +45,11 @@ timeout 30.5
 weight 1
 
 // Booleans
-enabled true
-disabled false
+enabled #true
+disabled #false
 
 // Null
-optional-field null
+optional-field #null
 ```
 
 ### Comments
@@ -145,12 +145,12 @@ server {
     worker-threads 0          // 0 = auto-detect CPU cores
     max-connections 10000
     graceful-shutdown-timeout-secs 30
-    daemon false
+    daemon #false
     pid-file "/var/run/zentinel.pid"
     user "zentinel"
     group "zentinel"
     trace-id-format "tinyflake"  // or "uuid"
-    auto-reload true
+    auto-reload #true
 }
 ```
 
@@ -177,8 +177,8 @@ listeners {
             cert-file "/etc/ssl/certs/server.crt"
             key-file "/etc/ssl/private/server.key"
             min-version "tls1.2"
-            client-auth false
-            ocsp-stapling true
+            client-auth #false
+            ocsp-stapling #true
 
             // SNI certificate for an additional domain.
             // NOTE: parsed and used for ACME issuance, but per-SNI
@@ -263,10 +263,10 @@ routes {
         matches {
             path-prefix "/admin"
             host "admin.example.com"
-            method ["GET" "POST"]
+            method "GET" "POST"
         }
         upstream "admin-backend"
-        waf-enabled true
+        waf-enabled #true
     }
 
     // Static file serving
@@ -279,7 +279,7 @@ routes {
             root "/var/www/static"
             index "index.html"
             cache-control "public, max-age=3600"
-            compress true
+            compress #true
         }
     }
 
@@ -324,10 +324,10 @@ routes {
                 set {
                     "X-Forwarded-Proto" "https"
                 }
-                remove ["X-Debug"]
+                remove "X-Debug"
             }
         }
-        filters ["auth" "rate-limit"]
+        filters "auth" "rate-limit"
     }
 }
 ```
@@ -378,7 +378,7 @@ upstreams {
 
         tls {
             sni "api.internal"
-            insecure-skip-verify false
+            insecure-skip-verify #false
             ca-cert "/etc/ssl/certs/internal-ca.crt"
         }
 
@@ -450,7 +450,7 @@ filters {
     // Compression filter
     filter "compress" {
         type "compress"
-        algorithms ["gzip" "brotli"]
+        algorithms "gzip" "brotli"
         min-size 1024
         level 6
     }
@@ -458,9 +458,9 @@ filters {
     // CORS filter
     filter "cors" {
         type "cors"
-        allowed-origins ["https://example.com"]
-        allowed-methods ["GET" "POST" "PUT" "DELETE"]
-        allow-credentials true
+        allowed-origins "https://example.com"
+        allowed-methods "GET" "POST" "PUT" "DELETE"
+        allow-credentials #true
         max-age-secs 86400
     }
 
@@ -469,7 +469,7 @@ filters {
         type "geo"
         database-path "/etc/zentinel/GeoLite2-Country.mmdb"
         action "block"
-        countries ["RU" "CN" "KP"]
+        countries "RU" "CN" "KP"
         on-failure "open"
     }
 
@@ -493,7 +493,7 @@ agents {
         transport {
             unix-socket "/var/run/waf-agent.sock"
         }
-        events ["request-headers" "request-body"]
+        events "request-headers" "request-body"
         timeout-ms 50
         failure-mode "open"
         max-request-body-bytes 1048576
@@ -506,12 +506,12 @@ agents {
             grpc {
                 address "localhost:50051"
                 tls {
-                    insecure-skip-verify false
+                    insecure-skip-verify #false
                     ca-cert "/etc/ssl/certs/ca.crt"
                 }
             }
         }
-        events ["request-headers"]
+        events "request-headers"
         timeout-ms 100
         failure-mode "closed"
         circuit-breaker {
@@ -528,7 +528,7 @@ agents {
 waf {
     engine "coraza"
     mode "prevention"  // or "detection", "off"
-    audit-log true
+    audit-log #true
 
     ruleset {
         crs-version "4.0"
@@ -538,22 +538,18 @@ waf {
 
         exclusions {
             exclusion {
-                rule-ids ["920170" "920180"]
+                rule-ids "920170" "920180"
                 scope "path" "/api/upload"
             }
         }
     }
 
     body-inspection {
-        inspect-request-body true
-        inspect-response-body false
+        inspect-request-body #true
+        inspect-response-body #false
         max-inspection-bytes 1048576
-        content-types [
-            "application/json"
-            "application/x-www-form-urlencoded"
-            "multipart/form-data"
-        ]
-        decompress false
+        content-types "application/json" "application/x-www-form-urlencoded" "multipart/form-data"
+        decompress #false
         max-decompression-ratio 100.0
     }
 }
@@ -564,10 +560,10 @@ waf {
 ```kdl
 observability {
     metrics {
-        enabled true
+        enabled #true
         address "0.0.0.0:9090"
         path "/metrics"
-        high-cardinality false
+        high-cardinality #false
     }
 
     logging {
@@ -576,24 +572,24 @@ observability {
         timestamps #true
 
         access-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/access.log"
             format "json"
             sample-rate 1.0
-            include-trace-id true
+            include-trace-id #true
         }
 
         error-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/error.log"
             level "warn"
         }
 
         audit-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/audit.log"
-            log-blocked true
-            log-waf-events true
+            log-blocked #true
+            log-waf-events #true
         }
     }
 
@@ -624,7 +620,7 @@ limits {
 
 ```kdl
 cache {
-    enabled true
+    enabled #true
     backend "memory"  // or "disk", "hybrid"
     max-size-bytes 104857600  // 100MB
     lock-timeout-secs 10
@@ -647,7 +643,7 @@ route "api" {
     upstream "api-backend"
     policies {
         cache {
-            enabled true
+            enabled #true
             default-ttl-secs 300
             vary-headers "Accept" "Accept-Encoding"
             stale-while-revalidate-secs 60
@@ -672,12 +668,12 @@ KDL properties use `kebab-case`:
 // Correct
 max-connections 1000
 request-timeout-secs 60
-waf-enabled true
+waf-enabled #true
 
 // Incorrect (will not parse correctly)
 maxConnections 1000
 request_timeout_secs 60
-wafEnabled true
+wafEnabled #true
 ```
 
 ## Lists and Arrays
@@ -686,31 +682,33 @@ Arrays are specified with brackets:
 
 ```kdl
 // Array of strings
-methods ["GET" "POST" "PUT"]
+methods "GET" "POST" "PUT"
 
 // Array in a match condition
 matches {
-    method ["GET" "POST"]
+    method "GET" "POST"
     path-prefix "/api"
 }
 
 // Array of numbers
-ports [8080 8081 8082]
+ports 8080 8081 8082
 ```
 
 ## Multi-Line Strings
 
-For long values, use raw strings:
+For long values, use a multi-line raw string. The `#` prefix means the contents
+are taken literally, so embedded quotes need no escaping, and the indentation of
+the closing delimiter is stripped from every line:
 
 ```kdl
-custom-error-page r#"
-<!DOCTYPE html>
-<html>
-<body>
-<h1>Error</h1>
-</body>
-</html>
-"#
+custom-error-page #"""
+    <!DOCTYPE html>
+    <html>
+    <body>
+    <h1>Error</h1>
+    </body>
+    </html>
+    """#
 ```
 
 ## Including Other Files

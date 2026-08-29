@@ -187,7 +187,7 @@ routes {
         }
         upstream "api-backend"
         service-type "api"
-        filters ["api-rate-limit" "security-headers"]
+        filters "api-rate-limit" "security-headers"
     }
 
     route "api-unauthorized" {
@@ -226,7 +226,7 @@ routes {
             index "index.html"
             fallback "index.html"  // SPA fallback
             cache-control "public, max-age=3600"
-            compress true
+            compress #true
             mime-types {
                 ".wasm" "application/wasm"
             }
@@ -237,14 +237,9 @@ routes {
 filters {
     filter "compress" {
         type "compress"
-        algorithms ["brotli" "gzip"]
+        algorithms "brotli" "gzip"
         min-size 1024
-        content-types [
-            "text/html"
-            "text/css"
-            "application/javascript"
-            "application/json"
-        ]
+        content-types "text/html" "text/css" "application/javascript" "application/json"
     }
 }
 ```
@@ -304,7 +299,7 @@ routes {
             host "admin.example.com"
         }
         upstream "admin-backend"
-        waf-enabled true
+        waf-enabled #true
     }
 
     route "main" {
@@ -324,7 +319,7 @@ schema-version "1.0"
 waf {
     engine "coraza"
     mode "prevention"
-    audit-log true
+    audit-log #true
 
     ruleset {
         crs-version "4.0"
@@ -334,26 +329,22 @@ waf {
         exclusions {
             // Exclude file upload endpoint from body inspection
             exclusion {
-                rule-ids ["920170" "920180"]
+                rule-ids "920170" "920180"
                 scope "path" "/api/upload"
             }
 
             // Exclude webhook endpoint
             exclusion {
-                rule-ids ["920170"]
+                rule-ids "920170"
                 scope "path" "/webhooks"
             }
         }
     }
 
     body-inspection {
-        inspect-request-body true
+        inspect-request-body #true
         max-inspection-bytes 1048576
-        content-types [
-            "application/json"
-            "application/x-www-form-urlencoded"
-            "multipart/form-data"
-        ]
+        content-types "application/json" "application/x-www-form-urlencoded" "multipart/form-data"
     }
 }
 
@@ -363,7 +354,7 @@ routes {
             path-prefix "/api"
         }
         upstream "api-backend"
-        waf-enabled true
+        waf-enabled #true
     }
 }
 ```
@@ -381,7 +372,7 @@ agents {
                 address "localhost:50051"
             }
         }
-        events ["request-headers"]
+        events "request-headers"
         timeout-ms 100
         failure-mode "closed"
         circuit-breaker {
@@ -406,7 +397,7 @@ routes {
             path-prefix "/api"
         }
         upstream "api-backend"
-        filters ["auth"]
+        filters "auth"
     }
 
     route "public" {
@@ -476,7 +467,7 @@ routes {
             }
             guardrails {
                 prompt-injection {
-                    enabled true
+                    enabled #true
                     agent "guardrail-agent"
                     action "block"
                 }
@@ -510,9 +501,9 @@ routes {
                     }
                 }
                 triggers {
-                    on-health-failure true
-                    on-budget-exhausted true
-                    on-error-codes [429 503]
+                    on-health-failure #true
+                    on-budget-exhausted #true
+                    on-error-codes 429 503
                 }
             }
         }
@@ -531,7 +522,7 @@ filters {
         type "geo"
         database-path "/etc/zentinel/GeoLite2-Country.mmdb"
         action "block"
-        countries ["RU" "CN" "KP" "IR"]
+        countries "RU" "CN" "KP" "IR"
         on-failure "open"
         status-code 403
         block-message "Access denied from your region"
@@ -542,7 +533,7 @@ filters {
         type "geo"
         database-path "/etc/zentinel/GeoLite2-Country.mmdb"
         action "allow"
-        countries ["US" "CA" "GB" "AU"]
+        countries "US" "CA" "GB" "AU"
         on-failure "closed"
     }
 }
@@ -553,7 +544,7 @@ routes {
             path-prefix "/api"
         }
         upstream "api-backend"
-        filters ["geo-block"]
+        filters "geo-block"
     }
 
     route "admin" {
@@ -561,7 +552,7 @@ routes {
             path-prefix "/admin"
         }
         upstream "admin-backend"
-        filters ["geo-allow"]  // Only US, CA, GB, AU
+        filters "geo-allow"  // Only US, CA, GB, AU
     }
 }
 ```
@@ -572,7 +563,7 @@ routes {
 schema-version "1.0"
 
 cache {
-    enabled true
+    enabled #true
     backend "memory"
     max-size-bytes 104857600  // 100MB
     lock-timeout-secs 10
@@ -586,15 +577,15 @@ routes {
         upstream "api-backend"
         policies {
             cache {
-                enabled true
+                enabled #true
                 default-ttl-secs 300  // 5 minutes
                 max-size-bytes 1048576  // 1MB per response
-                cacheable-methods ["GET" "HEAD"]
-                cacheable-status-codes [200 203 204 206 300 301]
+                cacheable-methods "GET" "HEAD"
+                cacheable-status-codes 200 203 204 206 300 301
                 stale-while-revalidate-secs 60
                 stale-if-error-secs 300
-                vary-headers ["Accept" "Accept-Encoding"]
-                ignore-query-params ["utm_source" "utm_campaign"]
+                vary-headers "Accept" "Accept-Encoding"
+                ignore-query-params "utm_source" "utm_campaign"
             }
         }
     }
@@ -625,7 +616,7 @@ routes {
         upstream "origin"
         policies {
             cache {
-                enabled true
+                enabled #true
                 default-ttl-secs 3600
 
                 // Don't cache dynamic file types
@@ -664,8 +655,8 @@ routes {
             path-prefix "/ws"
         }
         upstream "websocket-backend"
-        websocket true
-        websocket-inspection false  // Enable for content filtering
+        websocket #true
+        websocket-inspection #false  // Enable for content filtering
     }
 }
 
@@ -676,7 +667,7 @@ agents {
         transport {
             unix-socket "/var/run/ws-filter.sock"
         }
-        events ["websocket-frame"]
+        events "websocket-frame"
         timeout-ms 10
     }
 }
@@ -687,9 +678,9 @@ routes {
             path-prefix "/chat"
         }
         upstream "chat-backend"
-        websocket true
-        websocket-inspection true
-        filters ["ws-filter"]
+        websocket #true
+        websocket-inspection #true
+        filters "ws-filter"
     }
 }
 ```
@@ -719,7 +710,7 @@ routes {
             upstream "canary"
             percentage 10.0  // Mirror 10% of traffic
             timeout-ms 5000
-            buffer-body true
+            buffer-body #true
             max-body-bytes 1048576
         }
     }
@@ -733,7 +724,7 @@ schema-version "1.0"
 
 observability {
     metrics {
-        enabled true
+        enabled #true
         address "0.0.0.0:9090"
         path "/metrics"
     }
@@ -743,35 +734,35 @@ observability {
         format "json"
 
         access-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/access.log"
             format "json"
             sample-rate 1.0
-            include-trace-id true
+            include-trace-id #true
             fields {
-                timestamp true
-                trace-id true
-                method true
-                path true
-                status true
-                latency-ms true
-                client-ip true
-                user-agent true
+                timestamp #true
+                trace-id #true
+                method #true
+                path #true
+                status #true
+                latency-ms #true
+                client-ip #true
+                user-agent #true
             }
         }
 
         error-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/error.log"
             level "warn"
         }
 
         audit-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/audit.log"
-            log-blocked true
-            log-waf-events true
-            log-agent-decisions true
+            log-blocked #true
+            log-waf-events #true
+            log-agent-decisions #true
         }
     }
 
@@ -799,7 +790,7 @@ server {
     max-connections 50000
     graceful-shutdown-timeout-secs 60
     trace-id-format "uuid"
-    auto-reload false
+    auto-reload #false
 }
 
 listeners {
@@ -819,8 +810,8 @@ listeners {
             cert-file "/etc/ssl/certs/server.crt"
             key-file "/etc/ssl/private/server.key"
             min-version "tls1.2"
-            ocsp-stapling true
-            session-resumption true
+            ocsp-stapling #true
+            session-resumption #true
         }
     }
 

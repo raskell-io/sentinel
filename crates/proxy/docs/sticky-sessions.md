@@ -31,7 +31,7 @@ upstreams {
             cookie-name "SERVERID"
             cookie-ttl "1h"
             cookie-path "/"
-            cookie-secure true
+            cookie-secure #true
             cookie-same-site "lax"
             fallback "round-robin"
         }

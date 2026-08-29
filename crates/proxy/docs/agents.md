@@ -59,7 +59,7 @@ agents {
         transport {
             unix-socket "/var/run/waf-agent.sock"
         }
-        events ["request-headers", "request-body"]
+        events "request-headers" "request-body"
         timeout-ms 50
         failure-mode "open"
         max-request-body-bytes 1048576
@@ -82,12 +82,12 @@ agents {
             grpc {
                 address "localhost:50051"
                 tls {
-                    insecure-skip-verify false
+                    insecure-skip-verify #false
                     ca-cert "/etc/ssl/certs/ca.crt"
                 }
             }
         }
-        events ["request-headers"]
+        events "request-headers"
         timeout-ms 100
         failure-mode "closed"
 
@@ -108,7 +108,7 @@ routes {
             path-prefix "/api"
         }
         upstream "backend"
-        filters ["auth", "waf"]  // Agent filters
+        filters "auth" "waf"  // Agent filters
     }
 }
 
@@ -331,16 +331,12 @@ agent "waf-agent" {
 
 ```kdl
 agent "waf-agent" {
-    events ["request-headers", "request-body"]
+    events "request-headers" "request-body"
 
     body-handling {
         mode "buffer"
         max-bytes 1048576  // 1MB limit
-        content-types [
-            "application/json",
-            "application/x-www-form-urlencoded",
-            "multipart/form-data"
-        ]
+        content-types "application/json" "application/x-www-form-urlencoded" "multipart/form-data"
     }
 }
 ```
@@ -351,7 +347,7 @@ For large bodies, use chunk-based processing:
 
 ```kdl
 agent "content-filter" {
-    events ["request-headers", "request-body-chunk"]
+    events "request-headers" "request-body-chunk"
 
     body-handling {
         mode "stream"
@@ -483,20 +479,14 @@ agents {
         transport {
             unix-socket "/var/run/waf-agent.sock"
         }
-        events ["request-headers", "request-body"]
+        events "request-headers" "request-body"
         timeout-ms 50
         failure-mode "open"
 
         body-handling {
             mode "buffer"
             max-bytes 1048576
-            content-types [
-                "application/json",
-                "application/x-www-form-urlencoded",
-                "multipart/form-data",
-                "text/xml",
-                "application/xml"
-            ]
+            content-types "application/json" "application/x-www-form-urlencoded" "multipart/form-data" "text/xml" "application/xml"
         }
 
         circuit-breaker {
@@ -528,8 +518,8 @@ routes {
             path-prefix "/api"
         }
         upstream "backend"
-        filters ["waf"]
-        waf-enabled true
+        filters "waf"
+        waf-enabled #true
     }
 }
 ```
@@ -550,7 +540,7 @@ agents {
                 }
             }
         }
-        events ["request-headers"]
+        events "request-headers"
         timeout-ms 100
         failure-mode "closed"  // Block if auth fails
 
@@ -576,7 +566,7 @@ routes {
             path-prefix "/api/v1"
         }
         upstream "backend"
-        filters ["auth"]
+        filters "auth"
     }
 
     route "public-api" {

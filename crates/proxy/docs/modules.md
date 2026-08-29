@@ -357,7 +357,7 @@ route "/static" {
         index "index.html"
         fallback "index.html"
         cache-control "public, max-age=3600"
-        compress true
+        compress #true
     }
 }
 ```
@@ -398,8 +398,8 @@ pub struct WebSocketInspector {
 ```kdl
 route "/ws" {
     upstream "websocket-backend"
-    websocket true
-    websocket-inspection false
+    websocket #true
+    websocket-inspection #false
 }
 ```
 
@@ -428,7 +428,7 @@ route "/api" {
         upstream "canary-pool"
         percentage 10.0
         sample-header "X-Shadow" "true"
-        buffer-body true
+        buffer-body #true
     }
 }
 ```
@@ -543,9 +543,9 @@ listener "https" {
             key-file "/etc/certs/api.key"
         }
 
-        client-auth true
+        client-auth #true
         ca-file "/etc/certs/ca.crt"
-        ocsp-stapling true
+        ocsp-stapling #true
     }
 }
 ```
@@ -582,7 +582,7 @@ filter "geo-block" {
     database-path "/var/lib/GeoLite2-Country.mmdb"
     database-type "maxmind"
     action "block"
-    countries ["CN", "RU", "KP"]
+    countries "CN" "RU" "KP"
     fail-mode "open"
     cache-ttl 3600
 }

@@ -138,7 +138,7 @@ routes {
         upstream "api-cluster"
         retry-policy {
             max-retries 2
-            retry-on ["5xx", "connection-error"]
+            retry-on "5xx" "connection-error"
         }
     }
 }
@@ -185,7 +185,7 @@ routes {
             header name="X-API-Key"
         }
         upstream "api-backend"
-        filters ["api-rate-limit", "security-headers"]
+        filters "api-rate-limit" "security-headers"
     }
 
     route "api-unauthorized" {
@@ -232,7 +232,7 @@ routes {
             index "index.html"
             fallback "index.html"
             cache-control "public, max-age=3600"
-            compress true
+            compress #true
         }
     }
 }
@@ -295,7 +295,7 @@ routes {
             host "admin.example.com"
         }
         upstream "admin-backend"
-        waf-enabled true
+        waf-enabled #true
     }
 
     route "main" {
@@ -320,18 +320,14 @@ agents {
         transport {
             unix-socket "/var/run/waf-agent.sock"
         }
-        events ["request-headers", "request-body"]
+        events "request-headers" "request-body"
         timeout-ms 50
         failure-mode "open"
 
         body-handling {
             mode "buffer"
             max-bytes 1048576
-            content-types [
-                "application/json"
-                "application/x-www-form-urlencoded"
-                "multipart/form-data"
-            ]
+            content-types "application/json" "application/x-www-form-urlencoded" "multipart/form-data"
         }
     }
 }
@@ -356,18 +352,18 @@ routes {
             path-prefix "/api"
         }
         upstream "api-backend"
-        filters ["waf"]
-        waf-enabled true
+        filters "waf"
+        waf-enabled #true
     }
 }
 
 observability {
     logging {
         audit-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/audit.log"
-            log-blocked true
-            log-waf-events true
+            log-blocked #true
+            log-waf-events #true
         }
     }
 }
@@ -388,7 +384,7 @@ agents {
                 address "localhost:50051"
             }
         }
-        events ["request-headers"]
+        events "request-headers"
         timeout-ms 100
         failure-mode "closed"
         circuit-breaker {
@@ -419,7 +415,7 @@ routes {
             path-prefix "/api"
         }
         upstream "api-backend"
-        filters ["auth"]
+        filters "auth"
     }
 
     route "public" {
@@ -479,7 +475,7 @@ routes {
             budget {
                 daily-limit 1000000
                 monthly-limit 10000000
-                enforce true
+                enforce #true
             }
 
             model-routing {
@@ -498,9 +494,9 @@ routes {
                     }
                 }
                 triggers {
-                    on-health-failure true
-                    on-budget-exhausted true
-                    on-error-codes [429, 503]
+                    on-health-failure #true
+                    on-budget-exhausted #true
+                    on-error-codes 429 503
                 }
             }
         }
@@ -520,7 +516,7 @@ filters {
         type "geo"
         database-path "/etc/zentinel/GeoLite2-Country.mmdb"
         action "block"
-        countries ["RU", "CN", "KP", "IR"]
+        countries "RU" "CN" "KP" "IR"
         on-failure "open"
         status-code 403
     }
@@ -529,7 +525,7 @@ filters {
         type "geo"
         database-path "/etc/zentinel/GeoLite2-Country.mmdb"
         action "allow"
-        countries ["US", "CA", "GB", "AU"]
+        countries "US" "CA" "GB" "AU"
         on-failure "closed"
     }
 }
@@ -549,7 +545,7 @@ routes {
             path-prefix "/api"
         }
         upstream "api-backend"
-        filters ["geo-block"]
+        filters "geo-block"
     }
 
     route "admin" {
@@ -557,7 +553,7 @@ routes {
             path-prefix "/admin"
         }
         upstream "admin-backend"
-        filters ["geo-allow"]
+        filters "geo-allow"
     }
 }
 ```
@@ -585,7 +581,7 @@ routes {
             path-prefix "/ws"
         }
         upstream "websocket-backend"
-        websocket true
+        websocket #true
     }
 }
 ```
@@ -617,7 +613,7 @@ routes {
             upstream "canary"
             percentage 10.0
             timeout-ms 5000
-            buffer-body true
+            buffer-body #true
         }
     }
 }
@@ -631,7 +627,7 @@ Response caching with stale-while-revalidate:
 schema-version "1.0"
 
 cache {
-    enabled true
+    enabled #true
     backend "memory"
     max-size-bytes 104857600
 }
@@ -650,13 +646,13 @@ routes {
         upstream "api-backend"
         policies {
             cache {
-                enabled true
+                enabled #true
                 default-ttl-secs 300
-                cacheable-methods ["GET", "HEAD"]
-                cacheable-status-codes [200, 203, 204, 206, 300, 301]
+                cacheable-methods "GET" "HEAD"
+                cacheable-status-codes 200 203 204 206 300 301
                 stale-while-revalidate-secs 60
                 stale-if-error-secs 300
-                vary-headers ["Accept", "Accept-Encoding"]
+                vary-headers "Accept" "Accept-Encoding"
             }
         }
     }
@@ -672,7 +668,7 @@ schema-version "1.0"
 
 observability {
     metrics {
-        enabled true
+        enabled #true
         address "0.0.0.0:9090"
         path "/metrics"
     }
@@ -682,24 +678,24 @@ observability {
         format "json"
 
         access-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/access.log"
             format "json"
             sample-rate 1.0
-            include-trace-id true
+            include-trace-id #true
         }
 
         error-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/error.log"
             level "warn"
         }
 
         audit-log {
-            enabled true
+            enabled #true
             file "/var/log/zentinel/audit.log"
-            log-blocked true
-            log-waf-events true
+            log-blocked #true
+            log-waf-events #true
         }
     }
 
@@ -745,7 +741,7 @@ listeners {
             cert-file "/etc/ssl/certs/server.crt"
             key-file "/etc/ssl/private/server.key"
             min-version "tls1.2"
-            ocsp-stapling true
+            ocsp-stapling #true
         }
     }
 
