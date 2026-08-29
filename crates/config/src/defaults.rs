@@ -144,6 +144,19 @@ observability {
             enabled #false
         }
     }
+
+    // The standalone metrics server is off here because this configuration
+    // already serves /metrics from the admin listener above, via the builtin
+    // "metrics" route. Both default to 0.0.0.0:9090, so leaving it on makes the
+    // proxy fight itself for the port: the metrics server wins the bind and the
+    // admin listener retries forever.
+    //
+    // Turn it on when you want the scrape endpoint on a listener of its own,
+    // separate from anything serving client traffic, and give it a port that no
+    // listener uses.
+    metrics {
+        enabled #false
+    }
 }
 "#;
 

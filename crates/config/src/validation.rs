@@ -570,6 +570,24 @@ fn validate_routes(
     }
 }
 
+/// Whether two bind addresses contend for the same socket.
+///
+/// Compares parsed addresses rather than strings: `0.0.0.0:9090` and
+/// `127.0.0.1:9090` are different strings that cannot both be bound, because a
+/// wildcard bind covers every interface on that port. Unparseable addresses are
+/// treated as non-colliding — they are rejected elsewhere with a better message.
+fn addresses_collide(a: &str, b: &str) -> bool {
+    use std::net::SocketAddr;
+
+    let (Ok(a), Ok(b)) = (a.parse::<SocketAddr>(), b.parse::<SocketAddr>()) else {
+        return false;
+    };
+    if a.port() != b.port() {
+        return false;
+    }
+    a.ip() == b.ip() || a.ip().is_unspecified() || b.ip().is_unspecified()
+}
+
 fn validate_listeners(config: &Config, route_ids: &HashSet<&str>, errors: &mut Vec<String>) {
     trace!(
         listener_count = config.listeners.len(),
@@ -859,6 +877,36 @@ fn validate_duplicates(config: &Config, errors: &mut Vec<String>) {
                 "Duplicate listener address '{}'. Multiple listeners cannot bind to the same address.",
                 listener.address
             ));
+        }
+    }
+
+    // The standalone metrics server binds its own socket, outside Pingora's
+    // listeners, so a collision with one is not caught as a duplicate listener
+    // address. It is not reported as an error at bind time either: the metrics
+    // server wins the race and Pingora retries the listener forever, logging
+    // "address is in use, will try again" once a second and never starting.
+    // That was zentinelproxy/zentinel#432, hit by simply running with no config.
+    if config.observability.metrics.enabled {
+        let metrics_addr = &config.observability.metrics.address;
+        for listener in &config.listeners {
+            if addresses_collide(&listener.address, metrics_addr) {
+                warn!(
+                    listener_id = %listener.id,
+                    address = %listener.address,
+                    metrics_address = %metrics_addr,
+                    "Listener collides with the metrics server address"
+                );
+                errors.push(format!(
+                    "Listener '{}' binds '{}', which the metrics server also binds \
+                     (observability.metrics.address = '{}').\n\
+                     Both cannot have the port: the metrics server binds first and the \
+                     listener retries forever.\n\
+                     Give the metrics server a port of its own, or set \
+                     observability.metrics.enabled to #false if a route already serves \
+                     /metrics on this listener.",
+                    listener.id, listener.address, metrics_addr
+                ));
+            }
         }
     }
 
@@ -2398,5 +2446,91 @@ mod tests {
                 warnings
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod metrics_collision_tests {
+    use super::addresses_collide;
+    use crate::Config;
+
+    fn config_with(metrics: &str, listener_addr: &str) -> anyhow::Result<Config> {
+        let kdl = format!(
+            r#"
+schema-version "1.0"
+system {{ worker-threads 1 }}
+observability {{
+    metrics {{
+{metrics}
+    }}
+}}
+listeners {{
+    listener "admin" {{
+        address "{listener_addr}"
+    }}
+}}
+routes {{
+    route "r" {{
+        matches {{ path "/" }}
+        service-type "builtin"
+        builtin-handler "health"
+    }}
+}}
+"#
+        );
+        Config::from_kdl(&kdl)
+    }
+
+    /// The regression: running with no configuration at all started the metrics
+    /// server and a listener on the same port, and the listener retried forever.
+    #[test]
+    fn a_listener_on_the_metrics_port_is_rejected() {
+        let config = config_with(
+            "        enabled #true\n        address \"0.0.0.0:9090\"",
+            "0.0.0.0:9090",
+        )
+        .expect("parses");
+        let message = config
+            .validate()
+            .expect_err("a self-conflicting configuration must not validate")
+            .to_string();
+        assert!(
+            message.contains("metrics server also binds"),
+            "the error should explain the collision, got: {message}"
+        );
+    }
+
+    /// A wildcard bind takes the port on every interface, so it collides with a
+    /// specific address that a string comparison would call different.
+    #[test]
+    fn wildcard_and_specific_addresses_collide() {
+        assert!(addresses_collide("0.0.0.0:9090", "127.0.0.1:9090"));
+        assert!(addresses_collide("127.0.0.1:9090", "0.0.0.0:9090"));
+        assert!(addresses_collide("0.0.0.0:9090", "0.0.0.0:9090"));
+    }
+
+    #[test]
+    fn different_ports_do_not_collide() {
+        assert!(!addresses_collide("0.0.0.0:9090", "0.0.0.0:9091"));
+        assert!(!addresses_collide("127.0.0.1:9090", "127.0.0.2:9090"));
+    }
+
+    /// Disabling the metrics server frees the port, which is how the shipped
+    /// default configuration resolves this.
+    #[test]
+    fn a_disabled_metrics_server_does_not_collide() {
+        let config = config_with("        enabled #false", "0.0.0.0:9090").expect("parses");
+        config
+            .validate()
+            .expect("a disabled metrics server leaves the port to the listener");
+    }
+
+    /// The embedded default is what `zentinel` with no arguments runs.
+    #[test]
+    fn the_embedded_default_configuration_has_no_collision() {
+        let config = Config::default_embedded().expect("the shipped default must load");
+        config
+            .validate()
+            .expect("the shipped default must also validate cleanly");
     }
 }
