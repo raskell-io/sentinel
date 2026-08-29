@@ -217,6 +217,7 @@ pub use metrics::{MetricsManager, MetricsResponse};
 // Service discovery
 pub use discovery::{
     ConsulDiscovery, DiscoveryConfig, DiscoveryManager, DnsDiscovery, KubernetesDiscovery,
+    SrvDiscovery,
 };
 
 // Kubernetes kubeconfig parsing
