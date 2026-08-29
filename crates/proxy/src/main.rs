@@ -614,6 +614,94 @@ async fn initialize_acme(
     }))
 }
 
+/// Messages produced before the log subscriber exists.
+///
+/// Config discovery runs before logging is configured, because
+/// `logging { timestamps }` must be known to build the subscriber and a
+/// subscriber can only be installed once. Those messages are the ones that
+/// explain which configuration file the proxy actually chose, so they are held
+/// here and emitted the moment logging is up rather than dropped.
+///
+/// Bounded by construction: config discovery emits at most a handful of lines
+/// and runs exactly once.
+#[derive(Default)]
+struct StartupLog(Vec<(tracing::Level, String)>);
+
+impl StartupLog {
+    fn info(&mut self, message: String) {
+        self.0.push((tracing::Level::INFO, message));
+    }
+
+    fn warn(&mut self, message: String) {
+        self.0.push((tracing::Level::WARN, message));
+    }
+
+    /// Emit everything buffered, in the order it happened.
+    fn emit(self) {
+        for (level, message) in self.0 {
+            match level {
+                tracing::Level::WARN => warn!("{message}"),
+                _ => info!("{message}"),
+            }
+        }
+    }
+}
+
+/// Read the logging configuration the subscriber needs.
+///
+/// This parses the configuration a second time — `ZentinelProxy::new` parses it
+/// again for real — because the subscriber has to exist before the proxy is
+/// built. It happens once at startup and buys the ability to honour
+/// `logging { timestamps }` at all.
+///
+/// A configuration that fails to parse here is not reported as an error: the
+/// proxy is about to load the same file and will fail with a far better message
+/// than this function could. Defaults are used so that failure is still logged.
+fn resolve_logging_config(
+    config_path: Option<&str>,
+    startup_log: &mut StartupLog,
+) -> zentinel_config::LoggingConfig {
+    let parsed = match config_path {
+        Some(path) => zentinel_config::Config::from_file(path).ok(),
+        None => zentinel_config::Config::default_embedded().ok(),
+    };
+
+    match parsed {
+        Some(config) => config.observability.logging,
+        None => {
+            startup_log.warn(
+                "Could not read logging configuration; using defaults until the \
+                 configuration is loaded"
+                    .to_string(),
+            );
+            zentinel_config::LoggingConfig::default()
+        }
+    }
+}
+
+/// Install the log subscriber.
+///
+/// `timestamps` comes from `logging { timestamps }`. Turning it off is for
+/// environments whose log transport stamps arrival time itself — systemd
+/// journal, Docker, most log shippers — where a second timestamp on every line
+/// is noise.
+fn init_logging(verbose: bool, timestamps: bool) {
+    let log_level = if verbose { "debug" } else { "info" };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
+
+    // The two branches differ in the formatter's type, so they cannot be
+    // collapsed into one builder expression.
+    if timestamps {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .without_time()
+            .init();
+    }
+}
+
 /// Run the proxy server
 fn run_server(
     config_path: Option<String>,
@@ -621,14 +709,15 @@ fn run_server(
     daemon: bool,
     upgrade: bool,
 ) -> Result<()> {
-    // Initialize logging based on verbose flag
-    let log_level = if verbose { "debug" } else { "info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
-        )
-        .init();
+    // Logging is started further down, once the configuration has been read:
+    // `logging { timestamps }` has to be known before the subscriber is built,
+    // and a subscriber can only be installed once.
+    //
+    // Config discovery happens before that point and is exactly the diagnostic
+    // you want when the proxy loads a file you did not expect, so those messages
+    // are buffered here and emitted as soon as the subscriber exists rather than
+    // being lost.
+    let mut startup_log = StartupLog::default();
 
     // Build Pingora options
     let mut pingora_opt = Opt::default();
@@ -644,26 +733,33 @@ fn run_server(
         Some(path) => {
             let config_path = std::path::Path::new(&path);
             if config_path.exists() {
-                info!("Loading configuration from: {}", path);
+                startup_log.info(format!("Loading configuration from: {path}"));
                 Some(path)
             } else {
                 // Config file doesn't exist - create it with default content
-                info!("Configuration file not found: {}", path);
+                startup_log.info(format!("Configuration file not found: {path}"));
                 if let Err(e) = create_default_config_file(config_path) {
-                    warn!("Failed to create default config file: {}", e);
-                    info!("Using embedded default configuration instead");
+                    startup_log.warn(format!("Failed to create default config file: {e}"));
+                    startup_log.info("Using embedded default configuration instead".to_string());
                     None
                 } else {
-                    info!("Created default configuration at: {}", path);
+                    startup_log.info(format!("Created default configuration at: {path}"));
                     Some(path)
                 }
             }
         }
         None => {
-            info!("No configuration specified, using embedded default configuration");
+            startup_log.info(
+                "No configuration specified, using embedded default configuration".to_string(),
+            );
             None
         }
     };
+
+    // The subscriber can be built now that the configuration is known.
+    let logging = resolve_logging_config(effective_config_path.as_deref(), &mut startup_log);
+    init_logging(verbose, logging.timestamps);
+    startup_log.emit();
 
     // Create signal manager for cross-thread communication
     let signal_manager = Arc::new(SignalManager::new());

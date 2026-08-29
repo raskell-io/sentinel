@@ -573,7 +573,7 @@ observability {
     logging {
         level "info"
         format "json"
-        timestamps true
+        timestamps #true
 
         access-log {
             enabled true

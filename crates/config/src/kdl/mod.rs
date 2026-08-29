@@ -1292,8 +1292,14 @@ fn parse_rate_limit_key(key: &str) -> Result<RateLimitKey> {
 pub(crate) const RECOGNIZED_OBSERVABILITY_KEYS: &[&str] = &["logging", "metrics", "tracing"];
 
 /// Settings and blocks `parse_logging_config` reads.
-pub(crate) const RECOGNIZED_LOGGING_KEYS: &[&str] =
-    &["level", "format", "access-log", "error-log", "audit-log"];
+pub(crate) const RECOGNIZED_LOGGING_KEYS: &[&str] = &[
+    "level",
+    "format",
+    "timestamps",
+    "access-log",
+    "error-log",
+    "audit-log",
+];
 
 /// Settings `parse_access_log_config` reads.
 pub(crate) const RECOGNIZED_ACCESS_LOG_KEYS: &[&str] = &[
@@ -1373,6 +1379,9 @@ fn parse_logging_config(node: &kdl::KdlNode) -> Result<crate::observability::Log
     }
     if let Some(format) = get_string_entry(node, "format") {
         config.format = format;
+    }
+    if let Some(timestamps) = get_bool_entry(node, "timestamps") {
+        config.timestamps = timestamps;
     }
 
     // Parse child blocks
@@ -3422,6 +3431,80 @@ mod tests {
         assert_eq!(
             cbconfig.half_open_max_requests,
             cb_default.half_open_max_requests
+        );
+    }
+}
+
+#[cfg(test)]
+mod logging_timestamps_tests {
+    use crate::Config;
+
+    fn logging_config(timestamps: &str) -> crate::observability::LoggingConfig {
+        let kdl = format!(
+            r#"
+schema-version "1.0"
+system {{ worker-threads 1 }}
+observability {{
+    logging {{
+        level "info"
+        timestamps {timestamps}
+    }}
+}}
+listeners {{ listener "l" {{ address "127.0.0.1:8080" }} }}
+routes {{
+    route "r" {{
+        matches {{ path "/" }}
+        service-type "builtin"
+        builtin-handler "health"
+    }}
+}}
+"#
+        );
+        Config::from_kdl(&kdl)
+            .expect("config parses")
+            .observability
+            .logging
+    }
+
+    /// The regression: `timestamps` had a struct field and a documented KDL key,
+    /// but `parse_logging_config` never read it, so `#false` parsed to `true`
+    /// and the setting could not be turned off however it was written.
+    #[test]
+    fn timestamps_false_is_read_from_kdl() {
+        assert!(
+            !logging_config("#false").timestamps,
+            "timestamps #false must reach the struct"
+        );
+    }
+
+    #[test]
+    fn timestamps_true_is_read_from_kdl() {
+        assert!(logging_config("#true").timestamps);
+    }
+
+    /// Omitting it keeps the previous behaviour rather than silently disabling
+    /// timestamps for every existing configuration.
+    #[test]
+    fn timestamps_defaults_to_enabled() {
+        let kdl = r#"
+schema-version "1.0"
+system { worker-threads 1 }
+observability { logging { level "info" } }
+listeners { listener "l" { address "127.0.0.1:8080" } }
+routes {
+    route "r" {
+        matches { path "/" }
+        service-type "builtin"
+        builtin-handler "health"
+    }
+}
+"#;
+        assert!(
+            Config::from_kdl(kdl)
+                .expect("parses")
+                .observability
+                .logging
+                .timestamps
         );
     }
 }
