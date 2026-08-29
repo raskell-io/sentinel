@@ -108,8 +108,15 @@ limits {
     max-connections-per-client 100
 }
 
-// Metrics are served by the "metrics" builtin route on the admin listener.
+// Metrics are served by the "metrics" builtin route on the admin listener, so
+// the standalone metrics server stays off. Both default to port 9090: leaving it
+// enabled makes the proxy fight itself for the port, and the admin listener
+// retries forever without ever starting.
 observability {
+    metrics {
+        enabled #false
+    }
+
     logging {
         level "info"
         format "json"
