@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_12](#260812---2026-08-29) | 0.6.35 | 2026-08-29 | `Cache-Status` no longer erases what an upstream cache reported, so a Zentinel placed in front of another cache shows the whole path rather than only its own member |
 | [26.08_11](#260811---2026-08-29) | 0.6.34 | 2026-08-29 | Upstream `discovery` blocks now reach the proxy: targets are resolved from DNS, Consul, Kubernetes or a file before serving and refreshed in the background, where previously the block parsed into nothing and the upstream routed nowhere |
 | [26.08_10](#260810---2026-08-28) | 0.6.33 | 2026-08-28 | `tracing { enabled #false }` now actually disables tracing, having previously been read by nothing; the access log's `include-trace-id` is honoured |
 | [26.08_9](#26089---2026-08-28) | 0.6.32 | 2026-08-28 | Configuration checking now covers the observability blocks, completing #365; three settings the documentation describes and no parser reads are removed from the shipped configs |
@@ -75,6 +76,34 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.08_12] - 2026-08-29
+
+**Crate version:** 0.6.35
+
+### Fixed
+- **`Cache-Status` preserves an upstream cache's member.** The header was written
+  with `insert_header`, which replaces every existing value under that name.
+  RFC 9211 makes `Cache-Status` a List carrying one member per cache on the path,
+  ordered origin-closest first, and says a cache "SHOULD preserve the existing
+  field value, to allow debugging of the entire chain of caches handling the
+  request".
+
+  So a Zentinel placed in front of another cache erased whatever that cache
+  reported, leaving no way to tell which tier served a response. A response that
+  should read
+
+  ```
+  Cache-Status: origin-shield; hit, edge; fwd=miss
+  ```
+
+  arrived as `edge; fwd=miss` alone. This affected any deployment with a cache
+  upstream of Zentinel, not only Zentinel-to-Zentinel. (#397, #426)
+
+  Give each tier its own `status-header-name`: two nodes both defaulting to
+  `zentinel` produce members that are preserved but indistinguishable.
 
 ---
 
