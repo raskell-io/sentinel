@@ -158,7 +158,7 @@ route "/v1/chat/completions" {
             monthly-limit 10000000
 
             // Enforce budget (reject requests when exhausted)
-            enforce true
+            enforce #true
 
             // Alert when reaching threshold
             alert-threshold 0.8
@@ -227,7 +227,7 @@ Calculate dollar costs based on token usage and model pricing.
 route "/v1/chat/completions" {
     inference {
         cost-attribution {
-            enabled true
+            enabled #true
 
             pricing {
                 model "gpt-4*" {
@@ -249,7 +249,7 @@ route "/v1/chat/completions" {
             }
 
             // Add cost header to response
-            include-header true
+            include-header #true
             header-name "X-Inference-Cost"
         }
     }
@@ -296,18 +296,18 @@ route "/v1/chat/completions" {
     inference {
         guardrails {
             prompt-injection {
-                enabled true
+                enabled #true
                 agent "guardrail-agent"
                 action "block"
                 // Or "warn" to log but allow
             }
 
             pii-detection {
-                enabled true
+                enabled #true
                 agent "pii-agent"
                 action "redact"
                 // Types: ssn, credit-card, email, phone, etc.
-                types ["ssn", "credit-card"]
+                types "ssn" "credit-card"
             }
         }
     }
@@ -372,9 +372,9 @@ route "/v1/chat/completions" {
             }
 
             triggers {
-                on-health-failure true
-                on-budget-exhausted true
-                on-error-codes [429, 503]
+                on-health-failure #true
+                on-budget-exhausted #true
+                on-error-codes 429 503
             }
         }
     }
@@ -462,7 +462,7 @@ upstream "openai" {
         // Or send a minimal completion probe
         probe {
             model "gpt-3.5-turbo"
-            messages [{"role": "user", "content": "hi"}]
+            prompt "hi"
             max-tokens 1
         }
 
@@ -536,7 +536,7 @@ agents {
         transport {
             unix-socket "/var/run/guardrail.sock"
         }
-        events ["request-body"]
+        events "request-body"
         timeout-ms 100
     }
 }
@@ -562,12 +562,12 @@ routes {
             budget {
                 daily-limit 1000000
                 monthly-limit 10000000
-                enforce true
+                enforce #true
                 alert-threshold 0.8
             }
 
             cost-attribution {
-                enabled true
+                enabled #true
                 pricing {
                     model "gpt-4*" {
                         input-cost-per-million 30.0
@@ -582,7 +582,7 @@ routes {
 
             guardrails {
                 prompt-injection {
-                    enabled true
+                    enabled #true
                     agent "guardrail-agent"
                     action "block"
                 }
@@ -604,9 +604,9 @@ routes {
                     }
                 }
                 triggers {
-                    on-health-failure true
-                    on-budget-exhausted true
-                    on-error-codes [429, 503]
+                    on-health-failure #true
+                    on-budget-exhausted #true
+                    on-error-codes 429 503
                 }
             }
         }

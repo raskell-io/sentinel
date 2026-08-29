@@ -71,15 +71,15 @@ filters {
 ```kdl
 policies {
     rate-limit {
-        // Rate limit by API key
-        key "header" "X-API-Key"
+        // Rate limit by API key. The header name is part of the key string.
+        key "header:X-API-Key"
     }
 }
 
 policies {
     rate-limit {
-        // Rate limit by client IP + path
-        key "composite" ["client-ip", "path"]
+        // Rate limit by client IP and path together
+        key "client-ip-and-path"
     }
 }
 ```
@@ -231,7 +231,7 @@ distributed-rate-limit-memcached = ["memcached-rs"]
 ```kdl
 rate-limit-backend {
     type "memcached"
-    addresses ["memcached1:11211", "memcached2:11211"]
+    addresses "memcached1:11211" "memcached2:11211"
     pool-size 10
 }
 ```
@@ -382,8 +382,8 @@ upstreams {
             timeout-secs 30
 
             // What counts as failure
-            failure-statuses [500, 502, 503, 504]
-            failure-on-timeout true
+            failure-statuses 500 502 503 504
+            failure-on-timeout #true
         }
     }
 }
@@ -558,7 +558,7 @@ circuit-breaker {
     success-threshold 2
 
     // Only count real errors
-    failure-statuses [502, 503, 504]
+    failure-statuses 502 503 504
     // Don't count 500 (app errors) or 429 (rate limited)
 }
 ```

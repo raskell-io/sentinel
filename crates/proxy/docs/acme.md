@@ -345,7 +345,7 @@ listeners {
             acme {
                 email "admin@example.com"
                 domains "example.com" "www.example.com"
-                staging false
+                staging #false
                 storage "/var/lib/zentinel/acme"
                 renew-before-days 30
             }
@@ -363,7 +363,7 @@ listeners {
             acme {
                 email "admin@example.com"
                 domains "example.com" "*.example.com"
-                staging false
+                staging #false
                 storage "/var/lib/zentinel/acme"
                 renew-before-days 30
                 challenge-type "dns-01"
