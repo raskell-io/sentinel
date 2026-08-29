@@ -303,6 +303,14 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         keys: crate::kdl::upstreams::RECOGNIZED_UPSTREAM_TLS_KEYS,
     },
     ClosedBlock {
+        // The union of every discovery backend's settings. Keys belonging to a
+        // backend other than the one named are rejected by `parse_discovery`
+        // with a hard error, so this list only has to catch outright typos.
+        name: "discovery",
+        nesting: Nesting::In("upstream"),
+        keys: crate::kdl::upstreams::RECOGNIZED_DISCOVERY_KEYS,
+    },
+    ClosedBlock {
         name: "target",
         nesting: Nesting::Anywhere,
         keys: crate::kdl::upstreams::RECOGNIZED_TARGET_KEYS,

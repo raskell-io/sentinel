@@ -297,6 +297,22 @@ impl<T> ScopedRegistry<T> {
         old_items
     }
 
+    /// Replace the item stored under `canonical`, leaving the scope and export
+    /// indexes untouched.
+    ///
+    /// For items that are rebuilt in place — an upstream pool whose targets
+    /// service discovery has changed — where identity and visibility are
+    /// unchanged and only the value differs. Returns the previous item, or
+    /// `None` if nothing was registered under that id, in which case nothing is
+    /// inserted: this cannot be used to add an item, only to swap one.
+    pub async fn replace_item(&self, canonical: &str, item: Arc<T>) -> Option<Arc<T>> {
+        self.items
+            .write()
+            .await
+            .get_mut(canonical)
+            .map(|slot| std::mem::replace(slot, item))
+    }
+
     /// Get a snapshot of all items.
     pub async fn snapshot(&self) -> HashMap<String, Arc<T>> {
         self.items.read().await.clone()

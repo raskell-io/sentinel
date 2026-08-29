@@ -1130,6 +1130,146 @@ impl ServiceDiscovery for FileDiscovery {
     }
 }
 
+/// Build the discovery implementation described by `config`.
+///
+/// Split out of [`DiscoveryManager::register`] so an upstream pool can hold its
+/// own discovery source directly. A pool re-resolves on its own interval and has
+/// no use for the manager's registry, and building a fresh Consul or Kubernetes
+/// client on every refresh would mean a new connection every interval.
+///
+/// `upstream_id` is used only for logging.
+pub(crate) fn build_discovery(
+    upstream_id: &str,
+    config: DiscoveryConfig,
+) -> Arc<dyn ServiceDiscovery + Send + Sync> {
+    let discovery: Arc<dyn ServiceDiscovery + Send + Sync> = match config {
+        DiscoveryConfig::Static { backends } => {
+            let backend_set = backends
+                .iter()
+                .filter_map(|addr| {
+                    addr.to_socket_addrs()
+                        .ok()
+                        .and_then(|mut addrs| addrs.next())
+                        .map(|addr| Backend {
+                            addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),
+                            weight: 1,
+                            ext: http::Extensions::new(),
+                        })
+                })
+                .collect();
+
+            info!(
+                upstream_id = %upstream_id,
+                backend_count = backends.len(),
+                "Registered static service discovery"
+            );
+
+            Arc::new(StaticWrapper(StaticDiscovery::new(backend_set)))
+        }
+        DiscoveryConfig::Dns {
+            hostname,
+            port,
+            refresh_interval,
+        } => {
+            info!(
+                upstream_id = %upstream_id,
+                hostname = %hostname,
+                port = port,
+                refresh_interval_secs = refresh_interval.as_secs(),
+                "Registered DNS service discovery"
+            );
+
+            Arc::new(DnsDiscovery::new(hostname, port, refresh_interval))
+        }
+        DiscoveryConfig::DnsSrv {
+            service,
+            refresh_interval,
+        } => {
+            info!(
+                upstream_id = %upstream_id,
+                service = %service,
+                refresh_interval_secs = refresh_interval.as_secs(),
+                "DNS SRV discovery not yet fully implemented, using DNS A record fallback"
+            );
+
+            // DNS SRV requires async DNS resolver - fall back to regular DNS for now
+            // Extract hostname from service name (e.g., "_http._tcp.example.com" -> "example.com")
+            let hostname = service
+                .split('.')
+                .skip_while(|s| s.starts_with('_'))
+                .collect::<Vec<_>>()
+                .join(".");
+            Arc::new(DnsDiscovery::new(hostname, 80, refresh_interval))
+        }
+        DiscoveryConfig::Consul {
+            address,
+            service,
+            datacenter,
+            only_passing,
+            refresh_interval,
+            tag,
+        } => {
+            info!(
+                upstream_id = %upstream_id,
+                address = %address,
+                service = %service,
+                datacenter = datacenter.as_deref().unwrap_or("default"),
+                only_passing = only_passing,
+                refresh_interval_secs = refresh_interval.as_secs(),
+                "Registered Consul service discovery"
+            );
+
+            Arc::new(ConsulDiscovery::new(
+                address,
+                service,
+                datacenter,
+                only_passing,
+                refresh_interval,
+                tag,
+            ))
+        }
+        DiscoveryConfig::Kubernetes {
+            namespace,
+            service,
+            port_name,
+            refresh_interval,
+            kubeconfig,
+        } => {
+            info!(
+                upstream_id = %upstream_id,
+                namespace = %namespace,
+                service = %service,
+                port_name = port_name.as_deref().unwrap_or("default"),
+                refresh_interval_secs = refresh_interval.as_secs(),
+                "Registered Kubernetes endpoint discovery"
+            );
+
+            Arc::new(KubernetesDiscovery::new(
+                namespace,
+                service,
+                port_name,
+                refresh_interval,
+                kubeconfig,
+            ))
+        }
+        DiscoveryConfig::File {
+            path,
+            watch_interval,
+        } => {
+            info!(
+                upstream_id = %upstream_id,
+                path = %path,
+                watch_interval_secs = watch_interval.as_secs(),
+                "Registered file-based service discovery"
+            );
+
+            Arc::new(FileDiscovery::new(path, watch_interval))
+        }
+    };
+
+    discovery
+}
+
 // ============================================================================
 // Service Discovery Manager
 // ============================================================================
@@ -1153,130 +1293,7 @@ impl DiscoveryManager {
 
     /// Register a service discovery for an upstream
     pub fn register(&self, upstream_id: &str, config: DiscoveryConfig) -> Result<(), Box<Error>> {
-        let discovery: Arc<dyn ServiceDiscovery + Send + Sync> = match config {
-            DiscoveryConfig::Static { backends } => {
-                let backend_set = backends
-                    .iter()
-                    .filter_map(|addr| {
-                        addr.to_socket_addrs()
-                            .ok()
-                            .and_then(|mut addrs| addrs.next())
-                            .map(|addr| Backend {
-                                addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),
-                                weight: 1,
-                                ext: http::Extensions::new(),
-                            })
-                    })
-                    .collect();
-
-                info!(
-                    upstream_id = %upstream_id,
-                    backend_count = backends.len(),
-                    "Registered static service discovery"
-                );
-
-                Arc::new(StaticWrapper(StaticDiscovery::new(backend_set)))
-            }
-            DiscoveryConfig::Dns {
-                hostname,
-                port,
-                refresh_interval,
-            } => {
-                info!(
-                    upstream_id = %upstream_id,
-                    hostname = %hostname,
-                    port = port,
-                    refresh_interval_secs = refresh_interval.as_secs(),
-                    "Registered DNS service discovery"
-                );
-
-                Arc::new(DnsDiscovery::new(hostname, port, refresh_interval))
-            }
-            DiscoveryConfig::DnsSrv {
-                service,
-                refresh_interval,
-            } => {
-                info!(
-                    upstream_id = %upstream_id,
-                    service = %service,
-                    refresh_interval_secs = refresh_interval.as_secs(),
-                    "DNS SRV discovery not yet fully implemented, using DNS A record fallback"
-                );
-
-                // DNS SRV requires async DNS resolver - fall back to regular DNS for now
-                // Extract hostname from service name (e.g., "_http._tcp.example.com" -> "example.com")
-                let hostname = service
-                    .split('.')
-                    .skip_while(|s| s.starts_with('_'))
-                    .collect::<Vec<_>>()
-                    .join(".");
-                Arc::new(DnsDiscovery::new(hostname, 80, refresh_interval))
-            }
-            DiscoveryConfig::Consul {
-                address,
-                service,
-                datacenter,
-                only_passing,
-                refresh_interval,
-                tag,
-            } => {
-                info!(
-                    upstream_id = %upstream_id,
-                    address = %address,
-                    service = %service,
-                    datacenter = datacenter.as_deref().unwrap_or("default"),
-                    only_passing = only_passing,
-                    refresh_interval_secs = refresh_interval.as_secs(),
-                    "Registered Consul service discovery"
-                );
-
-                Arc::new(ConsulDiscovery::new(
-                    address,
-                    service,
-                    datacenter,
-                    only_passing,
-                    refresh_interval,
-                    tag,
-                ))
-            }
-            DiscoveryConfig::Kubernetes {
-                namespace,
-                service,
-                port_name,
-                refresh_interval,
-                kubeconfig,
-            } => {
-                info!(
-                    upstream_id = %upstream_id,
-                    namespace = %namespace,
-                    service = %service,
-                    port_name = port_name.as_deref().unwrap_or("default"),
-                    refresh_interval_secs = refresh_interval.as_secs(),
-                    "Registered Kubernetes endpoint discovery"
-                );
-
-                Arc::new(KubernetesDiscovery::new(
-                    namespace,
-                    service,
-                    port_name,
-                    refresh_interval,
-                    kubeconfig,
-                ))
-            }
-            DiscoveryConfig::File {
-                path,
-                watch_interval,
-            } => {
-                info!(
-                    upstream_id = %upstream_id,
-                    path = %path,
-                    watch_interval_secs = watch_interval.as_secs(),
-                    "Registered file-based service discovery"
-                );
-
-                Arc::new(FileDiscovery::new(path, watch_interval))
-            }
-        };
+        let discovery = build_discovery(upstream_id, config);
 
         self.discoveries
             .write()

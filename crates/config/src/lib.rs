@@ -120,8 +120,8 @@ pub use zentinel_common::budget::{
 
 // Upstreams
 pub use upstreams::{
-    ConnectionPoolConfig, HealthCheck, HttpVersionConfig, UpstreamConfig, UpstreamPeer,
-    UpstreamTarget, UpstreamTimeouts, UpstreamTlsConfig,
+    ConnectionPoolConfig, HealthCheck, HttpVersionConfig, UpstreamConfig, UpstreamDiscovery,
+    UpstreamPeer, UpstreamTarget, UpstreamTimeouts, UpstreamTlsConfig,
 };
 
 // Validation
@@ -750,7 +750,9 @@ impl Config {
 
     fn validate_upstreams(&self) -> ZentinelResult<()> {
         for (id, upstream) in &self.upstreams {
-            if upstream.targets.is_empty() {
+            // Discovery-backed upstreams are populated at runtime; see
+            // `validate_upstream` in `validation.rs` for the same exemption.
+            if upstream.targets.is_empty() && upstream.discovery.is_none() {
                 return Err(ZentinelError::Config {
                     message: format!("Upstream '{}' has no targets", id),
                     source: None,
@@ -807,6 +809,7 @@ impl Config {
                 timeouts: UpstreamTimeouts::default(),
                 tls: None,
                 http_version: HttpVersionConfig::default(),
+                discovery: None,
             },
         );
 

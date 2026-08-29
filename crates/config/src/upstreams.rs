@@ -91,8 +91,11 @@ pub struct UpstreamConfig {
     /// Unique upstream identifier
     pub id: String,
 
-    /// Upstream targets
-    #[validate(length(min = 1, message = "At least one target is required"))]
+    /// Upstream targets.
+    ///
+    /// May be empty when `discovery` is set; the emptiness check lives in
+    /// `validate_targets_present` rather than a `length(min = 1)` attribute so
+    /// it can take `discovery` into account.
     pub targets: Vec<UpstreamTarget>,
 
     /// Load balancing algorithm
@@ -122,6 +125,161 @@ pub struct UpstreamConfig {
     /// HTTP version configuration
     #[serde(default)]
     pub http_version: HttpVersionConfig,
+
+    /// Service discovery source for this upstream's targets.
+    ///
+    /// When set, `targets` may be left empty in the configuration: the pool is
+    /// populated from the discovery source at startup and refreshed on the
+    /// source's interval. Statically configured targets are kept and the
+    /// discovered ones are added to them, so a fixed target can be pinned
+    /// alongside a discovered set.
+    #[serde(default)]
+    pub discovery: Option<UpstreamDiscovery>,
+}
+
+// ============================================================================
+// Service Discovery
+// ============================================================================
+
+/// Where an upstream's targets come from, when they are not listed statically.
+///
+/// This mirrors the discovery backends implemented in `zentinel-proxy`'s
+/// `discovery` module. It is a separate type because `zentinel-config` may not
+/// depend on the proxy crate, and because the configuration surface is
+/// deliberately narrower than the runtime one: intervals are plain seconds
+/// here and become `Duration`s on conversion.
+///
+/// Every variant carries its own refresh interval. The pool is populated once
+/// before it starts serving traffic and re-resolved on that interval for as
+/// long as the proxy runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum UpstreamDiscovery {
+    /// A fixed list of backends. Equivalent to listing `target` nodes, and
+    /// present so that a config can be moved between discovery backends
+    /// without changing shape.
+    Static {
+        /// Backend addresses in `host:port` form.
+        backends: Vec<String>,
+    },
+
+    /// A/AAAA records for a hostname, one target per address returned.
+    Dns {
+        /// Hostname to resolve.
+        hostname: String,
+        /// Port to pair with every resolved address.
+        port: u16,
+        /// Seconds between re-resolutions.
+        #[serde(default = "default_refresh_interval")]
+        refresh_interval_secs: u64,
+    },
+
+    /// SRV records, which carry the port and weight themselves.
+    DnsSrv {
+        /// Full SRV name, e.g. `_http._tcp.example.com`.
+        service: String,
+        /// Seconds between re-resolutions.
+        #[serde(default = "default_refresh_interval")]
+        refresh_interval_secs: u64,
+    },
+
+    /// Healthy instances of a Consul service.
+    Consul {
+        /// Consul HTTP API base URL.
+        address: String,
+        /// Service name to look up.
+        service: String,
+        /// Datacenter, when not the agent's own.
+        datacenter: Option<String>,
+        /// Restrict to instances passing all their health checks.
+        #[serde(default = "default_only_passing")]
+        only_passing: bool,
+        /// Seconds between re-resolutions.
+        #[serde(default = "default_refresh_interval")]
+        refresh_interval_secs: u64,
+        /// Restrict to instances carrying this tag.
+        tag: Option<String>,
+    },
+
+    /// Endpoints backing a Kubernetes service.
+    Kubernetes {
+        /// Namespace holding the service.
+        namespace: String,
+        /// Service name.
+        service: String,
+        /// Named port to select, when the service exposes more than one.
+        port_name: Option<String>,
+        /// Seconds between re-resolutions.
+        #[serde(default = "default_refresh_interval")]
+        refresh_interval_secs: u64,
+        /// Explicit kubeconfig path; in-cluster config is used when absent.
+        kubeconfig: Option<String>,
+    },
+
+    /// A file listing one `host:port` per line, re-read on an interval.
+    File {
+        /// Path to the backend list.
+        path: String,
+        /// Seconds between re-reads.
+        #[serde(default = "default_watch_interval")]
+        watch_interval_secs: u64,
+    },
+}
+
+impl UpstreamDiscovery {
+    /// How often this source is re-resolved.
+    ///
+    /// `Static` never changes, so it reports zero and the proxy skips
+    /// scheduling a refresh task for it.
+    pub fn refresh_interval_secs(&self) -> u64 {
+        match self {
+            Self::Static { .. } => 0,
+            Self::Dns {
+                refresh_interval_secs,
+                ..
+            }
+            | Self::DnsSrv {
+                refresh_interval_secs,
+                ..
+            }
+            | Self::Consul {
+                refresh_interval_secs,
+                ..
+            }
+            | Self::Kubernetes {
+                refresh_interval_secs,
+                ..
+            } => *refresh_interval_secs,
+            Self::File {
+                watch_interval_secs,
+                ..
+            } => *watch_interval_secs,
+        }
+    }
+
+    /// The discovery backend's name as written in KDL, for logs and errors.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Static { .. } => "static",
+            Self::Dns { .. } => "dns",
+            Self::DnsSrv { .. } => "dns-srv",
+            Self::Consul { .. } => "consul",
+            Self::Kubernetes { .. } => "kubernetes",
+            Self::File { .. } => "file",
+        }
+    }
+}
+
+fn default_refresh_interval() -> u64 {
+    30
+}
+
+fn default_watch_interval() -> u64 {
+    5
+}
+
+fn default_only_passing() -> bool {
+    true
 }
 
 /// HTTP version configuration for upstream connections
