@@ -76,6 +76,44 @@ impl ZentinelProxy {
     }
 }
 
+/// One RFC 9211 `Cache-Status` List member describing what this cache did.
+///
+/// Callers append this rather than replacing the field: the header carries one
+/// member per cache on the path, ordered origin-closest first, and RFC 9211
+/// says a cache "SHOULD preserve the existing field value, to allow debugging
+/// of the entire chain of caches handling the request".
+fn cache_status_member(cache_name: &str, status: &super::context::CacheStatus) -> String {
+    use super::context::CacheStatus;
+    match status {
+        CacheStatus::HitMemory => format!("{cache_name}; hit; detail=memory"),
+        CacheStatus::HitDisk => format!("{cache_name}; hit; detail=disk"),
+        CacheStatus::Hit => format!("{cache_name}; hit"),
+        CacheStatus::HitStale => format!("{cache_name}; fwd=stale"),
+        CacheStatus::Miss => format!("{cache_name}; fwd=miss"),
+        CacheStatus::Bypass(reason) => match *reason {
+            "method" => format!("{cache_name}; fwd=bypass; detail=method"),
+            "disabled" => format!("{cache_name}; fwd=bypass; detail=disabled"),
+            "no-route" => format!("{cache_name}; fwd=bypass; detail=no-route"),
+            _ => format!("{cache_name}; fwd=bypass"),
+        },
+    }
+}
+
+/// Record this cache's outcome on `response`, preserving any member an upstream
+/// cache already recorded.
+///
+/// This owns the write rather than leaving it at the call site so the
+/// append-don't-replace behaviour is covered by a test; `insert_header` here
+/// would erase the rest of the chain.
+fn apply_cache_status(
+    response: &mut pingora::http::ResponseHeader,
+    cache_name: &str,
+    status: &super::context::CacheStatus,
+) {
+    let member = cache_status_member(cache_name, status);
+    response.append_header("Cache-Status", &member).ok();
+}
+
 #[async_trait]
 impl ProxyHttp for ZentinelProxy {
     type CTX = RequestContext;
@@ -1989,24 +2027,7 @@ impl ProxyHttp for ZentinelProxy {
                     .map(|c| c.status_header_name.as_str())
                     .unwrap_or("zentinel");
 
-                let value = match cache_status {
-                    super::context::CacheStatus::HitMemory => {
-                        format!("{cache_name}; hit; detail=memory")
-                    }
-                    super::context::CacheStatus::HitDisk => {
-                        format!("{cache_name}; hit; detail=disk")
-                    }
-                    super::context::CacheStatus::Hit => format!("{cache_name}; hit"),
-                    super::context::CacheStatus::HitStale => format!("{cache_name}; fwd=stale"),
-                    super::context::CacheStatus::Miss => format!("{cache_name}; fwd=miss"),
-                    super::context::CacheStatus::Bypass(reason) => match *reason {
-                        "method" => format!("{cache_name}; fwd=bypass; detail=method"),
-                        "disabled" => format!("{cache_name}; fwd=bypass; detail=disabled"),
-                        "no-route" => format!("{cache_name}; fwd=bypass; detail=no-route"),
-                        _ => format!("{cache_name}; fwd=bypass"),
-                    },
-                };
-                upstream_response.insert_header("Cache-Status", &value).ok();
+                apply_cache_status(upstream_response, cache_name, cache_status);
             }
         }
 
@@ -4290,5 +4311,85 @@ impl ZentinelProxy {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod cache_status_tests {
+    use super::{apply_cache_status, cache_status_member};
+    use crate::proxy::context::CacheStatus;
+    use pingora::http::ResponseHeader;
+
+    #[test]
+    fn members_describe_each_outcome() {
+        assert_eq!(cache_status_member("edge", &CacheStatus::Hit), "edge; hit");
+        assert_eq!(
+            cache_status_member("edge", &CacheStatus::HitMemory),
+            "edge; hit; detail=memory"
+        );
+        assert_eq!(
+            cache_status_member("edge", &CacheStatus::HitDisk),
+            "edge; hit; detail=disk"
+        );
+        assert_eq!(
+            cache_status_member("edge", &CacheStatus::HitStale),
+            "edge; fwd=stale"
+        );
+        assert_eq!(
+            cache_status_member("edge", &CacheStatus::Miss),
+            "edge; fwd=miss"
+        );
+        assert_eq!(
+            cache_status_member("edge", &CacheStatus::Bypass("method")),
+            "edge; fwd=bypass; detail=method"
+        );
+    }
+
+    /// The regression: a response that already carries a `Cache-Status` from a
+    /// cache nearer the origin must keep it. Zentinel used `insert_header`,
+    /// which pingora documents as replacing every existing value under that
+    /// name, so putting Zentinel in front of another cache erased the other
+    /// cache's report — the tiered topology in zentinelproxy/zentinel#397 could
+    /// not be observed at all.
+    #[test]
+    fn appending_preserves_an_upstream_caches_member() {
+        let mut response = ResponseHeader::build(200, None).expect("response builds");
+        // What a shield tier nearer the origin already reported.
+        response
+            .append_header("Cache-Status", "origin-shield; hit")
+            .expect("shield member set");
+
+        apply_cache_status(&mut response, "edge", &CacheStatus::Miss);
+
+        let members: Vec<&str> = response
+            .headers
+            .get_all("Cache-Status")
+            .iter()
+            .map(|v| v.to_str().expect("ascii"))
+            .collect();
+
+        assert_eq!(
+            members,
+            vec!["origin-shield; hit", "edge; fwd=miss"],
+            "both caches must appear, origin-closest first (RFC 9211 s.2)"
+        );
+    }
+
+    /// Guard against a future edit reaching for `insert_header` again.
+    #[test]
+    fn inserting_would_destroy_the_chain() {
+        let mut response = ResponseHeader::build(200, None).expect("response builds");
+        response
+            .append_header("Cache-Status", "origin-shield; hit")
+            .expect("shield member set");
+        response
+            .insert_header("Cache-Status", "edge; fwd=miss")
+            .expect("insert");
+
+        assert_eq!(
+            response.headers.get_all("Cache-Status").iter().count(),
+            1,
+            "insert_header replaces; this test documents why append is required"
+        );
     }
 }
