@@ -228,6 +228,208 @@ impl ServiceDiscovery for DnsDiscovery {
 }
 
 // ============================================================================
+// DNS SRV Service Discovery
+// ============================================================================
+
+/// SRV-record service discovery.
+///
+/// Unlike [`DnsDiscovery`], the port comes from the record rather than the
+/// configuration, which is the point of SRV: a service can move ports without
+/// the client being reconfigured.
+///
+/// Selection follows RFC 2782. Only the lowest-numbered priority present is
+/// used — higher numbers are standby targets, and returning them alongside the
+/// active set would send live traffic to backups. Within that priority the
+/// record's weight becomes the backend weight, so an operator's SRV weighting
+/// reaches the load balancer.
+pub struct SrvDiscovery {
+    service: String,
+    refresh_interval: Duration,
+    /// Cached backends
+    cached_backends: RwLock<BTreeSet<Backend>>,
+    /// Last resolution time
+    last_resolution: RwLock<Instant>,
+}
+
+impl SrvDiscovery {
+    /// Create a new SRV discovery instance
+    pub fn new(service: String, refresh_interval: Duration) -> Self {
+        Self {
+            service,
+            refresh_interval,
+            cached_backends: RwLock::new(BTreeSet::new()),
+            last_resolution: RwLock::new(Instant::now() - refresh_interval),
+        }
+    }
+
+    /// Whether the cache is due for refresh.
+    fn needs_refresh(&self) -> bool {
+        let last = *self.last_resolution.read();
+        last.elapsed() >= self.refresh_interval
+    }
+
+    /// Look the service up and resolve each SRV target to addresses.
+    async fn resolve(&self) -> Result<BTreeSet<Backend>, Box<Error>> {
+        use hickory_resolver::proto::rr::{RData, RecordType};
+        use hickory_resolver::TokioResolver;
+
+        trace!(service = %self.service, "Resolving SRV records for service discovery");
+
+        let resolver = TokioResolver::builder_tokio()
+            .and_then(|builder| builder.build())
+            .map_err(|e| {
+                Error::explain(
+                    ErrorType::ConnectNoRoute,
+                    format!("could not build DNS resolver for '{}': {e}", self.service),
+                )
+            })?;
+
+        let lookup = resolver
+            .lookup(self.service.as_str(), RecordType::SRV)
+            .await
+            .map_err(|e| {
+                Error::explain(
+                    ErrorType::ConnectNoRoute,
+                    format!("SRV lookup failed for '{}': {e}", self.service),
+                )
+            })?;
+
+        let records: Vec<_> = lookup
+            .answers()
+            .iter()
+            .filter_map(|record| match &record.data {
+                RData::SRV(srv) => Some(srv),
+                _ => None,
+            })
+            .collect();
+
+        if records.is_empty() {
+            return Err(Error::explain(
+                ErrorType::ConnectNoRoute,
+                format!("no SRV records returned for '{}'", self.service),
+            ));
+        }
+
+        let (best_priority, active) = select_active_srv(&records).ok_or_else(|| {
+            Error::explain(
+                ErrorType::ConnectNoRoute,
+                format!(
+                    "SRV target for '{}' is '.', service explicitly unavailable",
+                    self.service
+                ),
+            )
+        })?;
+
+        let mut backends = BTreeSet::new();
+        for srv in active {
+            let target = srv.target.to_utf8();
+
+            // The SRV target is a hostname; it still needs A/AAAA resolution.
+            let ips = match resolver.lookup_ip(target.as_str()).await {
+                Ok(ips) => ips,
+                Err(e) => {
+                    // One unresolvable target should not discard the rest.
+                    warn!(
+                        service = %self.service,
+                        target = %target,
+                        error = %e,
+                        "SRV target did not resolve, skipping it"
+                    );
+                    continue;
+                }
+            };
+
+            for ip in ips.iter() {
+                backends.insert(Backend {
+                    addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(
+                        std::net::SocketAddr::new(ip, srv.port),
+                    ),
+                    // SRV weight 0 means "no preference", not "never pick me";
+                    // a zero weight here would exclude the backend entirely.
+                    weight: usize::from(srv.weight).max(1),
+                    ext: http::Extensions::new(),
+                });
+            }
+        }
+
+        if backends.is_empty() {
+            return Err(Error::explain(
+                ErrorType::ConnectNoRoute,
+                format!(
+                    "no SRV target resolved to an address for '{}'",
+                    self.service
+                ),
+            ));
+        }
+
+        debug!(
+            service = %self.service,
+            priority = best_priority,
+            backend_count = backends.len(),
+            "SRV resolution successful"
+        );
+
+        Ok(backends)
+    }
+}
+
+/// Pick the SRV records that should receive traffic, per RFC 2782.
+///
+/// Returns the winning priority and its records, or `None` when the answer is
+/// the single root target `.`, which RFC 2782 defines as "the service is
+/// decidedly not available at this domain".
+///
+/// Only the lowest-numbered priority is returned: higher numbers are standby
+/// targets, and mixing them into the active set would send live traffic to
+/// backups. Records whose target is the root are dropped from the active set
+/// rather than resolved.
+fn select_active_srv<'a>(
+    records: &'a [&'a hickory_resolver::proto::rr::rdata::SRV],
+) -> Option<(u16, Vec<&'a hickory_resolver::proto::rr::rdata::SRV>)> {
+    let best_priority = records.iter().map(|srv| srv.priority).min()?;
+    let active: Vec<_> = records
+        .iter()
+        .copied()
+        .filter(|srv| srv.priority == best_priority && !srv.target.is_root())
+        .collect();
+
+    if active.is_empty() {
+        return None;
+    }
+    Some((best_priority, active))
+}
+
+#[async_trait]
+impl ServiceDiscovery for SrvDiscovery {
+    async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>)> {
+        if self.needs_refresh() {
+            match self.resolve().await {
+                Ok(backends) => {
+                    *self.cached_backends.write() = backends;
+                    *self.last_resolution.write() = Instant::now();
+                }
+                Err(e) => {
+                    let cached = self.cached_backends.read().clone();
+                    if !cached.is_empty() {
+                        warn!(
+                            service = %self.service,
+                            error = %e,
+                            cached_count = cached.len(),
+                            "SRV resolution failed, using cached backends"
+                        );
+                        return Ok((cached, HashMap::new()));
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        let backends = self.cached_backends.read().clone();
+        Ok((backends, HashMap::new()))
+    }
+}
+
+// ============================================================================
 // Consul Service Discovery
 // ============================================================================
 
@@ -1189,17 +1391,10 @@ pub(crate) fn build_discovery(
                 upstream_id = %upstream_id,
                 service = %service,
                 refresh_interval_secs = refresh_interval.as_secs(),
-                "DNS SRV discovery not yet fully implemented, using DNS A record fallback"
+                "Registered DNS SRV service discovery"
             );
 
-            // DNS SRV requires async DNS resolver - fall back to regular DNS for now
-            // Extract hostname from service name (e.g., "_http._tcp.example.com" -> "example.com")
-            let hostname = service
-                .split('.')
-                .skip_while(|s| s.starts_with('_'))
-                .collect::<Vec<_>>()
-                .join(".");
-            Arc::new(DnsDiscovery::new(hostname, 80, refresh_interval))
+            Arc::new(SrvDiscovery::new(service, refresh_interval))
         }
         DiscoveryConfig::Consul {
             address,
@@ -1674,5 +1869,93 @@ mod tests {
         assert!(result.is_some());
         let (backends, _) = result.unwrap().unwrap();
         assert_eq!(backends.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod srv_tests {
+    use super::select_active_srv;
+    use hickory_resolver::proto::rr::rdata::SRV;
+    use hickory_resolver::proto::rr::Name;
+    use std::str::FromStr;
+
+    fn srv(priority: u16, weight: u16, port: u16, target: &str) -> SRV {
+        SRV::new(
+            priority,
+            weight,
+            port,
+            Name::from_str(target).expect("valid name"),
+        )
+    }
+
+    /// RFC 2782: "A client MUST attempt to contact the target host with the
+    /// lowest-numbered priority it can reach." Higher numbers are standbys, so
+    /// returning them alongside the primaries would put live traffic on backups.
+    #[test]
+    fn only_the_lowest_priority_is_active() {
+        let records = [
+            srv(20, 10, 8080, "backup.example.com."),
+            srv(10, 10, 8080, "primary-a.example.com."),
+            srv(10, 20, 8081, "primary-b.example.com."),
+        ];
+        let refs: Vec<&SRV> = records.iter().collect();
+
+        let (priority, active) = select_active_srv(&refs).expect("an active set");
+        assert_eq!(priority, 10);
+        assert_eq!(active.len(), 2, "both priority-10 targets are active");
+        assert!(
+            active.iter().all(|srv| srv.priority == 10),
+            "the priority-20 backup must not appear"
+        );
+    }
+
+    /// The record carries the port; that is the whole point of SRV over A.
+    #[test]
+    fn ports_come_from_the_records() {
+        let records = [srv(0, 5, 9443, "svc.example.com.")];
+        let refs: Vec<&SRV> = records.iter().collect();
+        let (_, active) = select_active_srv(&refs).expect("an active set");
+        assert_eq!(active[0].port, 9443);
+        assert_eq!(active[0].weight, 5);
+    }
+
+    /// RFC 2782: a single root target means "the service is decidedly not
+    /// available at this domain". It must not be resolved as a hostname.
+    #[test]
+    fn a_root_target_means_service_unavailable() {
+        let records = [srv(0, 0, 0, ".")];
+        let refs: Vec<&SRV> = records.iter().collect();
+        assert!(
+            select_active_srv(&refs).is_none(),
+            "'.' must not produce backends"
+        );
+    }
+
+    /// A root target alongside real ones is dropped, not treated as fatal.
+    #[test]
+    fn a_root_target_is_dropped_from_a_mixed_set() {
+        let records = [srv(0, 10, 8080, "real.example.com."), srv(0, 0, 0, ".")];
+        let refs: Vec<&SRV> = records.iter().collect();
+        let (_, active) = select_active_srv(&refs).expect("an active set");
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].target.to_utf8(), "real.example.com.");
+    }
+
+    /// A priority whose every target is root falls through to no active set
+    /// rather than silently promoting the standby priority.
+    #[test]
+    fn root_only_best_priority_yields_nothing() {
+        let records = [srv(0, 0, 0, "."), srv(10, 10, 8080, "backup.example.com.")];
+        let refs: Vec<&SRV> = records.iter().collect();
+        assert!(
+            select_active_srv(&refs).is_none(),
+            "priority 0 is unavailable; promoting priority 10 would ignore the signal"
+        );
+    }
+
+    #[test]
+    fn no_records_yields_nothing() {
+        let refs: Vec<&SRV> = Vec::new();
+        assert!(select_active_srv(&refs).is_none());
     }
 }
