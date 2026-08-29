@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.08_14](#260814---2026-08-29) | 0.6.37 | 2026-08-29 | `zentinel` with no configuration starts instead of retrying port 9090 forever; `logging { timestamps }` is read |
 | [26.08_13](#260813---2026-08-29) | 0.6.36 | 2026-08-29 | `dns-srv` discovery reads SRV records: the port and weight come from the record, where it previously resolved the bare domain on port 80 |
 | [26.08_12](#260812---2026-08-29) | 0.6.35 | 2026-08-29 | `Cache-Status` no longer erases what an upstream cache reported, so a Zentinel placed in front of another cache shows the whole path rather than only its own member |
 | [26.08_11](#260811---2026-08-29) | 0.6.34 | 2026-08-29 | Upstream `discovery` blocks now reach the proxy: targets are resolved from DNS, Consul, Kubernetes or a file before serving and refreshed in the background, where previously the block parsed into nothing and the upstream routed nowhere |
@@ -77,6 +78,57 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.08_14] - 2026-08-29
+
+**Crate version:** 0.6.37
+
+> **If you run Zentinel with no configuration file, upgrade.** On 0.6.36 and
+> earlier it never finished starting.
+
+### Fixed
+- **The default configuration no longer fights itself for port 9090.** Running
+  `zentinel` with no arguments started the standalone metrics server on
+  `0.0.0.0:9090` and then tried to bind an admin listener to the same address.
+  The metrics server won, and Pingora retried the listener once a second
+  forever:
+
+  ```
+  WARN pingora_core::listeners::l4: 0.0.0.0:9090 is in use, will try again
+  ```
+
+  The standalone server was redundant there: the default configuration already
+  serves `/metrics` from the admin listener through the builtin `metrics` route,
+  at the same address. It is now explicitly disabled in the shipped
+  configurations, so the endpoint is unchanged and the conflict is gone. The
+  starter configuration written to disk had the same collision. (#432, #435)
+
+- **A listener that collides with the metrics server is now a configuration
+  error.** The metrics server binds its own socket outside Pingora's listeners,
+  so the duplicate-listener-address check could not see it and nothing failed at
+  bind time — the loser simply retried. Loading now fails with a message naming
+  both sides. Addresses are compared as parsed sockets, since `0.0.0.0:9090` and
+  `127.0.0.1:9090` cannot both be bound. (#435)
+
+- **`logging { timestamps }` is read.** Two things were wrong: the KDL parser
+  never read the key, so `timestamps #false` reached the configuration as
+  `true`, and nothing consumed the value afterwards. Turning timestamps off is
+  for environments whose log transport stamps arrival time itself — systemd
+  journal, Docker, most shippers — where a second timestamp per line is noise.
+  (#415, #433)
+
+  The log subscriber now starts after the configuration is read, since the
+  setting has to be known to build it. The diagnostics emitted while finding
+  that configuration are buffered and replayed once logging is up, so nothing is
+  lost by the reordering.
+
+### Changed
+- Every KDL example in the crates' own `docs/` now parses. 175 lines across nine
+  files used bare `true`/`false`, bracketed arrays and KDL v1 raw strings, none
+  of which are valid KDL, so those examples could not be copied. Two documented
+  settings that never existed were corrected against the parser. (#434)
 
 ---
 
