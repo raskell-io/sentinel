@@ -113,16 +113,11 @@ fn parse_element<R: std::io::BufRead>(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let attributes = e
                     .attributes()
                     .filter_map(|a| a.ok())
-                    .map(|a| {
-                        (
-                            String::from_utf8_lossy(a.key.as_ref()).to_string(),
-                            String::from_utf8_lossy(&a.value).to_string(),
-                        )
-                    })
+                    .map(|a| (a.key.as_ref().to_string(), a.value.to_string()))
                     .collect();
 
                 let children = parse_children(reader, &name)?;
@@ -134,16 +129,11 @@ fn parse_element<R: std::io::BufRead>(
                 }));
             }
             Ok(Event::Empty(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let attributes = e
                     .attributes()
                     .filter_map(|a| a.ok())
-                    .map(|a| {
-                        (
-                            String::from_utf8_lossy(a.key.as_ref()).to_string(),
-                            String::from_utf8_lossy(&a.value).to_string(),
-                        )
-                    })
+                    .map(|a| (a.key.as_ref().to_string(), a.value.to_string()))
                     .collect();
 
                 return Ok(Some(XmlElement {
@@ -174,16 +164,11 @@ fn parse_children<R: std::io::BufRead>(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let attributes = e
                     .attributes()
                     .filter_map(|a| a.ok())
-                    .map(|a| {
-                        (
-                            String::from_utf8_lossy(a.key.as_ref()).to_string(),
-                            String::from_utf8_lossy(&a.value).to_string(),
-                        )
-                    })
+                    .map(|a| (a.key.as_ref().to_string(), a.value.to_string()))
                     .collect();
 
                 let inner_children = parse_children(reader, &name)?;
@@ -194,16 +179,11 @@ fn parse_children<R: std::io::BufRead>(
                 }));
             }
             Ok(Event::Empty(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let attributes = e
                     .attributes()
                     .filter_map(|a| a.ok())
-                    .map(|a| {
-                        (
-                            String::from_utf8_lossy(a.key.as_ref()).to_string(),
-                            String::from_utf8_lossy(&a.value).to_string(),
-                        )
-                    })
+                    .map(|a| (a.key.as_ref().to_string(), a.value.to_string()))
                     .collect();
 
                 children.push(XmlNode::Element(XmlElement {
@@ -213,15 +193,15 @@ fn parse_children<R: std::io::BufRead>(
                 }));
             }
             Ok(Event::Text(e)) => {
-                let text = e
-                    .decode()
-                    .map_err(|e| MaskingError::InvalidXml(e.to_string()))?;
+                // quick-xml 0.42 decodes text as it reads, so BytesText derefs
+                // to `str` and there is no longer a fallible decode step.
+                let text: &str = &e;
                 if !text.trim().is_empty() {
                     children.push(XmlNode::Text(text.to_string()));
                 }
             }
             Ok(Event::End(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name == parent_name {
                     return Ok(children);
                 }
