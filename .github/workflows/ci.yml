@@ -20,6 +20,49 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  rust-version:
+    name: Rust version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The Rust version is declared in three places. The Dockerfile drifted to
+      # 1.94 while the workspace moved to 1.95, and nothing noticed: release CI
+      # builds the `*-prebuilt` stages, which copy a binary compiled elsewhere
+      # and never touch the base image. Only `docker compose build` and a plain
+      # `docker build .` use the `builder` stage -- so the images humans build
+      # were broken while every workflow stayed green.
+      - name: Check Cargo.toml, rust-toolchain.toml and Dockerfile agree
+        run: |
+          set -euo pipefail
+
+          toolchain=$(grep -oE 'channel = "[0-9.]+"' rust-toolchain.toml | grep -oE '[0-9.]+')
+          msrv=$(grep -m1 -oE 'rust-version = "[0-9.]+"' Cargo.toml | grep -oE '[0-9.]+')
+          docker=$(grep -m1 -oE '^ARG RUST_VERSION=[0-9.]+' Dockerfile | cut -d= -f2)
+
+          echo "rust-toolchain.toml : $toolchain"
+          echo "Cargo.toml rust-version: $msrv"
+          echo "Dockerfile RUST_VERSION: $docker"
+
+          # Compare on major.minor: the Dockerfile tracks the Rust image tag
+          # (`rust:1.95-slim-bookworm`), which has no patch component.
+          minor() { echo "$1" | cut -d. -f1,2; }
+
+          if [ "$(minor "$toolchain")" != "$(minor "$msrv")" ]; then
+            echo "::error::rust-toolchain.toml ($toolchain) and Cargo.toml rust-version ($msrv) disagree"
+            exit 1
+          fi
+
+          if [ "$(minor "$docker")" != "$(minor "$toolchain")" ]; then
+            echo "::error::Dockerfile RUST_VERSION ($docker) does not match the toolchain ($toolchain). \
+          The builder stage will fail to compile the workspace; release CI will not catch it, because \
+          it builds the prebuilt stages instead."
+            exit 1
+          fi
+
+          echo "All three agree on $(minor "$toolchain")"
+
   fmt:
     name: Formatting
     runs-on: ubuntu-latest

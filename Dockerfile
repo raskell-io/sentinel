@@ -13,7 +13,14 @@
 #   docker build --target proxy-debug -t zentinel:debug .
 
 # Build arguments
-ARG RUST_VERSION=1.94
+#
+# RUST_VERSION must be at least the workspace `rust-version` in Cargo.toml and
+# the channel in rust-toolchain.toml. Only the `builder` stage compiles here --
+# the `*-prebuilt` stages copy a binary built elsewhere -- so release CI, which
+# uses the prebuilt path, stays green even when this is too old. `docker compose
+# build` and a plain `docker build .` use the builder and do not. CI checks the
+# three agree; see the "Rust version" step in ci.yml.
+ARG RUST_VERSION=1.95
 ARG DEBIAN_VARIANT=slim-bookworm
 
 ################################################################################
