@@ -35,6 +35,7 @@ use super::listener_addr::listener_for_addr;
 use super::model_routing;
 use super::model_routing_metrics::get_model_routing_metrics;
 use super::ZentinelProxy;
+use zentinel_common::observability::RequestMetrics;
 
 /// The IP socket address behind a Pingora endpoint, if it has one.
 ///
@@ -3935,11 +3936,17 @@ impl ZentinelProxy {
                     a2a_method = ?a2a_method,
                     "Agentic request permitted"
                 );
+                self.record_mcp_call(&route, ctx, &mcp_method, &mcp_target, "allowed");
                 ctx.mcp_method = mcp_method;
                 ctx.mcp_target = mcp_target;
                 ctx.a2a_method = a2a_method;
             }
-            Some(agentic::Outcome::Deny { reason, kind }) => {
+            Some(agentic::Outcome::Deny {
+                reason,
+                kind,
+                method,
+                target,
+            }) => {
                 warn!(
                     correlation_id = %ctx.trace_id,
                     route_id = ?ctx.route_id,
@@ -3947,12 +3954,47 @@ impl ZentinelProxy {
                     reason = %reason,
                     "Agentic request denied"
                 );
+                self.record_mcp_call(&route, ctx, &method, &target, "denied");
                 self.metrics.record_blocked_request(kind);
                 return Err(Error::explain(ErrorType::HTTPStatus(403), reason));
             }
         }
 
         Ok(())
+    }
+
+    /// Count one MCP call, bounding the client-supplied labels first.
+    ///
+    /// Only routes carrying an `mcp` block are counted: without one the proxy
+    /// never resolves a method from the body, and reporting `<other>` for every
+    /// request through every other route would be noise.
+    ///
+    /// `method` and `target` come from the request body and are therefore
+    /// attacker-controlled. Both are reduced to something the route's own
+    /// configuration names, so the series a route can produce is bounded by its
+    /// config rather than by what clients send.
+    fn record_mcp_call(
+        &self,
+        route: &zentinel_config::RouteConfig,
+        ctx: &RequestContext,
+        method: &Option<String>,
+        target: &Option<String>,
+        decision: &str,
+    ) {
+        let Some(mcp) = route.mcp.as_ref() else {
+            return;
+        };
+        let route_id = ctx.route_id.as_deref().unwrap_or("unknown");
+        let method_label = method
+            .as_deref()
+            .map(|m| RequestMetrics::bounded_mcp_label(m, &mcp.allowed_methods))
+            .unwrap_or(RequestMetrics::MCP_TARGET_OTHER);
+        let target_label = target
+            .as_deref()
+            .map(|t| RequestMetrics::bounded_mcp_label(t, &mcp.allowed_tools))
+            .unwrap_or(RequestMetrics::MCP_TARGET_OTHER);
+        self.metrics
+            .record_mcp_call(route_id, method_label, target_label, decision);
     }
 
     /// Process a single body chunk in streaming mode.

@@ -143,6 +143,37 @@ pub enum DenyReason {
     },
 }
 
+impl DenyReason {
+    /// The JSON-RPC method this refusal concerned, where the refusal was about
+    /// a specific call rather than the request's shape.
+    ///
+    /// Used to label metrics, so a denial can be attributed to the tool it
+    /// refused rather than only counted.
+    pub fn method(&self) -> Option<&str> {
+        match self {
+            Self::TargetNotAllowed { method, .. } | Self::MethodNotAllowed { method } => {
+                Some(method)
+            }
+            Self::HeaderBodyMismatch { .. }
+            | Self::ParamHeaderMismatch { .. }
+            | Self::UnvalidatedProtocolVersion { .. }
+            | Self::Unparseable { .. } => None,
+        }
+    }
+
+    /// The tool or resource this refusal concerned, if it named one.
+    pub fn target(&self) -> Option<&str> {
+        match self {
+            Self::TargetNotAllowed { target, .. } => Some(target),
+            Self::MethodNotAllowed { .. }
+            | Self::HeaderBodyMismatch { .. }
+            | Self::ParamHeaderMismatch { .. }
+            | Self::UnvalidatedProtocolVersion { .. }
+            | Self::Unparseable { .. } => None,
+        }
+    }
+}
+
 impl std::fmt::Display for DenyReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1050,5 +1081,42 @@ mod tests {
             assert!(!version_is_validated(""));
             assert!(!version_is_validated("2026-07-28-extra"));
         }
+    }
+}
+
+#[cfg(test)]
+mod deny_attribution_tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_tool_is_attributable() {
+        let reason = DenyReason::TargetNotAllowed {
+            method: "tools/call".into(),
+            target: "delete_everything".into(),
+        };
+        assert_eq!(reason.method(), Some("tools/call"));
+        assert_eq!(reason.target(), Some("delete_everything"));
+    }
+
+    #[test]
+    fn a_refused_method_names_no_target() {
+        let reason = DenyReason::MethodNotAllowed {
+            method: "resources/read".into(),
+        };
+        assert_eq!(reason.method(), Some("resources/read"));
+        assert_eq!(reason.target(), None);
+    }
+
+    #[test]
+    fn a_spoofed_header_attributes_nothing() {
+        // The header and body disagree, so neither is trustworthy enough to
+        // report as the call that was refused.
+        let reason = DenyReason::HeaderBodyMismatch {
+            header: "mcp-name",
+            header_value: "read_file".into(),
+            body_value: "delete_everything".into(),
+        };
+        assert_eq!(reason.method(), None);
+        assert_eq!(reason.target(), None);
     }
 }
