@@ -51,6 +51,15 @@ pub enum Outcome {
         reason: String,
         /// Metrics label: `mcp_policy` or `a2a_policy`.
         kind: &'static str,
+        /// Method the refusal concerned, where it named one.
+        ///
+        /// Carried so a denial can be attributed to the call it refused rather
+        /// than only counted. Absent for refusals about the request's shape --
+        /// a header disagreeing with the body, an unparseable payload -- where
+        /// there is no trustworthy method to report.
+        method: Option<String>,
+        /// Tool or resource the refusal concerned, where it named one.
+        target: Option<String>,
     },
 }
 
@@ -80,6 +89,8 @@ pub fn decide(route: &RouteConfig, headers: &[(String, String)], body: &[u8]) ->
             }
             mcp::Decision::Deny { reason } => {
                 return Some(Outcome::Deny {
+                    method: reason.method().map(str::to_owned),
+                    target: reason.target().map(str::to_owned),
                     reason: reason.to_string(),
                     kind: "mcp_policy",
                 })
@@ -94,7 +105,11 @@ pub fn decide(route: &RouteConfig, headers: &[(String, String)], body: &[u8]) ->
                 return Some(Outcome::Deny {
                     reason: reason.to_string(),
                     kind: "a2a_policy",
-                })
+                    // A2A carries no mirrored header to reconcile and this
+                    // metric is MCP's; nothing to attribute.
+                    method: None,
+                    target: None,
+                });
             }
         }
     }

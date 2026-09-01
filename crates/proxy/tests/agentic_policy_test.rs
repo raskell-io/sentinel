@@ -97,7 +97,7 @@ fn a_tool_outside_the_allowlist_is_denied_from_config() {
     );
 
     match outcome {
-        Some(Outcome::Deny { reason, kind }) => {
+        Some(Outcome::Deny { reason, kind, .. }) => {
             assert_eq!(kind, "mcp_policy");
             assert!(
                 reason.contains("delete_everything"),
@@ -143,7 +143,7 @@ fn a_header_that_disagrees_with_the_body_is_denied() {
     );
 
     match outcome {
-        Some(Outcome::Deny { reason, kind }) => {
+        Some(Outcome::Deny { reason, kind, .. }) => {
             assert_eq!(kind, "mcp_policy");
             assert!(
                 reason.contains("get_weather") && reason.contains("execute_sql"),
@@ -268,7 +268,7 @@ fn a_denied_a2a_method_is_refused_from_config() {
     let outcome = decide(route(&config, "mcp"), &[], &a2a_call("SendMessage"));
 
     match outcome {
-        Some(Outcome::Deny { reason, kind }) => {
+        Some(Outcome::Deny { reason, kind, .. }) => {
             assert_eq!(kind, "a2a_policy");
             assert!(reason.contains("SendMessage"), "got: {reason}");
         }
@@ -331,4 +331,53 @@ fn unknown_methods_deny_reaches_the_evaluator() {
         matches!(outcome, Some(Outcome::Deny { .. })),
         "expected Deny once the route opts in, got {outcome:?}"
     );
+}
+
+/// A denial should say *what* was refused, not only that something was.
+///
+/// The evaluator resolves the method and tool from the body in order to decide,
+/// then used to discard both into a formatted string. Metrics need them back:
+/// counting `mcp_policy` denials without naming the tool tells an operator that
+/// something is being refused and nothing about what.
+#[test]
+fn a_denial_names_the_call_it_refused() {
+    let config = config_with(TOOLS_BLOCK);
+    let outcome = decide(
+        route(&config, "mcp"),
+        &mcp_headers("delete_everything"),
+        &call("delete_everything"),
+    );
+
+    match outcome {
+        Some(Outcome::Deny { method, target, .. }) => {
+            assert_eq!(method.as_deref(), Some("tools/call"));
+            assert_eq!(target.as_deref(), Some("delete_everything"));
+        }
+        other => panic!("expected Deny, got {other:?}"),
+    }
+}
+
+/// When a mirrored header disagrees with the body, neither value is trustworthy
+/// enough to attribute the denial to.
+///
+/// Reporting the header would let a client choose which metric series its
+/// traffic lands in; reporting the body would imply a confidence the mismatch
+/// itself disproves. So the refusal is counted without a call attached.
+#[test]
+fn a_spoofed_header_denial_attributes_no_call() {
+    let config = config_with(TOOLS_BLOCK);
+    let outcome = decide(
+        route(&config, "mcp"),
+        // header says an allowed tool, body calls a different one
+        &mcp_headers("get_weather"),
+        &call("delete_everything"),
+    );
+
+    match outcome {
+        Some(Outcome::Deny { method, target, .. }) => {
+            assert_eq!(method, None, "a spoofed header must not name a method");
+            assert_eq!(target, None, "a spoofed header must not name a target");
+        }
+        other => panic!("expected Deny, got {other:?}"),
+    }
 }

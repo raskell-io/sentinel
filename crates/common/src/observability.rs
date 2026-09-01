@@ -82,6 +82,8 @@ pub struct RequestMetrics {
     agent_timeouts: IntCounterVec,
     /// Blocked requests by reason
     blocked_requests: CounterVec,
+    /// MCP tool and resource calls, by route, method and target
+    mcp_calls: IntCounterVec,
     /// Request body size histogram
     request_body_size: HistogramVec,
     /// Response body size histogram
@@ -226,6 +228,17 @@ impl RequestMetrics {
             &["reason"]
         )
         .context("Failed to register blocked_requests metric")?;
+
+        // `target` is resolved from the request body, so it is client-supplied
+        // and would be unbounded as a label. The caller passes only names the
+        // route's own configuration lists, and `<other>` for anything else, so
+        // series count is bounded by config rather than by traffic.
+        let mcp_calls = register_int_counter_vec!(
+            "zentinel_mcp_calls_total",
+            "MCP calls by route, JSON-RPC method, target and decision",
+            &["route", "method", "target", "decision"]
+        )
+        .context("Failed to register mcp_calls metric")?;
 
         let request_body_size = register_histogram_vec!(
             "zentinel_request_body_size_bytes",
@@ -391,6 +404,7 @@ impl RequestMetrics {
             agent_latency,
             agent_timeouts,
             blocked_requests,
+            mcp_calls,
             request_body_size,
             response_body_size,
             tls_handshake_duration,
@@ -471,6 +485,45 @@ impl RequestMetrics {
     /// Record a blocked request
     pub fn record_blocked_request(&self, reason: &str) {
         self.blocked_requests.with_label_values(&[reason]).inc();
+    }
+
+    /// Placeholder used when a client-supplied MCP name is not one the route
+    /// declares, so it cannot become its own metric series.
+    pub const MCP_TARGET_OTHER: &'static str = "<other>";
+
+    /// Record an MCP call.
+    ///
+    /// `method` and `target` come from the request *body*, which is where the
+    /// policy engine resolves them: the mirrored `Mcp-Method` and `Mcp-Name`
+    /// headers can disagree with it, and this must count what the server will
+    /// actually execute.
+    ///
+    /// Both are client-supplied, so both are bounded before they become labels:
+    /// use [`Self::bounded_mcp_label`] on each. Without that, a client can mint
+    /// an unbounded number of series by calling `tools/call` with random names.
+    ///
+    /// `decision` is `allowed` or `denied`.
+    pub fn record_mcp_call(&self, route: &str, method: &str, target: &str, decision: &str) {
+        self.mcp_calls
+            .with_label_values(&[route, method, target, decision])
+            .inc();
+    }
+
+    /// Reduce a client-supplied MCP name to something safe to use as a label.
+    ///
+    /// Returns the name when the route's configuration mentions it, and
+    /// [`Self::MCP_TARGET_OTHER`] otherwise, so the number of series a route can
+    /// produce is bounded by how many names its own config lists.
+    ///
+    /// An empty `declared` means the route allows everything, which is a policy
+    /// decision and not a licence to emit unbounded labels: everything is
+    /// reported as `<other>` in that case.
+    pub fn bounded_mcp_label<'a>(name: &str, declared: &'a [String]) -> &'a str {
+        declared
+            .iter()
+            .find(|d| d.as_str() == name)
+            .map(String::as_str)
+            .unwrap_or(Self::MCP_TARGET_OTHER)
     }
 
     /// Record PII detection in inference response
@@ -907,5 +960,52 @@ mod tests {
             Some("Connection refused".to_string()),
         );
         assert_eq!(checker.get_status(), HealthStatus::Unhealthy);
+    }
+}
+
+#[cfg(test)]
+mod mcp_label_bounding_tests {
+    use super::*;
+
+    #[test]
+    fn a_declared_name_is_reported_as_itself() {
+        let declared = vec!["get_weather".to_string(), "search_docs".to_string()];
+        assert_eq!(
+            RequestMetrics::bounded_mcp_label("get_weather", &declared),
+            "get_weather"
+        );
+    }
+
+    #[test]
+    fn an_undeclared_name_cannot_mint_a_series() {
+        // The point of the bound: a client calling tools/call with arbitrary
+        // names must not be able to create unbounded Prometheus series.
+        let declared = vec!["get_weather".to_string()];
+        for attacker_supplied in ["../../etc/passwd", "a".repeat(4096).as_str(), "🙂", ""] {
+            assert_eq!(
+                RequestMetrics::bounded_mcp_label(attacker_supplied, &declared),
+                RequestMetrics::MCP_TARGET_OTHER
+            );
+        }
+    }
+
+    #[test]
+    fn allowing_everything_still_bounds_the_label() {
+        // An empty allowlist means the route permits any tool. That is a policy
+        // decision, not permission to emit a label per distinct name.
+        let declared: Vec<String> = Vec::new();
+        assert_eq!(
+            RequestMetrics::bounded_mcp_label("anything_at_all", &declared),
+            RequestMetrics::MCP_TARGET_OTHER
+        );
+    }
+
+    #[test]
+    fn matching_is_exact_rather_than_prefix() {
+        let declared = vec!["get_weather".to_string()];
+        assert_eq!(
+            RequestMetrics::bounded_mcp_label("get_weather_secret", &declared),
+            RequestMetrics::MCP_TARGET_OTHER
+        );
     }
 }
