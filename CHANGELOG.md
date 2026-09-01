@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.09_1](#26091---2026-09-01) | 0.6.38 | 2026-09-01 | Dependency updates only; the XML parser in the data-masking agent was ported to quick-xml 0.42 |
 | [26.08_14](#260814---2026-08-29) | 0.6.37 | 2026-08-29 | `zentinel` with no configuration starts instead of retrying port 9090 forever; `logging { timestamps }` is read |
 | [26.08_13](#260813---2026-08-29) | 0.6.36 | 2026-08-29 | `dns-srv` discovery reads SRV records: the port and weight come from the record, where it previously resolved the bare domain on port 80 |
 | [26.08_12](#260812---2026-08-29) | 0.6.35 | 2026-08-29 | `Cache-Status` no longer erases what an upstream cache reported, so a Zentinel placed in front of another cache shows the whole path rather than only its own member |
@@ -78,6 +79,26 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.09_1] - 2026-09-01
+
+**Crate version:** 0.6.38
+
+Dependency updates only. Nothing in this release changes how Zentinel routes,
+inspects or blocks traffic; there is no reason to hurry the upgrade, and no
+configuration change is needed.
+
+### Changed
+- **`quick-xml` 0.41 → 0.42**, which decodes as it reads. The XML parser in the
+  data-masking agent was ported to match: element names and attribute keys now
+  arrive as `&str` rather than `&[u8]`, attribute values as `Cow<'_, str>`, and
+  `BytesText` derefs to `str` instead of offering a fallible `decode()`.
+  Attribute values remain unnormalised, as before, so masking sees exactly the
+  text it saw on 0.41.
+- **`jsonschema` 0.50 → 0.52** in the config and proxy crates.
+- **`uuid` 1.24.1 → 1.26.0** and **`maxminddb` 0.30.0 → 0.30.3**.
 
 ---
 
