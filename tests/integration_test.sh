@@ -113,24 +113,35 @@ log_debug() {
     fi
 }
 
+# The counters below are incremented as `VAR=$((VAR + 1))` rather than
+# `((VAR++))` on purpose.
+#
+# `((VAR++))` yields the value *before* the increment as its exit status, so the
+# very first increment of a counter -- 0 to 1 -- exits non-zero. Under the
+# `set -e` at the top of this file that terminates the script, and the EXIT trap
+# then prints a summary of a run that never happened. The symptom is a report
+# reading "Total tests run: 0 / Tests passed: 1 / All tests passed!" alongside a
+# non-zero exit, which is what this suite did on the first successful assertion
+# every time it was run.
+
 log_success() {
     echo -e "${GREEN}[PASS]${NC} $1"
-    ((TESTS_PASSED++))
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 log_failure() {
     echo -e "${RED}[FAIL]${NC} $1"
-    ((TESTS_FAILED++))
+    TESTS_FAILED=$((TESTS_FAILED + 1))
 }
 
 log_skip() {
     echo -e "${YELLOW}[SKIP]${NC} $1"
-    ((TESTS_SKIPPED++))
+    TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
 }
 
 log_test() {
     echo -e "${YELLOW}[TEST]${NC} $1"
-    ((TESTS_RUN++))
+    TESTS_RUN=$((TESTS_RUN + 1))
 }
 
 # Cleanup function
@@ -400,9 +411,9 @@ test_ratelimit_agent() {
         local status=$(curl -s -o /dev/null -w "%{http_code}" "http://${PROXY_HOST}:${PROXY_PORT}/limited/test?req=$i" 2>/dev/null)
 
         if [[ "$status" == "200" ]]; then
-            ((success_count++))
+            success_count=$((success_count + 1))
         elif [[ "$status" == "429" ]]; then
-            ((limited_count++))
+            limited_count=$((limited_count + 1))
         fi
     done
 
@@ -488,10 +499,10 @@ test_multi_agent() {
 
     local agents_detected=0
     if echo "$headers" | grep -qi "X-.*Agent"; then
-        ((agents_detected++))
+        agents_detected=$((agents_detected + 1))
     fi
     if echo "$headers" | grep -qi "X-RateLimit"; then
-        ((agents_detected++))
+        agents_detected=$((agents_detected + 1))
     fi
 
     if [[ $agents_detected -ge 1 ]]; then
@@ -580,9 +591,9 @@ test_performance() {
     for i in {1..100}; do
         local status=$(curl -s -o /dev/null -w "%{http_code}" "http://${PROXY_HOST}:${PROXY_PORT}/get" 2>/dev/null)
         if [[ "$status" == "200" ]]; then
-            ((success++))
+            success=$((success + 1))
         else
-            ((failed++))
+            failed=$((failed + 1))
         fi
     done
 
@@ -635,7 +646,7 @@ test_configuration() {
     for route in "/api/test" "/echo/test" "/limited/test" "/protected/test"; do
         local status=$(curl -s -o /dev/null -w "%{http_code}" "http://${PROXY_HOST}:${PROXY_PORT}${route}" 2>/dev/null)
         if [[ "$status" == "200" || "$status" == "403" || "$status" == "429" ]]; then
-            ((routes_working++))
+            routes_working=$((routes_working + 1))
         fi
     done
 
