@@ -30,6 +30,24 @@ routes {
         }
     }
 
+    // Echo agent route. The compose stack runs the echo agent alongside the
+    // proxy on a shared socket volume, and tests/integration_test.sh checks
+    // that a request through here comes back with the agent's headers. Without
+    // this route the agent was running and unreachable, and /echo/* fell
+    // through to the catch-all below and 404'd at the backend.
+    route "echo" {
+        priority "high"
+        matches {
+            path-prefix "/echo"
+        }
+        upstream "backend"
+        filters "echo"
+        policies {
+            timeout-secs 10
+            failure-mode "open"
+        }
+    }
+
     // Main route - direct proxy to backend
     route "default" {
         priority "low"
@@ -41,6 +59,27 @@ routes {
             timeout-secs 30
             failure-mode "open"
         }
+    }
+}
+
+agents {
+    agent "echo" {
+        type "custom"
+        unix-socket path="/var/run/zentinel/echo.sock"
+        events "request_headers" "response_headers"
+        timeout-ms 500
+        // Fail open: this is a demonstration agent on a test stack, and a
+        // request should not be refused because it is not running.
+        failure-mode "open"
+    }
+}
+
+filters {
+    filter "echo" {
+        type "agent"
+        agent "echo"
+        timeout-ms 500
+        failure-mode "open"
     }
 }
 

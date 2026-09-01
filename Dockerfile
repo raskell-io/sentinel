@@ -235,8 +235,12 @@ FROM gcr.io/distroless/cc-debian12:nonroot AS echo-agent
 
 COPY --from=builder /app/target/release/zentinel-echo-agent /zentinel-echo-agent
 
+# ECHO_AGENT_SOCKET, not SOCKET_PATH: the agent's argument parser reads the
+# former, so the latter was inert and the agent fell back to its hardcoded
+# default of /tmp/echo-agent.sock -- inside its own container, off the shared
+# socket volume, where no proxy could reach it.
 ENV RUST_LOG=info,zentinel_echo_agent=debug \
-    SOCKET_PATH=/var/run/zentinel/echo.sock
+    ECHO_AGENT_SOCKET=/var/run/zentinel/echo.sock
 
 USER nonroot:nonroot
 
@@ -253,7 +257,7 @@ LABEL org.opencontainers.image.title="Zentinel Echo Agent" \
       org.opencontainers.image.description="Echo agent for Zentinel proxy testing"
 
 ENV RUST_LOG=info,zentinel_echo_agent=debug \
-    SOCKET_PATH=/var/run/zentinel/echo.sock
+    ECHO_AGENT_SOCKET=/var/run/zentinel/echo.sock
 
 USER nonroot:nonroot
 
