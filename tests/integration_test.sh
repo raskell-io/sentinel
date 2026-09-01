@@ -338,7 +338,7 @@ test_health_endpoints() {
     log_section "Health Endpoint Tests"
 
     log_test "Proxy health endpoint"
-    local response=$(curl -sf "http://${PROXY_HOST}:${METRICS_PORT}/health" 2>/dev/null)
+    local response=$(curl -sf "http://${PROXY_HOST}:${PROXY_PORT}/health" 2>/dev/null)
     if [[ -n "$response" ]]; then
         log_success "Proxy health endpoint responds"
     else
@@ -632,7 +632,7 @@ test_configuration() {
     log_section "Configuration Validation Tests"
 
     log_test "Proxy configuration loaded"
-    local health=$(curl -sf "http://${PROXY_HOST}:${METRICS_PORT}/health" 2>/dev/null)
+    local health=$(curl -sf "http://${PROXY_HOST}:${PROXY_PORT}/health" 2>/dev/null)
     if [[ -n "$health" ]]; then
         log_success "Proxy loaded configuration and is healthy"
     else
@@ -706,7 +706,15 @@ main() {
     wait_for_service "http://${PROXY_HOST}:8081/status/200" "Backend" 60 || exit 1
 
     # Wait for proxy
-    wait_for_service "http://${PROXY_HOST}:${METRICS_PORT}/health" "Proxy" 120 || {
+    # /health is a route on the proxy's own HTTP listener, served by the
+    # `health` builtin-handler in config/docker/proxy.kdl. It is deliberately
+    # not the metrics port: the standalone metrics server serves /metrics and a
+    # landing page at /, and 404s everything else. This probe used to poll
+    # ${METRICS_PORT}/health and waited the full 120s for a 404 to become a 200,
+    # every time -- 26.08_14 resolved the two servers' fight over 9090 in the
+    # metrics server's favour, which moved /health, and nothing noticed because
+    # this suite was not being run.
+    wait_for_service "http://${PROXY_HOST}:${PROXY_PORT}/health" "Proxy" 120 || {
         log_info "Proxy not responding. Checking container logs..."
         docker compose -f docker-compose.yml logs proxy | tail -50
         exit 1
