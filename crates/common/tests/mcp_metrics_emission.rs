@@ -27,15 +27,13 @@ use zentinel_common::observability::RequestMetrics;
 fn sample(families: &[prometheus::proto::MetricFamily], labels: &[(&str, &str)]) -> Option<u64> {
     let family = families
         .iter()
-        .find(|f| f.get_name() == "zentinel_mcp_calls_total")?;
+        .find(|f| f.name() == "zentinel_mcp_calls_total")?;
 
-    family.get_metric().iter().find_map(|m| {
-        let matches = labels.iter().all(|(k, v)| {
-            m.get_label()
-                .iter()
-                .any(|l| l.get_name() == *k && l.get_value() == *v)
-        });
-        matches.then(|| m.get_counter().value() as u64)
+    family.metric.iter().find_map(|m| {
+        let matches = labels
+            .iter()
+            .all(|(k, v)| m.label.iter().any(|l| l.name() == *k && l.value() == *v));
+        matches.then(|| m.counter.value() as u64)
     })
 }
 
@@ -107,27 +105,27 @@ fn mcp_calls_are_counted_with_bounded_labels() {
     // The names the client sent must appear nowhere in the exported labels.
     let family = families
         .iter()
-        .find(|f| f.get_name() == "zentinel_mcp_calls_total")
+        .find(|f| f.name() == "zentinel_mcp_calls_total")
         .expect("metric family registered");
 
     for leaked in ["delete_everything", "../../etc/passwd", "wipe_database"] {
         assert!(
             !family
-                .get_metric()
+                .metric
                 .iter()
-                .any(|m| m.get_label().iter().any(|l| l.get_value() == leaked)),
+                .any(|m| m.label.iter().any(|l| l.value() == leaked)),
             "client-supplied name {leaked:?} reached Prometheus as a label"
         );
     }
 
     // Bounded, so the whole route produces one series per decision at most.
     let series_for_route = family
-        .get_metric()
+        .metric
         .iter()
         .filter(|m| {
-            m.get_label()
+            m.label
                 .iter()
-                .any(|l| l.get_name() == "route" && l.get_value() == "api")
+                .any(|l| l.name() == "route" && l.value() == "api")
         })
         .count();
     assert_eq!(
