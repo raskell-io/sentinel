@@ -203,6 +203,9 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Update Cargo.toml versions
         run: |
           NEW_SEMVER="${{ needs.validate.outputs.new-semver }}"
@@ -220,13 +223,20 @@ jobs:
           echo "Updated versions:"
           grep -r "version = \"$NEW_SEMVER\"" Cargo.toml crates/*/Cargo.toml || true
 
+          # Bring Cargo.lock in step with the manifests. Without this the commit
+          # below carries a lockfile describing the previous version, every job
+          # that builds --locked fails, and the bump can never merge.
+          cargo update --workspace
+          grep -A 2 'name = "zentinel-proxy"' Cargo.lock | grep -q "version = \"$NEW_SEMVER\"" \
+            || { echo "::error::Cargo.lock was not updated to $NEW_SEMVER"; exit 1; }
+
       - name: Commit version bump
         id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add Cargo.toml crates/*/Cargo.toml
+          git add Cargo.toml crates/*/Cargo.toml Cargo.lock
           git commit -m "chore: bump version to ${{ needs.validate.outputs.new-semver }} for release ${{ needs.validate.outputs.calver }}"
 
           echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
@@ -236,22 +246,52 @@ jobs:
         continue-on-error: true
         run: git push origin HEAD:main
 
+      # Branch protection blocks the bot's push to main, so this fallback is the
+      # normal path rather than an edge case. It stays continue-on-error so a
+      # failure here cannot stop the publish below, but it now reports loudly:
+      # when it failed silently, main kept the old version while crates.io moved
+      # on, and the next release computed a version that was already published.
       - name: Create PR for version bump if push was blocked
         if: steps.push.outcome == 'failure'
-        continue-on-error: true  # Don't block crates.io publish if PR creation fails
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_SEMVER: ${{ needs.validate.outputs.new-semver }}
+          CALVER: ${{ needs.validate.outputs.calver }}
         run: |
-          BRANCH="chore/bump-${{ needs.validate.outputs.new-semver }}"
+          BRANCH="chore/bump-${NEW_SEMVER}"
           git checkout -b "$BRANCH"
           git push --force origin "$BRANCH"
-          gh pr create \
-            --title "chore: bump version to ${{ needs.validate.outputs.new-semver }} for release ${{ needs.validate.outputs.calver }}" \
-            --body "Automated version bump after release ${{ needs.validate.outputs.calver }}. Direct push to main was blocked by branch protection." \
-            --base main
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+          if gh pr list --head "$BRANCH" --state open --json number --jq 'length' | grep -qv '^0$'; then
+            echo "A PR for $BRANCH is already open; leaving it alone"
+            exit 0
+          fi
+
+          # --head is explicit: the branch just pushed has no upstream tracking
+          # ref, so gh cannot reliably infer it from the checkout.
+          gh pr create \
+            --title "chore: bump version to ${NEW_SEMVER} for release ${CALVER}" \
+            --body "Automated version bump after release ${CALVER}. The direct push to main was blocked by branch protection, which is expected. Merging this keeps main's version in step with crates.io; without it the next release computes a version that is already published." \
+            --base main \
+            --head "$BRANCH"
+
+      - name: Report if the version bump still needs merging
+        if: always() && steps.push.outcome == 'failure'
+        env:
+          NEW_SEMVER: ${{ needs.validate.outputs.new-semver }}
+        run: |
+          {
+            echo "### Version bump needs merging"
+            echo
+            echo "The push to \`main\` was blocked by branch protection, so the bump to"
+            echo "\`${NEW_SEMVER}\` is on branch \`chore/bump-${NEW_SEMVER}\`."
+            echo
+            echo "**Merge it before the next release.** Until then \`main\` reports the"
+            echo "previous version while crates.io is at \`${NEW_SEMVER}\`, and the next"
+            echo "release will try to publish a version that already exists."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Version bump to ${NEW_SEMVER} is on chore/bump-${NEW_SEMVER} and must be merged before the next release"
 
       - name: Publish crates
         env:
