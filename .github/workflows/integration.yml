@@ -1,0 +1,73 @@
+# Runs tests/integration_test.sh, which brings the whole stack up under Docker
+# Compose and drives real requests through it.
+#
+# That suite has existed, unrun, for as long as it has existed: CI runs
+# `cargo test` only, so nothing has ever executed it. Every property it covers
+# -- that agents are reachable, that routes resolve, that the metrics endpoint
+# serves what it claims -- has been unverified between releases.
+#
+# It is scheduled and manual rather than per-PR on purpose. Compose builds the
+# proxy and every agent from source, which is far too slow to sit in front of a
+# pull request, and the point here is that it runs *at all* rather than that it
+# gates. Once it has a track record, promoting the quick subset to a PR gate is
+# the natural next step.
+name: Integration
+
+on:
+  schedule:
+    # 03:00 UTC, an hour after the nightly build slot.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: 'Run the quick smoke subset only'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: Docker integration suite
+    runs-on: ubuntu-latest
+    # The suite builds a multi-container Rust stack; give it room to fail
+    # slowly rather than be killed at the default limit mid-build.
+    timeout-minutes: 60
+    steps:
+      # Compose builds the proxy and every agent, which does not fit in the
+      # default runner image's free space alongside the preinstalled toolchains.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Run integration suite
+        run: |
+          chmod +x tests/integration_test.sh
+          if [ "${{ inputs.quick }}" = "true" ]; then
+            ./tests/integration_test.sh --quick
+          else
+            ./tests/integration_test.sh
+          fi
+
+      # Container logs are the only way to tell a genuine failure from the
+      # stack never having come up, and they are gone once the job ends.
+      - name: Capture container logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml ps || true
+          docker compose -f docker-compose.yml logs --tail=200 || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans || true
