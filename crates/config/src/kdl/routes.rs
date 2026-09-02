@@ -467,6 +467,7 @@ fn parse_optional_block<T>(
 /// ```kdl
 /// mcp {
 ///     require-validated-version #true
+///     filter-tool-list #true
 ///     on-uninspectable-body "deny"
 ///     methods {
 ///         allow "tools/call" "tools/list"
@@ -487,6 +488,10 @@ fn parse_mcp_config(node: &kdl::KdlNode) -> Result<McpConfig> {
 
     if let Some(value) = get_bool_entry(node, "validate-param-headers") {
         config.validate_param_headers = value;
+    }
+
+    if let Some(value) = get_bool_entry(node, "filter-tool-list") {
+        config.filter_tool_list = value;
     }
 
     config.on_uninspectable_body = match get_string_entry(node, "on-uninspectable-body").as_deref()
@@ -519,12 +524,13 @@ fn parse_mcp_config(node: &kdl::KdlNode) -> Result<McpConfig> {
                 // how a policy stops applying without anyone noticing.
                 "require-validated-version"
                 | "validate-param-headers"
+                | "filter-tool-list"
                 | "on-uninspectable-body" => {}
                 other => {
                     return Err(anyhow::anyhow!(
                         "Unknown setting '{other}' in mcp block. Valid settings: \
-                         require-validated-version, validate-param-headers, on-uninspectable-body, \
-                         methods, tools"
+                         require-validated-version, validate-param-headers, filter-tool-list, \
+                         on-uninspectable-body, methods, tools"
                     ))
                 }
             }
@@ -2146,6 +2152,21 @@ mod tests {
             let mcp = route.mcp.expect("mcp block should be parsed");
             assert_eq!(mcp.allowed_tools, ["get_weather", "search_docs"]);
             assert_eq!(mcp.denied_tools, ["execute_sql"]);
+        }
+
+        /// Read the struct back rather than trusting that the key parsed:
+        /// a setting KDL accepts and nothing stores is how a policy stops
+        /// applying without anyone noticing.
+        #[test]
+        fn filter_tool_list_can_be_turned_off() {
+            let route = route_with("    mcp {\n      filter-tool-list #false\n    }");
+            assert!(!route.mcp.expect("parsed").filter_tool_list);
+        }
+
+        #[test]
+        fn filter_tool_list_defaults_on() {
+            let route = route_with("    mcp {\n      tools {\n        deny \"x\"\n      }\n    }");
+            assert!(route.mcp.expect("parsed").filter_tool_list);
         }
 
         #[test]

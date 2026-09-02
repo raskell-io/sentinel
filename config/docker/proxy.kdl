@@ -111,6 +111,41 @@ routes {
         }
     }
 
+    // MCP. The tool allowlist is what tests/integration_test.sh asserts on:
+    // the upstream offers search_docs, get_weather and execute_sql, and this
+    // route should both refuse a call to execute_sql and stop it appearing in
+    // tools/list at all.
+    route "mcp" {
+        priority "high"
+        matches {
+            path-prefix "/mcp"
+        }
+        upstream "mcp-backend"
+        mcp {
+            tools {
+                allow "search_docs" "get_weather"
+            }
+        }
+        policies {
+            timeout-secs 10
+            failure-mode "open"
+        }
+    }
+
+    // The same upstream with no MCP policy, so a test can show the difference
+    // rather than assert a filtered list in isolation.
+    route "mcp-raw" {
+        priority "high"
+        matches {
+            path-prefix "/mcp-raw"
+        }
+        upstream "mcp-backend"
+        policies {
+            timeout-secs 10
+            failure-mode "open"
+        }
+    }
+
     // Main route - direct proxy to backend
     route "default" {
         priority "low"
@@ -184,6 +219,11 @@ filters {
 upstreams {
     upstream "backend" {
         target "backend:80" weight=1
+        load-balancing "round_robin"
+    }
+
+    upstream "mcp-backend" {
+        target "mcp-backend:8090" weight=1
         load-balancing "round_robin"
     }
 }

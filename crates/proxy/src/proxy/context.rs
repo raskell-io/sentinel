@@ -189,6 +189,14 @@ pub struct RequestContext {
     pub(crate) mcp_target: Option<String>,
     /// A2A method resolved from the body.
     pub(crate) a2a_method: Option<String>,
+    /// Set when the response to this request is an MCP listing whose entries
+    /// the route's tool policy governs, and must be rewritten before it
+    /// reaches the client. See [`crate::agentic::listing`].
+    pub(crate) mcp_listing: Option<crate::agentic::listing::Plan>,
+    /// Response bytes held back for that rewrite. For a JSON response this is
+    /// the whole body; for an event stream it holds only the event currently
+    /// being assembled, so a stream that stays open is not withheld with it.
+    pub(crate) mcp_listing_body: Vec<u8>,
 
     // === Body Decompression ===
     /// Whether decompression is enabled for body inspection
@@ -393,6 +401,8 @@ impl RequestContext {
             agentic_body_oversize: false,
             mcp_method: None,
             mcp_target: None,
+            mcp_listing: None,
+            mcp_listing_body: Vec::new(),
             a2a_method: None,
             body_inspection_agents: Vec::new(),
             decompression_enabled: false,

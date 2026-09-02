@@ -57,6 +57,22 @@ pub struct McpConfig {
     /// What to do with a body that cannot be inspected.
     #[serde(default)]
     pub on_uninspectable_body: UninspectableBody,
+    /// Remove entries a call would be refused from `tools/list`,
+    /// `resources/list` and `prompts/list` responses.
+    ///
+    /// Defaults to true, and does nothing at all unless a tool allow or deny
+    /// list is set. Without it the advertised surface and the enforced one
+    /// disagree: the proxy refuses a call to a tool the route forbids, having
+    /// let the upstream advertise it. That costs a wasted round trip, spends
+    /// the model's context on tools it may not call, and hands every client an
+    /// inventory of the upstream's capabilities.
+    ///
+    /// A listing that cannot be rewritten -- compressed, oversized, or not
+    /// parseable -- is refused rather than forwarded, on the grounds that
+    /// forwarding it would advertise what the route forbids. Set this to false
+    /// on a route where that trade is the wrong way round.
+    #[serde(default = "default_true")]
+    pub filter_tool_list: bool,
 }
 
 impl Default for McpConfig {
@@ -69,6 +85,7 @@ impl Default for McpConfig {
             require_validated_version: true,
             validate_param_headers: true,
             on_uninspectable_body: UninspectableBody::Deny,
+            filter_tool_list: true,
         }
     }
 }
