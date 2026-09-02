@@ -356,6 +356,14 @@ const CLOSED_BLOCKS: &[ClosedBlock] = &[
         keys: crate::kdl::upstreams::RECOGNIZED_TCP_CHECK_KEYS,
     },
     ClosedBlock {
+        name: "type",
+        nesting: Nesting::InWithArg {
+            parent: "health-check",
+            arg: "mcp",
+        },
+        keys: crate::kdl::upstreams::RECOGNIZED_MCP_CHECK_KEYS,
+    },
+    ClosedBlock {
         name: "readiness",
         nesting: Nesting::Anywhere,
         keys: crate::kdl::upstreams::RECOGNIZED_READINESS_KEYS,
@@ -881,6 +889,56 @@ mod tests {
             }
         "#;
         assert!(warnings_for(kdl).is_empty(), "{:?}", warnings_for(kdl));
+    }
+
+    /// The same trap in an MCP health check: written on one line,
+    /// `expected-tools` is swallowed as an argument to `path` and the check
+    /// silently probes liveness only. Caught while writing the tests for it.
+    #[test]
+    fn a_run_together_mcp_health_check_line_is_reported() {
+        let kdl = r#"
+            upstreams {
+                upstream "mcp" {
+                    target "mcp:8090"
+                    health-check {
+                        type "mcp" { path "/mcp" expected-tools "search_docs" }
+                    }
+                }
+            }
+        "#;
+        let mut result = ValidationResult::default();
+        check_unknown_keys(kdl, &mut result);
+
+        let warnings = warning_texts(&result);
+        assert!(
+            warnings.iter().any(|w| w.contains("expected-tools")),
+            "expected a run-together warning, got {warnings:?}"
+        );
+    }
+
+    /// Written properly, it is silent.
+    #[test]
+    fn a_well_formed_mcp_health_check_is_not_reported() {
+        let kdl = "
+            upstreams {
+                upstream \"mcp\" {
+                    target \"mcp:8090\"
+                    health-check {
+                        type \"mcp\" {
+                            path \"/mcp\"
+                            expected-tools \"search_docs\" \"get_weather\"
+                        }
+                    }
+                }
+            }
+        ";
+        let mut result = ValidationResult::default();
+        check_unknown_keys(kdl, &mut result);
+        assert!(
+            warning_texts(&result).is_empty(),
+            "{:?}",
+            warning_texts(&result)
+        );
     }
 
     /// The #396 case: `namespace` swallowed as an argument to `address`.

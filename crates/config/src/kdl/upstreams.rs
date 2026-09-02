@@ -89,6 +89,9 @@ pub(crate) const RECOGNIZED_INFERENCE_CHECK_KEYS: &[&str] =
 /// unrecognised type as TCP.
 pub(crate) const RECOGNIZED_TCP_CHECK_KEYS: &[&str] = &[];
 
+/// Settings accepted inside `type "mcp" { ... }`.
+pub(crate) const RECOGNIZED_MCP_CHECK_KEYS: &[&str] = &["path", "expected-tools"];
+
 /// Sub-blocks accepted inside a `readiness` block.
 ///
 /// `readiness` holds nothing but these four; it has no settings of its own.
@@ -901,6 +904,33 @@ fn parse_health_check(node: &kdl::KdlNode) -> Result<HealthCheck> {
                         readiness,
                     }
                 }
+                "mcp" => {
+                    let path = type_node
+                        .children()
+                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "path"))
+                        .and_then(get_first_arg_string)
+                        .unwrap_or_else(|| "/".to_string());
+
+                    let expected_tools = type_node
+                        .children()
+                        .and_then(|c| {
+                            c.nodes()
+                                .iter()
+                                .find(|n| n.name().value() == "expected-tools")
+                        })
+                        .map(|n| {
+                            n.entries()
+                                .iter()
+                                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    HealthCheckType::Mcp {
+                        path,
+                        expected_tools,
+                    }
+                }
                 _ => HealthCheckType::Tcp,
             }
         })
@@ -1086,6 +1116,78 @@ mod tests {
             .unwrap()
             .targets
             .clone()
+    }
+
+    /// Read the struct back rather than trusting that the block parsed. An
+    /// unrecognised `type` falls back to TCP here, so a check that "parsed"
+    /// can silently be probing something else entirely.
+    mod mcp_health_check {
+        use super::*;
+
+        fn check_of(body: &str) -> HealthCheck {
+            parse_kdl_upstreams(&format!(
+                r#"upstreams {{
+                    upstream "backend" {{
+                        target "127.0.0.1:9000"
+                        health-check {{ {body} }}
+                    }}
+                }}"#
+            ))
+            .unwrap()
+            .get("backend")
+            .unwrap()
+            .health_check
+            .clone()
+            .expect("health check parsed")
+        }
+
+        #[test]
+        fn path_and_expected_tools_are_read() {
+            let hc = check_of(
+                "type \"mcp\" {\n  path \"/mcp\"\n  expected-tools \"search_docs\" \"get_weather\"\n}",
+            );
+            match hc.check_type {
+                HealthCheckType::Mcp {
+                    path,
+                    expected_tools,
+                } => {
+                    assert_eq!(path, "/mcp");
+                    assert_eq!(expected_tools, ["search_docs", "get_weather"]);
+                }
+                other => panic!("expected an MCP check, got {other:?}"),
+            }
+        }
+
+        /// Omitting the tool list is the liveness-only case, not an empty
+        /// allowlist -- the check stops after `initialize`.
+        #[test]
+        fn expected_tools_defaults_to_empty_and_path_to_root() {
+            match check_of("type \"mcp\"").check_type {
+                HealthCheckType::Mcp {
+                    path,
+                    expected_tools,
+                } => {
+                    assert_eq!(path, "/");
+                    assert!(expected_tools.is_empty());
+                }
+                other => panic!("expected an MCP check, got {other:?}"),
+            }
+        }
+
+        /// Thresholds and intervals are siblings of `type`, not children, so
+        /// they must survive a type-specific block being present.
+        #[test]
+        fn sibling_settings_still_apply() {
+            let hc = check_of(
+                r#"type "mcp" { path "/mcp" }
+                   interval-secs 30
+                   timeout-secs 7
+                   unhealthy-threshold 5"#,
+            );
+            assert_eq!(hc.interval_secs, 30);
+            assert_eq!(hc.timeout_secs, 7);
+            assert_eq!(hc.unhealthy_threshold, 5);
+        }
     }
 
     /// The documented spellings carry a unit suffix. Reading only the bare

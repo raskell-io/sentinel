@@ -217,6 +217,21 @@ pub enum HealthCheckType {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         readiness: Option<Box<crate::inference::InferenceReadinessConfig>>,
     },
+    /// Model Context Protocol health check.
+    ///
+    /// Speaks MCP rather than checking that a socket is open: sends
+    /// `initialize`, and with `expected_tools` set also asks `tools/list` and
+    /// requires those tools to be present. A server that is listening but can
+    /// no longer enumerate the tools a route depends on is marked unhealthy
+    /// instead of being left in rotation to fail real calls.
+    Mcp {
+        /// Path to POST to (default: "/").
+        path: String,
+        /// Tools that must be present. Empty stops the check after
+        /// `initialize`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        expected_tools: Vec<String>,
+    },
 }
 
 /// Retry policy
