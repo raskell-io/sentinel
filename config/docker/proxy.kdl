@@ -95,6 +95,22 @@ routes {
         }
     }
 
+    // Several filters on one route, which is what test_multi_agent checks: a
+    // request should come back 200 having passed through the whole chain
+    // rather than being dropped by one of them.
+    route "multi" {
+        priority "high"
+        matches {
+            path-prefix "/multi"
+        }
+        upstream "backend"
+        filters "rewrite-multi" "echo" "ratelimit"
+        policies {
+            timeout-secs 10
+            failure-mode "open"
+        }
+    }
+
     // Main route - direct proxy to backend
     route "default" {
         priority "low"
@@ -147,6 +163,11 @@ filters {
     }
 
     filter "rewrite-protected" {
+        type "url-rewrite"
+        replace-prefix-match "/anything"
+    }
+
+    filter "rewrite-multi" {
         type "url-rewrite"
         replace-prefix-match "/anything"
     }

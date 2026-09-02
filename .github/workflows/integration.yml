@@ -17,6 +17,24 @@ on:
   schedule:
     # 03:00 UTC, an hour after the nightly build slot.
     - cron: '0 3 * * *'
+
+  # Gated on the files that break this suite outright, rather than on every
+  # pull request. `--quick` is not the lever it looks like: it skips only the
+  # performance test, while the Docker build -- fourteen minutes of compiling
+  # the proxy and every agent -- is the whole cost. Running that in front of
+  # every PR would tax changes that cannot affect the outcome.
+  #
+  # The paths below are the ones whose drift has actually broken it: the
+  # Dockerfile, the compose stack, the fixture config, the harness itself.
+  # Everything else is caught by the nightly run within a day.
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - 'config/docker/**'
+      - 'tests/integration_test.sh'
+      - '.github/workflows/integration.yml'
+
   workflow_dispatch:
     inputs:
       quick:
