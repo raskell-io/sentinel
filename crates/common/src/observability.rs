@@ -84,6 +84,7 @@ pub struct RequestMetrics {
     blocked_requests: CounterVec,
     /// MCP tool and resource calls, by route, method and target
     mcp_calls: IntCounterVec,
+    mcp_listing_filtered: IntCounterVec,
     /// Request body size histogram
     request_body_size: HistogramVec,
     /// Response body size histogram
@@ -239,6 +240,16 @@ impl RequestMetrics {
             &["route", "method", "target", "decision"]
         )
         .context("Failed to register mcp_calls metric")?;
+
+        // Counts entries, not responses: the useful question is how much of an
+        // upstream's surface a route hides, and one response can hide many.
+        // Both labels are bounded by configuration, not by traffic.
+        let mcp_listing_filtered = register_int_counter_vec!(
+            "zentinel_mcp_listing_entries_hidden_total",
+            "MCP listing entries removed from a response because the route forbids calling them",
+            &["route", "method"]
+        )
+        .context("Failed to register mcp_listing_filtered metric")?;
 
         let request_body_size = register_histogram_vec!(
             "zentinel_request_body_size_bytes",
@@ -405,6 +416,7 @@ impl RequestMetrics {
             agent_timeouts,
             blocked_requests,
             mcp_calls,
+            mcp_listing_filtered,
             request_body_size,
             response_body_size,
             tls_handshake_duration,
@@ -507,6 +519,18 @@ impl RequestMetrics {
         self.mcp_calls
             .with_label_values(&[route, method, target, decision])
             .inc();
+    }
+
+    /// Count entries removed from a `tools/list`, `resources/list` or
+    /// `prompts/list` response because the route forbids calling them.
+    ///
+    /// A route where this is persistently non-zero is one whose upstream offers
+    /// more than the route permits -- normal for a gateway, and worth being
+    /// able to see rather than infer.
+    pub fn record_mcp_listing_filtered(&self, route: &str, method: &str, hidden: u64) {
+        self.mcp_listing_filtered
+            .with_label_values(&[route, method])
+            .inc_by(hidden);
     }
 
     /// Reduce a client-supplied MCP name to something safe to use as a label.

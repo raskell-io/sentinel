@@ -520,7 +520,10 @@ fn check_header_agreement(
 ///
 /// An empty allowlist means "no allowlist configured", not "allow nothing" —
 /// otherwise adding a denylist alone would silently refuse everything.
-fn permitted(value: &str, allowed: &HashSet<String>, denied: &HashSet<String>) -> bool {
+/// Whether a method or target passes an allow/deny pair.
+///
+/// `pub(super)` so [`super::listing`] can hide exactly what this refuses.
+pub(super) fn permitted(value: &str, allowed: &HashSet<String>, denied: &HashSet<String>) -> bool {
     if !allowed.is_empty() && !allowed.contains(value) {
         return false;
     }

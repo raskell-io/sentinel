@@ -1974,6 +1974,10 @@ impl ProxyHttp for ZentinelProxy {
             }
         }
 
+        // Decide, before any of the body arrives, whether this response is an
+        // MCP listing that has to be cut down to what the route permits.
+        self.prepare_mcp_listing_rewrite(upstream_response, ctx)?;
+
         // Add GeoIP country header if geo lookup was performed
         if let Some(ref country_code) = ctx.geo_country_code {
             upstream_response.insert_header("X-GeoIP-Country", country_code)?;
@@ -2590,6 +2594,13 @@ impl ProxyHttp for ZentinelProxy {
             }
             // Skip normal body processing for WebSocket
             return Ok(None);
+        }
+
+        // Cut an MCP listing down to what the route permits before anything
+        // else sees it, so an agent inspects the same bytes the client will
+        // receive rather than a surface the client is not allowed to know.
+        if ctx.mcp_listing.is_some() {
+            self.rewrite_mcp_listing(body, end_of_stream, ctx)?;
         }
 
         // Process response body through agents (for agents that subscribe to ResponseBody events)
@@ -3863,7 +3874,204 @@ impl ProxyHttp for ZentinelProxy {
 // Helper methods for body streaming (not part of ProxyHttp trait)
 // =============================================================================
 
+/// The response's media type: lowercased, without parameters.
+///
+/// Compared exactly rather than by prefix, because `application/jsonl` and
+/// `application/json-rpc` both start with `application/json` and are not it.
+fn response_mime(resp: &ResponseHeader) -> Option<String> {
+    resp.headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+        })
+}
+
 impl ZentinelProxy {
+    /// Decide whether this response is an MCP listing that must be cut down to
+    /// what the route permits, and prepare its headers if so.
+    ///
+    /// Runs on headers, before any body has arrived, because the decision needs
+    /// the upstream's framing and because a rewritten body is a different
+    /// length than the one `Content-Length` announces.
+    ///
+    /// Costs nothing on a route that names no tools, which is every route that
+    /// has not asked for this.
+    fn prepare_mcp_listing_rewrite(
+        &self,
+        upstream_response: &mut ResponseHeader,
+        ctx: &mut RequestContext,
+    ) -> Result<(), Box<Error>> {
+        use crate::agentic::listing;
+
+        // The method comes from the request body, never from `Mcp-Method`: a
+        // client able to nominate the method here would name one that returns
+        // no plan and be handed the unfiltered listing.
+        let Some(method) = ctx.mcp_method.clone() else {
+            return Ok(());
+        };
+        let Some(mcp) = ctx.route_config.as_ref().and_then(|r| r.mcp.as_ref()) else {
+            return Ok(());
+        };
+        if !upstream_response.status.is_success() {
+            return Ok(());
+        }
+
+        let framing = match response_mime(upstream_response).as_deref() {
+            Some("application/json") => listing::Framing::Json,
+            Some("text/event-stream") => listing::Framing::Sse,
+            // Not a framing an MCP client reads a JSON-RPC response out of, so
+            // there is no listing here to disclose.
+            _ => return Ok(()),
+        };
+
+        let Some(plan) = listing::Plan::for_method(mcp, &method, framing) else {
+            return Ok(());
+        };
+
+        // A compressed listing cannot be rewritten, and forwarding it would
+        // advertise what the route forbids -- the one thing this exists to
+        // prevent. Refuse it, and say what to change.
+        let encoding = upstream_response
+            .headers
+            .get("content-encoding")
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .unwrap_or("");
+        if !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity") {
+            warn!(
+                correlation_id = %ctx.trace_id,
+                route_id = ?ctx.route_id,
+                content_encoding = encoding,
+                "MCP listing arrived compressed and cannot be filtered"
+            );
+            return Err(Error::explain(
+                ErrorType::HTTPStatus(502),
+                format!(
+                    "MCP listing response is {encoding}-encoded and cannot be filtered to the \
+                     route's tool policy. Serve listings uncompressed, or set \
+                     `filter-tool-list #false` on this route to forward them unfiltered."
+                ),
+            ));
+        }
+
+        // The rewritten body is shorter than the one the upstream announced,
+        // and its length is not known until the listing has been read.
+        upstream_response.remove_header("content-length");
+        ctx.mcp_listing = Some(plan);
+
+        Ok(())
+    }
+
+    /// Remove from a listing response the entries a call would be refused.
+    ///
+    /// JSON is held whole, because a rewrite needs the whole document. An event
+    /// stream is filtered a complete event at a time: a Streamable HTTP server
+    /// may keep the stream open after answering, and waiting for end of stream
+    /// would hold the listing for as long as the server holds the connection.
+    fn rewrite_mcp_listing(
+        &self,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut RequestContext,
+    ) -> Result<(), Box<Error>> {
+        use crate::agentic::listing::{self, Filtered};
+
+        let framing = match ctx.mcp_listing.as_ref() {
+            Some(plan) => plan.framing,
+            None => return Ok(()),
+        };
+
+        // Withhold the chunk; what goes out is decided below.
+        if let Some(chunk) = body.take() {
+            if ctx.mcp_listing_body.len() + chunk.len() > listing::MAX_LISTING_BYTES {
+                ctx.mcp_listing = None;
+                ctx.mcp_listing_body = Vec::new();
+                warn!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = ?ctx.route_id,
+                    limit = listing::MAX_LISTING_BYTES,
+                    "MCP listing exceeded the size the proxy will rewrite"
+                );
+                return Err(Error::explain(
+                    ErrorType::HTTPStatus(502),
+                    "MCP listing response is larger than the proxy will buffer to filter it, \
+                     and forwarding it would advertise tools this route forbids.",
+                ));
+            }
+            ctx.mcp_listing_body.extend_from_slice(&chunk);
+        }
+
+        // How much of what is buffered can be rewritten and released now.
+        let ready = match framing {
+            listing::Framing::Json if end_of_stream => ctx.mcp_listing_body.len(),
+            listing::Framing::Json => return Ok(()),
+            listing::Framing::Sse if end_of_stream => ctx.mcp_listing_body.len(),
+            listing::Framing::Sse => listing::complete_events_len(&ctx.mcp_listing_body),
+        };
+        if ready == 0 {
+            return Ok(());
+        }
+
+        let ready: Vec<u8> = ctx.mcp_listing_body.drain(..ready).collect();
+        // Safe: the plan is present, checked at the top.
+        let plan = ctx.mcp_listing.as_ref().expect("plan present").clone();
+
+        match listing::filter(
+            &ready,
+            plan.framing,
+            plan.field,
+            &plan.allowed,
+            &plan.denied,
+        ) {
+            Filtered::Unchanged => *body = Some(Bytes::from(ready)),
+            Filtered::Rewritten {
+                body: filtered,
+                hidden,
+            } => {
+                debug!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = ?ctx.route_id,
+                    method = ?ctx.mcp_method,
+                    hidden = hidden,
+                    "Hid MCP listing entries this route would refuse a call to"
+                );
+                self.metrics.record_mcp_listing_filtered(
+                    ctx.route_id.as_deref().unwrap_or("unknown"),
+                    ctx.mcp_method.as_deref().unwrap_or("unknown"),
+                    hidden as u64,
+                );
+                *body = Some(Bytes::from(filtered));
+            }
+            Filtered::Unfilterable(why) => {
+                ctx.mcp_listing = None;
+                warn!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = ?ctx.route_id,
+                    reason = why,
+                    "MCP listing could not be filtered"
+                );
+                return Err(Error::explain(
+                    ErrorType::HTTPStatus(502),
+                    format!(
+                        "MCP listing response could not be filtered to the route's tool policy \
+                         ({why}), and forwarding it would advertise tools this route forbids."
+                    ),
+                ));
+            }
+        }
+
+        if end_of_stream {
+            ctx.mcp_listing = None;
+        }
+
+        Ok(())
+    }
+
     /// Enforce a route's MCP or A2A policy against the request body.
     ///
     /// Policy is resolved from the JSON-RPC envelope, never from the mirrored
