@@ -70,6 +70,8 @@ url = "2.5"
 
 # HMAC for cookie signing (sticky sessions)
 hmac = "0.13"
+# Already in the tree via rustls; used directly for the MCP session token's AEAD.
+aws-lc-rs = "1.16"
 
 # Utilities
 uuid = { workspace = true }

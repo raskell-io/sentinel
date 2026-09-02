@@ -9,7 +9,7 @@ use zentinel_common::budget::{
     BudgetPeriod, CostAttributionConfig, ModelPricing, TokenBudgetConfig,
 };
 
-use crate::agentic::{A2aConfig, McpConfig, UninspectableBody, UnknownMethods};
+use crate::agentic::{A2aConfig, McpConfig, McpUpstream, UninspectableBody, UnknownMethods};
 use crate::filters::RateLimitKey;
 use crate::{kdl::retrypolicy_helper::parse_retry_policy, routes::*};
 use zentinel_common::types::ByteSize;
@@ -462,6 +462,83 @@ fn parse_optional_block<T>(
         .transpose()
 }
 
+/// A node's `name=value` property, as a string.
+///
+/// The shared helpers read *child nodes*; this reads a property on the node
+/// itself, which is the shape `upstream "docs" prefix="docs"` uses.
+fn get_string_prop(node: &kdl::KdlNode, name: &str) -> Option<String> {
+    node.entries()
+        .iter()
+        .find(|e| e.name().map(|n| n.value()) == Some(name))
+        .and_then(|e| e.value().as_string())
+        .map(|s| s.to_string())
+}
+
+/// Parse the `upstreams` block inside `mcp`.
+///
+/// ```kdl
+/// upstreams {
+///     upstream "docs" prefix="docs"
+///     upstream "warehouse" prefix="warehouse" path="/mcp"
+/// }
+/// ```
+fn parse_mcp_upstreams(node: &kdl::KdlNode) -> Result<Vec<McpUpstream>> {
+    let mut out: Vec<McpUpstream> = Vec::new();
+
+    let Some(children) = node.children() else {
+        return Ok(out);
+    };
+
+    for child in children.nodes() {
+        if child.name().value() != "upstream" {
+            return Err(anyhow::anyhow!(
+                "Unknown node '{}' in mcp upstreams block. Expected 'upstream'",
+                child.name().value()
+            ));
+        }
+
+        let upstream = get_first_arg_string(child).ok_or_else(|| {
+            anyhow::anyhow!("mcp upstream needs a name: upstream \"docs\" prefix=\"docs\"")
+        })?;
+
+        // Required, never derived from the upstream name. A tool's name is what
+        // a model reasons about; deriving it would rename every tool when an
+        // upstream is renamed.
+        let prefix = get_string_prop(child, "prefix").ok_or_else(|| {
+            anyhow::anyhow!(
+                "mcp upstream '{upstream}' needs a prefix: upstream \"{upstream}\" prefix=\"...\""
+            )
+        })?;
+
+        if prefix.contains('.') {
+            return Err(anyhow::anyhow!(
+                "mcp upstream '{upstream}' prefix '{prefix}' contains '.', which separates a \
+                 prefix from a tool name and would make routing ambiguous"
+            ));
+        }
+        if prefix.is_empty() {
+            return Err(anyhow::anyhow!(
+                "mcp upstream '{upstream}' has an empty prefix"
+            ));
+        }
+        if let Some(clash) = out.iter().find(|u| u.prefix == prefix) {
+            return Err(anyhow::anyhow!(
+                "mcp upstreams '{}' and '{upstream}' share the prefix '{prefix}'; every tool \
+                 from one would be indistinguishable from the other's",
+                clash.upstream
+            ));
+        }
+
+        out.push(McpUpstream {
+            path: get_string_prop(child, "path").unwrap_or_else(|| "/".to_string()),
+            upstream,
+            prefix,
+        });
+    }
+
+    Ok(out)
+}
+
 /// Parse a route's `mcp` block.
 ///
 /// ```kdl
@@ -494,6 +571,8 @@ fn parse_mcp_config(node: &kdl::KdlNode) -> Result<McpConfig> {
         config.filter_tool_list = value;
     }
 
+    config.session_key = get_string_entry(node, "session-key");
+
     config.on_uninspectable_body = match get_string_entry(node, "on-uninspectable-body").as_deref()
     {
         None => UninspectableBody::default(),
@@ -519,18 +598,22 @@ fn parse_mcp_config(node: &kdl::KdlNode) -> Result<McpConfig> {
                     config.allowed_tools = allow;
                     config.denied_tools = deny;
                 }
+                "upstreams" => {
+                    config.upstreams = parse_mcp_upstreams(child)?;
+                }
                 // Scalars already read above; anything else is a mistake worth
                 // naming, since a silently ignored key in a security policy is
                 // how a policy stops applying without anyone noticing.
                 "require-validated-version"
                 | "validate-param-headers"
                 | "filter-tool-list"
+                | "session-key"
                 | "on-uninspectable-body" => {}
                 other => {
                     return Err(anyhow::anyhow!(
                         "Unknown setting '{other}' in mcp block. Valid settings: \
                          require-validated-version, validate-param-headers, filter-tool-list, \
-                         on-uninspectable-body, methods, tools"
+                         session-key, on-uninspectable-body, methods, tools, upstreams"
                     ))
                 }
             }
@@ -2137,6 +2220,17 @@ mod tests {
                 .remove(0)
         }
 
+        /// Like `route_with`, but hands back the error instead of unwrapping —
+        /// for the cases where refusing the config *is* the behaviour.
+        fn route_result(body: &str) -> Result<Vec<crate::RouteConfig>> {
+            let kdl = format!(
+                "routes {{\n  route \"agentic\" {{\n    matches {{\n      path-prefix \"/mcp\"\n    }}\n\
+                 \x20   upstream \"backend\"\n{body}\n  }}\n}}\n"
+            );
+            let doc: kdl::KdlDocument = kdl.parse().expect("kdl should parse");
+            parse_routes(doc.nodes().first().expect("routes node"))
+        }
+
         #[test]
         fn a_route_without_an_mcp_block_has_no_mcp_policy() {
             assert!(route_with("").mcp.is_none());
@@ -2167,6 +2261,89 @@ mod tests {
         fn filter_tool_list_defaults_on() {
             let route = route_with("    mcp {\n      tools {\n        deny \"x\"\n      }\n    }");
             assert!(route.mcp.expect("parsed").filter_tool_list);
+        }
+
+        mod multiplexing {
+            use super::*;
+
+            #[test]
+            fn upstreams_and_prefixes_are_read() {
+                let route = route_with(
+                    "    mcp {\n      upstreams {\n        upstream \"docs\" prefix=\"docs\"\n        upstream \"wh\" prefix=\"warehouse\" path=\"/mcp\"\n      }\n    }",
+                );
+                let ups = route.mcp.expect("parsed").upstreams;
+                assert_eq!(ups.len(), 2);
+                assert_eq!(ups[0].upstream, "docs");
+                assert_eq!(ups[0].prefix, "docs");
+                assert_eq!(ups[0].path, "/", "path defaults to root");
+                assert_eq!(ups[1].upstream, "wh");
+                assert_eq!(ups[1].prefix, "warehouse");
+                assert_eq!(ups[1].path, "/mcp");
+            }
+
+            #[test]
+            fn the_session_key_is_read() {
+                let route = route_with("    mcp {\n      session-key \"abc123\"\n    }");
+                assert_eq!(
+                    route.mcp.expect("parsed").session_key.as_deref(),
+                    Some("abc123")
+                );
+            }
+
+            /// The ordinary route is untouched: no upstreams, no key, and none
+            /// of the multiplexing machinery applies.
+            #[test]
+            fn a_route_without_the_block_multiplexes_nothing() {
+                let route =
+                    route_with("    mcp {\n      tools {\n        deny \"x\"\n      }\n    }");
+                let mcp = route.mcp.expect("parsed");
+                assert!(mcp.upstreams.is_empty());
+                assert!(mcp.session_key.is_none());
+            }
+
+            /// Deriving the prefix from the upstream name was rejected, so a
+            /// missing one is an error rather than a default.
+            #[test]
+            fn a_missing_prefix_is_refused() {
+                let err = route_result(
+                    "    mcp {\n      upstreams {\n        upstream \"docs\"\n      }\n    }",
+                )
+                .expect_err("should refuse");
+                assert!(err.to_string().contains("needs a prefix"), "{err}");
+            }
+
+            /// Two upstreams sharing a prefix would make every tool from one
+            /// indistinguishable from the other's.
+            #[test]
+            fn duplicate_prefixes_are_refused() {
+                let err = route_result(
+                    "    mcp {\n      upstreams {\n        upstream \"a\" prefix=\"p\"\n        upstream \"b\" prefix=\"p\"\n      }\n    }",
+                )
+                .expect_err("should refuse");
+                assert!(err.to_string().contains("share the prefix"), "{err}");
+            }
+
+            /// The separator in a prefix would make routing ambiguous.
+            #[test]
+            fn a_prefix_containing_the_separator_is_refused() {
+                let err = route_result(
+                    "    mcp {\n      upstreams {\n        upstream \"a\" prefix=\"a.b\"\n      }\n    }",
+                )
+                .expect_err("should refuse");
+                assert!(
+                    err.to_string().contains("would make routing ambiguous"),
+                    "{err}"
+                );
+            }
+
+            #[test]
+            fn an_unknown_node_in_the_block_is_refused() {
+                let err = route_result(
+                    "    mcp {\n      upstreams {\n        server \"a\" prefix=\"p\"\n      }\n    }",
+                )
+                .expect_err("should refuse");
+                assert!(err.to_string().contains("Expected 'upstream'"), "{err}");
+            }
         }
 
         #[test]
