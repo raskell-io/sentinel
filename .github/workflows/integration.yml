@@ -25,7 +25,9 @@ on:
   # every PR would tax changes that cannot affect the outcome.
   #
   # The paths below are the ones whose drift has actually broken it: the
-  # Dockerfile, the compose stack, the fixture config, the harness itself.
+  # Dockerfile, the compose stack, the fixture config, the harness itself, and
+  # the fixtures the harness drives -- a fixture is part of the suite, so a
+  # change to one that breaks it should not wait for the nightly to say so.
   # Everything else is caught by the nightly run within a day.
   pull_request:
     paths:
@@ -33,6 +35,7 @@ on:
       - 'docker-compose*.yml'
       - 'config/docker/**'
       - 'tests/integration_test.sh'
+      - 'tests/fixtures/**'
       - '.github/workflows/integration.yml'
 
   workflow_dispatch:
