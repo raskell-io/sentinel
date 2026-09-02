@@ -16,7 +16,7 @@ matched anywhere in the path so it survives a route prefix in front of it.
 
 import json
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROTOCOL_VERSION = "2026-07-28"
 
@@ -119,4 +119,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
     print(f"mcp-server listening on {port}", file=sys.stderr, flush=True)
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    # Threading matters: health checks probe on their own schedule while the
+    # suite drives requests, and a single-threaded server serialises the two
+    # into timeouts that look like the proxy's fault.
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
