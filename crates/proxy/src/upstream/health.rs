@@ -221,6 +221,26 @@ impl ActiveHealthChecker {
             "Running health check cycle"
         );
 
+        // Populate the backend set from discovery before probing it.
+        //
+        // `Backends::run_health_check` iterates the set that `update()` fills,
+        // and nothing else fills it -- so without this the runner ticks on
+        // schedule, logs that it is running, and probes nothing at all. It
+        // fails silently in both directions: no probe is sent, and no backend
+        // is ever marked unhealthy, so an upstream that is down stays in
+        // rotation while the configuration says it is being checked.
+        //
+        // Cheap to repeat: discovery here is `Static`, and `update` only
+        // invokes its callback when the resolved set actually differs.
+        if let Err(e) = self.backends.update(|_| {}).await {
+            warn!(
+                upstream_id = %self.upstream_id,
+                error = %e,
+                "Failed to refresh backends before health check"
+            );
+            return;
+        }
+
         self.backends.run_health_check(self.parallel).await;
     }
 
@@ -419,6 +439,48 @@ mod tests {
             http_version: HttpVersionConfig::default(),
             discovery: None,
         }
+    }
+
+    /// The runner ticked on schedule, logged that it was running, and probed
+    /// nothing: `Backends::run_health_check` iterates the set that `update()`
+    /// fills, and nothing called `update()`. Every health check in every
+    /// configuration was inert, in both directions -- no probe sent, and no
+    /// backend ever marked unhealthy.
+    ///
+    /// Asserts against a real socket, because the defect was invisible to any
+    /// test that only inspected configuration.
+    #[tokio::test]
+    async fn a_health_check_cycle_actually_probes_the_backend() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr").to_string();
+
+        let probed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = probed.clone();
+        tokio::spawn(async move {
+            while listener.accept().await.is_ok() {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+        let mut config = create_test_config();
+        config.targets[0].address = addr;
+        config.health_check = Some(HealthCheckConfig {
+            check_type: HealthCheckType::Tcp,
+            interval_secs: 1,
+            timeout_secs: 1,
+            healthy_threshold: 1,
+            unhealthy_threshold: 1,
+        });
+
+        let checker = ActiveHealthChecker::new(&config).expect("checker built");
+        checker.run_health_check().await;
+
+        assert!(
+            probed.load(std::sync::atomic::Ordering::SeqCst) > 0,
+            "a health check cycle connected to nothing"
+        );
     }
 
     #[test]
