@@ -30,18 +30,65 @@ routes {
         }
     }
 
-    // Echo agent route. The compose stack runs the echo agent alongside the
-    // proxy on a shared socket volume, and tests/integration_test.sh checks
-    // that a request through here comes back with the agent's headers. Without
-    // this route the agent was running and unreachable, and /echo/* fell
-    // through to the catch-all below and 404'd at the backend.
+    // The routes below exist for tests/integration_test.sh, which checks that
+    // /api, /echo, /limited and /protected each answer.
+    //
+    // The backend is httpbin, which serves /anything/<anything> with a 200 and
+    // 404s everything else -- so each route rewrites its own prefix onto
+    // /anything before forwarding. Without that, every one of these forwarded
+    // its literal path and httpbin refused it, which is what "0/4 routes
+    // working" was reporting.
+
+    // Exercises the agent path end to end: the echo agent adds its headers on
+    // the way through, and the rewrite gives httpbin a path it will answer.
     route "echo" {
         priority "high"
         matches {
             path-prefix "/echo"
         }
         upstream "backend"
-        filters "echo"
+        filters "rewrite-echo" "echo"
+        policies {
+            timeout-secs 10
+            failure-mode "open"
+        }
+    }
+
+    route "api" {
+        priority "high"
+        matches {
+            path-prefix "/api"
+        }
+        upstream "backend"
+        filters "rewrite-api"
+        policies {
+            timeout-secs 10
+            failure-mode "open"
+        }
+    }
+
+    // Rate limited. A single request passes; the suite's burst of 30 is what
+    // draws the 429. Both outcomes count as the route working.
+    route "limited" {
+        priority "high"
+        matches {
+            path-prefix "/limited"
+        }
+        upstream "backend"
+        filters "rewrite-limited" "ratelimit"
+        policies {
+            timeout-secs 10
+            failure-mode "open"
+        }
+    }
+
+    route "protected" {
+        priority "high"
+        matches {
+            path-prefix "/protected"
+        }
+        upstream "backend"
+        filters "rewrite-protected"
         policies {
             timeout-secs 10
             failure-mode "open"
@@ -80,6 +127,36 @@ filters {
         agent "echo"
         timeout-ms 500
         failure-mode "open"
+    }
+
+    // httpbin answers /anything/<anything>; these put each route's traffic
+    // somewhere it will respond rather than 404.
+    filter "rewrite-echo" {
+        type "url-rewrite"
+        replace-prefix-match "/anything"
+    }
+
+    filter "rewrite-api" {
+        type "url-rewrite"
+        replace-prefix-match "/anything"
+    }
+
+    filter "rewrite-limited" {
+        type "url-rewrite"
+        replace-prefix-match "/anything"
+    }
+
+    filter "rewrite-protected" {
+        type "url-rewrite"
+        replace-prefix-match "/anything"
+    }
+
+    filter "ratelimit" {
+        type "rate-limit"
+        max-rps 5
+        burst 5
+        key "client-ip"
+        status-code 429
     }
 }
 
