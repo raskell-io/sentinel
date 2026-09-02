@@ -3937,6 +3937,47 @@ impl ZentinelProxy {
                     "Agentic request permitted"
                 );
                 self.record_mcp_call(&route, ctx, &mcp_method, &mcp_target, "allowed");
+
+                // Rate limits keyed on the MCP tool are evaluated here rather
+                // than on headers, because only now is the tool known from the
+                // body. The mirrored `Mcp-Name` header cannot be used for this:
+                // a client may set it to a cheap tool while the body calls an
+                // expensive one, and the limit would apply to the wrong thing.
+                if let Some(route_id) = ctx.route_id.as_deref() {
+                    if let Some(result) = self.rate_limit_manager.check_body_keyed(
+                        route_id,
+                        &ctx.client_ip,
+                        &ctx.path,
+                        mcp_target.as_deref(),
+                    ) {
+                        if !result.allowed
+                            && result.action == zentinel_config::RateLimitAction::Reject
+                        {
+                            warn!(
+                                correlation_id = %ctx.trace_id,
+                                route_id = route_id,
+                                mcp_target = ?mcp_target,
+                                limit = result.limit,
+                                "MCP tool call rate limited"
+                            );
+                            self.metrics.record_blocked_request("rate_limited");
+                            self.record_mcp_call(
+                                &route,
+                                ctx,
+                                &mcp_method,
+                                &mcp_target,
+                                "rate_limited",
+                            );
+                            return Err(Error::explain(
+                                ErrorType::HTTPStatus(result.status_code),
+                                result
+                                    .message
+                                    .unwrap_or_else(|| "Rate limit exceeded".to_string()),
+                            ));
+                        }
+                    }
+                }
+
                 ctx.mcp_method = mcp_method;
                 ctx.mcp_target = mcp_target;
                 ctx.a2a_method = a2a_method;

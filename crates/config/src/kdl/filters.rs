@@ -115,6 +115,8 @@ fn parse_rate_limit_filter(node: &kdl::KdlNode) -> Result<Filter> {
             "path" => RateLimitKey::Path,
             "route" => RateLimitKey::Route,
             "client-ip-and-path" => RateLimitKey::ClientIpAndPath,
+            "mcp-tool" => RateLimitKey::McpTool,
+            "client-ip-and-mcp-tool" => RateLimitKey::ClientIpAndMcpTool,
             header if header.starts_with("header:") => {
                 RateLimitKey::Header(header.trim_start_matches("header:").to_string())
             }
