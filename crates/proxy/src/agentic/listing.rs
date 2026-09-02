@@ -18,7 +18,7 @@
 //!
 //! So this module removes from a listing response exactly the entries that
 //! [`super::mcp`] would refuse a call to — using the same identity rule and the
-//! same [`permitted`](super::mcp::permitted) predicate, because a filter that
+//! same `permitted` predicate as [`super::mcp`], because a filter that
 //! hid a different set than the enforcer refuses would be worse than no filter
 //! at all: it would make the advertised surface a *misleading* description of
 //! the policy rather than merely an incomplete one.

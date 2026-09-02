@@ -381,6 +381,84 @@ test_echo_agent() {
     assert_status "$response" "200" "Echo route request succeeds"
 }
 
+# MCP policy: what the proxy refuses, and what it lets the upstream advertise.
+#
+# The fixture upstream (tests/fixtures/mcp_server.py) offers search_docs,
+# get_weather and execute_sql. The /mcp route allows the first two. /mcp-raw is
+# the same upstream with no policy, so the difference between the two is the
+# assertion rather than a filtered list taken on faith.
+test_mcp_policy() {
+    log_section "MCP Policy Tests"
+
+    local mcp_headers=(
+        -H "content-type: application/json"
+        -H "mcp-protocol-version: 2026-07-28"
+    )
+    local list_body='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+    log_test "Unfiltered route advertises every tool"
+    local raw
+    raw=$(curl -s -X POST "http://${PROXY_HOST}:${PROXY_PORT}/mcp-raw" \
+        "${mcp_headers[@]}" -d "$list_body" 2>/dev/null)
+    if echo "$raw" | grep -q "execute_sql"; then
+        log_success "Upstream offers execute_sql without a policy in front"
+    else
+        log_failure "Fixture did not return the expected tool list: $raw"
+    fi
+
+    log_test "Forbidden tool is hidden from tools/list"
+    local filtered
+    filtered=$(curl -s -X POST "http://${PROXY_HOST}:${PROXY_PORT}/mcp" \
+        "${mcp_headers[@]}" -d "$list_body" 2>/dev/null)
+    if echo "$filtered" | grep -q "execute_sql"; then
+        log_failure "execute_sql was advertised on a route that forbids it"
+    elif echo "$filtered" | grep -q "search_docs"; then
+        log_success "execute_sql hidden, permitted tools still listed"
+    else
+        log_failure "Listing lost its permitted tools too: $filtered"
+    fi
+
+    log_test "Forbidden tool is hidden from an event-stream listing"
+    local sse
+    sse=$(curl -s -X POST "http://${PROXY_HOST}:${PROXY_PORT}/mcp/sse" \
+        "${mcp_headers[@]}" -d "$list_body" 2>/dev/null)
+    if echo "$sse" | grep -q "event: message" && ! echo "$sse" | grep -q "execute_sql"; then
+        log_success "SSE listing filtered with its framing intact"
+    else
+        log_failure "SSE listing not filtered as expected: $sse"
+    fi
+
+    log_test "Calling a forbidden tool is refused"
+    local status
+    status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+        "http://${PROXY_HOST}:${PROXY_PORT}/mcp" "${mcp_headers[@]}" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_sql"}}' 2>/dev/null)
+    if [[ "$status" == "403" ]]; then
+        log_success "execute_sql refused with 403"
+    else
+        log_failure "Expected 403 for execute_sql, got $status"
+    fi
+
+    log_test "Calling a permitted tool succeeds"
+    status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+        "http://${PROXY_HOST}:${PROXY_PORT}/mcp" "${mcp_headers[@]}" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_docs"}}' 2>/dev/null)
+    if [[ "$status" == "200" ]]; then
+        log_success "search_docs permitted"
+    else
+        log_failure "Expected 200 for search_docs, got $status"
+    fi
+
+    log_test "Hidden entries are counted"
+    local metrics
+    metrics=$(curl -sf "http://${PROXY_HOST}:${METRICS_PORT}/metrics" 2>/dev/null)
+    if echo "$metrics" | grep -q "zentinel_mcp_listing_entries_hidden_total"; then
+        log_success "zentinel_mcp_listing_entries_hidden_total is reported"
+    else
+        log_failure "Listing filter metric missing from /metrics"
+    fi
+}
+
 # Test rate limit agent
 test_ratelimit_agent() {
     log_section "Rate Limit Agent Tests"
@@ -705,6 +783,10 @@ main() {
     # Wait for backend first (other services depend on it)
     wait_for_service "http://${PROXY_HOST}:8081/status/200" "Backend" 60 || exit 1
 
+    # The MCP fixture has no published port, so it is probed through the proxy
+    # route that reaches it rather than directly.
+    wait_for_service "http://${PROXY_HOST}:${PROXY_PORT}/mcp-raw" "MCP backend" 60 || true
+
     # Wait for proxy
     # /health is a route on the proxy's own HTTP listener, served by the
     # `health` builtin-handler in config/docker/proxy.kdl. It is deliberately
@@ -730,6 +812,7 @@ main() {
     test_health_endpoints
     test_configuration
     test_echo_agent
+    test_mcp_policy
     test_ratelimit_agent
     test_waf_agent
     test_multi_agent
