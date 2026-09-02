@@ -17,6 +17,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::grpc_health::GrpcHealthCheck;
 use crate::upstream::inference_health::InferenceHealthCheck;
+use crate::upstream::mcp_health::McpHealthCheck;
 
 use zentinel_common::types::HealthCheckType;
 use zentinel_config::{HealthCheck as HealthCheckConfig, UpstreamConfig};
@@ -201,6 +202,27 @@ impl ActiveHealthChecker {
                     consecutive_success = hc.consecutive_success,
                     consecutive_failure = hc.consecutive_failure,
                     "Created inference health check with model verification"
+                );
+
+                Box::new(hc)
+            }
+            HealthCheckType::Mcp {
+                path,
+                expected_tools,
+            } => {
+                let timeout = Duration::from_secs(config.timeout_secs);
+                let mut hc = McpHealthCheck::new(path.clone(), expected_tools.clone(), timeout);
+                hc.consecutive_success = config.healthy_threshold as usize;
+                hc.consecutive_failure = config.unhealthy_threshold as usize;
+
+                info!(
+                    upstream_id = %upstream_id,
+                    path = %path,
+                    expected_tools = ?expected_tools,
+                    timeout_secs = config.timeout_secs,
+                    consecutive_success = hc.consecutive_success,
+                    consecutive_failure = hc.consecutive_failure,
+                    "Created MCP health check"
                 );
 
                 Box::new(hc)

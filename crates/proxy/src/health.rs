@@ -113,6 +113,27 @@ struct InferenceHealthCheck {
     timeout: Duration,
 }
 
+/// MCP health check, delegating to the shared probe.
+///
+/// Holds no protocol logic of its own on purpose: see
+/// [`crate::upstream::mcp_health::McpHealthCheck::check_backend`].
+struct McpProtocolCheck {
+    inner: crate::upstream::mcp_health::McpHealthCheck,
+}
+
+#[async_trait]
+impl HealthCheckImpl for McpProtocolCheck {
+    async fn check(&self, target: &str) -> Result<Duration, String> {
+        let start = Instant::now();
+        self.inner.check_backend(target).await?;
+        Ok(start.elapsed())
+    }
+
+    fn check_type(&self) -> &str {
+        "mcp"
+    }
+}
+
 /// Inference probe health check - sends minimal completion request
 ///
 /// Verifies model can actually process requests, not just that server is running.
@@ -255,6 +276,23 @@ impl ActiveHealthChecker {
                     // Simple inference check without readiness sub-checks
                     Arc::new(base_check)
                 }
+            }
+            HealthCheckType::Mcp {
+                path,
+                expected_tools,
+            } => {
+                trace!(
+                    path = %path,
+                    expected_tools = ?expected_tools,
+                    "Configuring MCP health check"
+                );
+                Arc::new(McpProtocolCheck {
+                    inner: crate::upstream::mcp_health::McpHealthCheck::new(
+                        path.clone(),
+                        expected_tools.clone(),
+                        Duration::from_secs(config.timeout_secs),
+                    ),
+                })
             }
         };
 

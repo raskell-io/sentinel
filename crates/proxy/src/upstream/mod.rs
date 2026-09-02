@@ -100,6 +100,7 @@ pub mod inference_health;
 pub mod least_tokens;
 pub mod locality;
 pub mod maglev;
+pub mod mcp_health;
 pub mod p2c;
 pub mod peak_ewma;
 pub mod sticky_session;
