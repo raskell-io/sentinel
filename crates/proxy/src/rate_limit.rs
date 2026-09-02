@@ -359,13 +359,27 @@ impl RateLimiterPool {
         }
     }
 
-    /// Get the rate limit key from request context
+    /// Whether this limiter is keyed on something only the request body can
+    /// supply, and so cannot be evaluated until the body has been parsed.
+    pub fn needs_request_body(&self) -> bool {
+        matches!(
+            self.config.read().key,
+            RateLimitKey::McpTool | RateLimitKey::ClientIpAndMcpTool
+        )
+    }
+
+    /// Get the rate limit key from request context.
+    ///
+    /// `mcp_tool` is the tool or resource resolved **from the request body** by
+    /// the MCP policy engine, and is `None` before the body has been read. Only
+    /// the MCP-keyed variants consult it; see [`Self::needs_request_body`].
     pub fn extract_key(
         &self,
         client_ip: &str,
         path: &str,
         route_id: &str,
         headers: Option<&impl HeaderAccessor>,
+        mcp_tool: Option<&str>,
     ) -> String {
         let config = self.config.read();
         match &config.key {
@@ -376,6 +390,13 @@ impl RateLimiterPool {
             RateLimitKey::Header(header_name) => headers
                 .and_then(|h| h.get_header(header_name))
                 .unwrap_or_else(|| "unknown".to_string()),
+            // A request that names no tool -- `initialize`, `tools/list`, or a
+            // body that could not be parsed -- shares one bucket rather than
+            // escaping the limit.
+            RateLimitKey::McpTool => mcp_tool.unwrap_or("unknown").to_string(),
+            RateLimitKey::ClientIpAndMcpTool => {
+                format!("{}:{}", client_ip, mcp_tool.unwrap_or("unknown"))
+            }
         }
     }
 
@@ -555,6 +576,19 @@ pub trait HeaderAccessor {
     fn get_header(&self, name: &str) -> Option<String>;
 }
 
+/// Stands in where a limiter provably cannot consult headers.
+///
+/// The body-keyed path never reads them: its key comes from the parsed body.
+/// `extract_key` is generic over the accessor, so it still needs a type to
+/// instantiate with.
+struct NoHeaders;
+
+impl HeaderAccessor for NoHeaders {
+    fn get_header(&self, _name: &str) -> Option<String> {
+        None
+    }
+}
+
 /// Route-level rate limiter manager
 pub struct RateLimitManager {
     /// Per-route rate limiter pools
@@ -611,6 +645,75 @@ impl RateLimitManager {
     ///
     /// Checks both global and route-specific limits.
     /// Returns detailed rate limit information for response headers.
+    /// Evaluate the limiters that key on something only the body supplies.
+    ///
+    /// The counterpart to [`Self::check`], which skips these. Called once the
+    /// MCP policy engine has resolved the tool **from the request body** --
+    /// never from the mirrored `Mcp-Name` header, which a client can set to
+    /// anything while the body calls something else.
+    ///
+    /// Returns `None` when this route has no body-keyed limiter, which is the
+    /// common case and stays free.
+    pub fn check_body_keyed(
+        &self,
+        route_id: &str,
+        client_ip: &str,
+        path: &str,
+        mcp_tool: Option<&str>,
+    ) -> Option<RateLimitResult> {
+        let pool = self
+            .route_limiters
+            .get(route_id)
+            .filter(|p| p.needs_request_body())?;
+
+        let key = pool.extract_key(
+            client_ip,
+            path,
+            route_id,
+            Option::<&NoHeaders>::None,
+            mcp_tool,
+        );
+        let check_info = pool.check(&key);
+
+        if check_info.outcome == RateLimitOutcome::Limited {
+            warn!(
+                route_id = route_id,
+                client_ip = client_ip,
+                key = key,
+                mcp_tool = ?mcp_tool,
+                count = check_info.current_count,
+                "Request rate limited by MCP tool limiter"
+            );
+            let suggested_delay_ms = if check_info.current_count > check_info.limit as i64 {
+                let excess = check_info.current_count - check_info.limit as i64;
+                Some((excess as u64 * 1000) / check_info.limit as u64)
+            } else {
+                None
+            };
+            return Some(RateLimitResult {
+                allowed: false,
+                action: pool.action(),
+                status_code: pool.status_code(),
+                message: pool.message(),
+                limiter: route_id.to_string(),
+                limit: check_info.limit,
+                remaining: check_info.remaining,
+                reset_at: check_info.reset_at,
+                suggested_delay_ms,
+                max_delay_ms: pool.max_delay_ms(),
+            });
+        }
+
+        trace!(
+            route_id = route_id,
+            key = key,
+            mcp_tool = ?mcp_tool,
+            remaining = check_info.remaining,
+            "Request allowed by MCP tool limiter"
+        );
+        None
+    }
+
     pub fn check(
         &self,
         route_id: &str,
@@ -621,9 +724,15 @@ impl RateLimitManager {
         // Track the most restrictive limit info for headers
         let mut best_limit_info: Option<RateLimitCheckInfo> = None;
 
-        // Check global limit first
-        if let Some(ref global) = self.global_limiter {
-            let key = global.extract_key(client_ip, path, route_id, headers);
+        // Check global limit first. A limiter keyed on the request body is
+        // deferred to `check_body_keyed` -- evaluating it here would key on
+        // "unknown" and burn the request's quota against the wrong bucket.
+        if let Some(global) = self
+            .global_limiter
+            .as_ref()
+            .filter(|g| !g.needs_request_body())
+        {
+            let key = global.extract_key(client_ip, path, route_id, headers, None);
             let check_info = global.check(&key);
 
             if check_info.outcome == RateLimitOutcome::Limited {
@@ -658,9 +767,13 @@ impl RateLimitManager {
             best_limit_info = Some(check_info);
         }
 
-        // Check route-specific limit
-        if let Some(pool) = self.route_limiters.get(route_id) {
-            let key = pool.extract_key(client_ip, path, route_id, headers);
+        // Check route-specific limit, same deferral as above.
+        if let Some(pool) = self
+            .route_limiters
+            .get(route_id)
+            .filter(|p| !p.needs_request_body())
+        {
+            let key = pool.extract_key(client_ip, path, route_id, headers, None);
             let check_info = pool.check(&key);
 
             if check_info.outcome == RateLimitOutcome::Limited {
@@ -1214,5 +1327,97 @@ mod tests {
 
         // Key was just seen, so periodic cleanup must not remove it
         assert_eq!(pool_key_count(&pool), 1);
+    }
+}
+
+#[cfg(test)]
+mod mcp_tool_key_tests {
+    use super::*;
+    use zentinel_config::RateLimitKey;
+
+    fn pool_keyed(key: RateLimitKey, max_rps: u32) -> RateLimiterPool {
+        RateLimiterPool::new(RateLimitConfig {
+            max_rps,
+            key,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn only_the_mcp_keys_need_the_body() {
+        for key in [RateLimitKey::McpTool, RateLimitKey::ClientIpAndMcpTool] {
+            assert!(pool_keyed(key, 10).needs_request_body());
+        }
+        for key in [
+            RateLimitKey::ClientIp,
+            RateLimitKey::Path,
+            RateLimitKey::Route,
+            RateLimitKey::ClientIpAndPath,
+            RateLimitKey::Header("x-api-key".into()),
+        ] {
+            assert!(!pool_keyed(key, 10).needs_request_body());
+        }
+    }
+
+    #[test]
+    fn the_key_is_the_tool_from_the_body() {
+        let pool = pool_keyed(RateLimitKey::McpTool, 10);
+        let key = pool.extract_key(
+            "10.0.0.1",
+            "/mcp",
+            "api",
+            Option::<&NoHeaders>::None,
+            Some("delete_everything"),
+        );
+        assert_eq!(key, "delete_everything");
+    }
+
+    #[test]
+    fn the_combined_key_separates_clients() {
+        let pool = pool_keyed(RateLimitKey::ClientIpAndMcpTool, 10);
+        let a = pool.extract_key(
+            "10.0.0.1",
+            "/mcp",
+            "api",
+            Option::<&NoHeaders>::None,
+            Some("search"),
+        );
+        let b = pool.extract_key(
+            "10.0.0.2",
+            "/mcp",
+            "api",
+            Option::<&NoHeaders>::None,
+            Some("search"),
+        );
+        assert_ne!(a, b, "two clients calling one tool must not share a bucket");
+    }
+
+    #[test]
+    fn a_request_naming_no_tool_shares_one_bucket_rather_than_escaping() {
+        // `initialize`, `tools/list`, or an unparseable body name no tool. They
+        // must not each get their own unlimited bucket, and must not bypass the
+        // limit altogether.
+        let pool = pool_keyed(RateLimitKey::McpTool, 10);
+        let key = pool.extract_key("10.0.0.1", "/mcp", "api", Option::<&NoHeaders>::None, None);
+        assert_eq!(key, "unknown");
+    }
+
+    #[test]
+    fn one_tool_exhausting_its_quota_leaves_another_untouched() {
+        // The point of keying on the tool: an expensive tool being hammered
+        // must not deny a client the cheap ones.
+        let pool = pool_keyed(RateLimitKey::McpTool, 2);
+        for _ in 0..5 {
+            pool.check("expensive_tool");
+        }
+        assert_eq!(
+            pool.check("expensive_tool").outcome,
+            RateLimitOutcome::Limited
+        );
+        assert_ne!(
+            pool.check("cheap_tool").outcome,
+            RateLimitOutcome::Limited,
+            "a different tool must have its own quota"
+        );
     }
 }

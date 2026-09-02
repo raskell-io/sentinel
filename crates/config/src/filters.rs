@@ -450,6 +450,20 @@ pub enum RateLimitKey {
     Route,
     /// Combination of client IP and path
     ClientIpAndPath,
+    /// Rate limit by the MCP tool or resource named in the request body.
+    ///
+    /// Resolved from the body, never from the mirrored `Mcp-Name` header: a
+    /// client can send `Mcp-Name: cheap_tool` alongside a body calling
+    /// something expensive, and a limit keyed on the header would never apply
+    /// to what the server actually runs. That is the same defect the MCP policy
+    /// engine exists to close.
+    ///
+    /// Because the tool is only known once the body has been parsed, limits
+    /// keyed this way are evaluated after the body arrives rather than on
+    /// headers, and only on routes carrying an `mcp` block.
+    McpTool,
+    /// Combination of client IP and the MCP tool named in the request body.
+    ClientIpAndMcpTool,
 }
 
 /// Action to take when rate limit is exceeded
