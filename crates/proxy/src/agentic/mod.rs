@@ -26,6 +26,7 @@
 
 pub mod a2a;
 pub mod jsonrpc;
+pub mod listing;
 pub mod mcp;
 
 use zentinel_config::agentic::{
@@ -169,6 +170,11 @@ mod conversion_tests {
             require_validated_version: false,
             validate_param_headers: false,
             on_uninspectable_body: ConfigUninspectable::Allow,
+            // Not part of `Policy`: listing filtering happens on the response
+            // path, which reads the route's config directly. Set to a
+            // non-default here so that if it ever *is* added to `Policy`, this
+            // test is already exercising the interesting value.
+            filter_tool_list: false,
         };
         let p = mcp::Policy::from(&cfg);
 

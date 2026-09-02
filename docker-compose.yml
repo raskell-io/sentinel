@@ -62,6 +62,24 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # Minimal MCP server, so the suite can assert what the proxy does to a real
+  # JSON-RPC listing. httpbin cannot stand in for this: it echoes requests, and
+  # the MCP policy acts on a response the upstream has to produce.
+  mcp-backend:
+    image: python:3.12-alpine
+    container_name: zentinel-mcp-backend
+    command: ["python3", "/fixtures/mcp_server.py", "8090"]
+    volumes:
+      - ./tests/fixtures:/fixtures:ro
+    networks:
+      - zentinel
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   # Prometheus for metrics collection
   prometheus:
     image: prom/prometheus:latest
