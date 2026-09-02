@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.09_2](#26092---2026-09-02) | 0.6.39 | 2026-09-02 | **Health checks never probed anything** — every `health-check` block in every configuration was inert, so failover was an appearance rather than a fact; MCP gateway: per-tool metrics, per-tool rate limiting, tool-list filtering, and an MCP-native health check |
 | [26.09_1](#26091---2026-09-01) | 0.6.38 | 2026-09-01 | Dependency updates only; the XML parser in the data-masking agent was ported to quick-xml 0.42 |
 | [26.08_14](#260814---2026-08-29) | 0.6.37 | 2026-08-29 | `zentinel` with no configuration starts instead of retrying port 9090 forever; `logging { timestamps }` is read |
 | [26.08_13](#260813---2026-08-29) | 0.6.36 | 2026-08-29 | `dns-srv` discovery reads SRV records: the port and weight come from the record, where it previously resolved the bare domain on port 80 |
@@ -79,6 +80,81 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.09_2] - 2026-09-02
+
+**Crate version:** 0.6.39
+
+> **If you configure `health-check` on any upstream, upgrade.** On 0.6.38 and
+> earlier it never sent a single probe.
+
+### Fixed
+- **Health checks never probed anything.** `ActiveHealthChecker` built its
+  backend set from the configured targets and never called `update()`.
+  `Backends::run_health_check` iterates only the set `update()` populates, so
+  every cycle checked zero backends — for every check type: `http`, `tcp`,
+  `grpc` and `inference` alike.
+
+  It failed silently in both directions, which is what let it go unnoticed. No
+  probe was sent, so a backend that was down was never detected; and no backend
+  was ever marked unhealthy, so nothing was taken out of rotation. There was no
+  error anywhere. The runner spawned, logged `Starting health check runner`,
+  and ticked on schedule, while the configuration and `zentinel lint` both
+  reported health checking as configured.
+
+  Measured against a real backend at `interval-secs 2`: **0 probes in twelve
+  seconds before, 29 after**.
+
+  Anyone relying on health-checked failover has not had it. There is no
+  configuration change needed — existing `health-check` blocks begin working on
+  upgrade, which means backends that have been quietly failing may now be
+  marked unhealthy and removed from rotation for the first time.
+
+- **The Docker image builds again**, against Rust 1.95; the version had drifted
+  behind what the workspace requires.
+- **The integration suite runs**, having never been executed by CI since it was
+  written. Fixing that surfaced four further faults in it: it terminated itself
+  on its first passing assertion, probed `/health` on the metrics port instead
+  of the proxy port, lacked routes for the paths it asserted on, and could not
+  reach the echo agent.
+- **The post-release version bump lands** instead of leaving an orphan branch
+  and a `Cargo.lock` a release behind.
+
+### Added
+- **MCP calls are counted per tool.** `zentinel_mcp_calls_total`, labelled by
+  route, JSON-RPC method, target and decision. The method and target are
+  resolved from the request **body**, never from the mirrored `Mcp-Method` and
+  `Mcp-Name` headers — a client can set those to name a cheap tool while the
+  body calls an expensive one. Labels are bounded by what the route's own
+  configuration names, so a client cannot mint series by calling random tools.
+
+- **Rate limiting per MCP tool**, via the `mcp-tool` and
+  `client-ip-and-mcp-tool` rate-limit keys. An MCP endpoint otherwise shares
+  one limit across every tool it exposes, so a client hammering an expensive
+  tool exhausts the quota for the cheap ones. These are the first keys resolved
+  from the request body rather than from headers, and so apply once the body
+  has arrived.
+
+- **Tools a route forbids are hidden from `tools/list`.** Refusing a call to a
+  forbidden tool left the upstream still advertising it, so a client discovered
+  tools it would only ever be refused. `tools/list`, `resources/list` and
+  `prompts/list` responses are now filtered to exactly what the route permits,
+  using the same identity rule and predicate as the enforcer.
+
+  This matters beyond tidiness: tool descriptions are spent from the model's
+  context window, and a tool list is an inventory that routinely discloses
+  which internal systems exist and what they can be made to do. Set
+  `filter-tool-list #false` on a route to keep the previous behaviour.
+
+- **An MCP-native health check**, `health-check { type "mcp" }`. A TCP check
+  proves a socket is open and an HTTP check proves something answered 200;
+  neither says the server still speaks MCP, and many MCP servers expose no
+  `/health` at all. The probe sends `initialize`, and given `expected-tools`
+  also asks `tools/list` and requires those tools to be present — so a server
+  that is up but has lost the backend behind its tools is taken out of rotation
+  rather than left to fail real calls.
 
 ---
 
