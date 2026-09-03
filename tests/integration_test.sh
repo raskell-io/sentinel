@@ -393,8 +393,14 @@ test_echo_agent() {
         # process that could say why was the one nobody looked at.
         log_info "Echo agent container logs:"
         docker compose -f docker-compose.yml logs --tail 30 echo 2>&1 | sed 's/^/    /' || true
-        log_info "Socket directory as the agent sees it:"
-        docker compose -f docker-compose.yml exec -T proxy ls -la /var/run/zentinel 2>&1 | sed 's/^/    /' || true
+        # Run through the socket-init service rather than `exec` into the
+        # proxy: the proxy and agent images are distroless and have no `ls`,
+        # which is how the first attempt at this diagnostic failed. Going via
+        # the service also avoids hardcoding the volume name, which Compose
+        # prefixes with the project.
+        log_info "Shared socket volume:"
+        docker compose -f docker-compose.yml run --rm --entrypoint sh socket-init \
+            -c "ls -la /sockets" 2>&1 | sed 's/^/    /' || true
     fi
 
     log_test "Echo agent stamps its own correlation ID"
