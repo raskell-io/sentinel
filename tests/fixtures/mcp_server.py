@@ -20,6 +20,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROTOCOL_VERSION = "2026-07-28"
 
+# Incremented per `initialize`, so a session id is distinguishable per handshake.
+_SESSION_SEQ = 0
+
 # One tool a route is expected to permit, one it is expected to hide, and one
 # that only shows up when nothing is filtered.
 TOOLS = [
@@ -87,6 +90,15 @@ class Handler(BaseHTTPRequestHandler):
         method = envelope.get("method", "")
         result = result_for(method, envelope.get("params") or {})
 
+        # A real Streamable HTTP server issues a session on initialize and
+        # expects it back on later calls. Without this the fixture cannot
+        # exercise session reuse at all, and every call looks like a first one.
+        issued_session = None
+        if method == "initialize":
+            global _SESSION_SEQ
+            _SESSION_SEQ += 1
+            issued_session = f"sess-{_SESSION_SEQ}"
+
         if result is None:
             body = {
                 "jsonrpc": "2.0",
@@ -97,6 +109,8 @@ class Handler(BaseHTTPRequestHandler):
             body = {"jsonrpc": "2.0", "id": envelope.get("id"), "result": result}
 
         payload = json.dumps(body).encode()
+
+        self._issued_session = issued_session
 
         if "sse" in self.path:
             # Streamable HTTP: the response arrives inside an SSE event. The
@@ -112,6 +126,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
+        if getattr(self, "_issued_session", None):
+            self.send_header("Mcp-Session-Id", self._issued_session)
         self.end_headers()
         self.wfile.write(body)
 
