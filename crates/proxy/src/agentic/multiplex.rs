@@ -157,6 +157,30 @@ pub fn merge_listing(into: &mut Vec<Value>, mut entries: Vec<Value>, prefix: &st
     into.append(&mut entries);
 }
 
+/// A tool call being forwarded to one upstream rather than answered here.
+///
+/// Multiplexing otherwise originates: the gateway makes its own request and
+/// composes the reply. That is unavoidable for a listing, which is several
+/// answers merged into one, but a tool call goes to exactly one upstream and
+/// there is no reason it cannot be proxied — which is what gets it Pingora's
+/// connection pool, the route's retry policy, and the upstream's own TLS
+/// settings.
+#[derive(Debug, Clone)]
+pub struct ProxiedCall {
+    /// The `upstreams` entry to forward to.
+    pub upstream: String,
+    /// Path on that upstream.
+    pub path: String,
+    /// The upstream's own prefix, for putting its session back in the token.
+    pub prefix: String,
+    /// The body to send, with the prefix stripped from the tool name.
+    pub body: Vec<u8>,
+    /// That upstream's session, if one is already open.
+    pub session: Option<String>,
+    /// Sessions for every upstream, so the reply can carry an updated token.
+    pub sessions: BTreeMap<String, String>,
+}
+
 /// Whether this method's entries can be merged across upstreams.
 ///
 /// Tools and prompts carry bare names, which [`super::namespace`] prefixes so a
