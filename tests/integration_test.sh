@@ -388,6 +388,13 @@ test_echo_agent() {
         log_success "Echo agent added X-Echo-Response-Status"
     else
         log_failure "X-Echo-Response-Status missing; the agent did not process the response"
+        # The suite dumps proxy logs on failure and never the agent's, which is
+        # why "agent may not be running" went undiagnosed for so long: the one
+        # process that could say why was the one nobody looked at.
+        log_info "Echo agent container logs:"
+        docker compose -f docker-compose.yml logs --tail 30 echo 2>&1 | sed 's/^/    /' || true
+        log_info "Socket directory as the agent sees it:"
+        docker compose -f docker-compose.yml exec -T proxy ls -la /var/run/zentinel 2>&1 | sed 's/^/    /' || true
     fi
 
     log_test "Echo agent stamps its own correlation ID"

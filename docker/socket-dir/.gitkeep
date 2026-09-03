@@ -1,0 +1,8 @@
+This directory is copied into the agent images as /var/run/zentinel, the
+shared agent-socket directory.
+
+It exists because a Docker named volume mounted at a path the image does not
+contain is created root-owned, and the agents run as `nonroot` — so they could
+not create their socket in it. It is copied from the build context rather than
+produced by a builder stage so that the `*-prebuilt` image targets, which exist
+precisely to avoid compiling, do not gain a dependency on the Rust builder.
