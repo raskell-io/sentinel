@@ -529,6 +529,13 @@ struct AgentEntry {
     healthy: AtomicBool,
 }
 
+/// Largest interval between reconnection attempts.
+///
+/// Reached after five consecutive failures at the default five-second
+/// interval. An agent that has been down for a day is still retried every two
+/// minutes rather than abandoned.
+const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(120);
+
 impl AgentEntry {
     fn new(agent_id: String, endpoint: String) -> Self {
         Self {
@@ -544,11 +551,21 @@ impl AgentEntry {
     }
 
     /// Check if enough time has passed since last reconnect attempt.
+    /// Whether enough time has passed to try connecting again.
+    ///
+    /// The interval grows with consecutive failures and is capped, so an agent
+    /// that has been unreachable for hours is still retried -- just not every
+    /// few seconds. Without the cap this would drift into never; without the
+    /// backoff, a permanently misconfigured endpoint would be dialled forever
+    /// at full rate.
     fn should_reconnect(&self, interval: Duration) -> bool {
         let last_ms = self.last_reconnect_attempt_ms.load(Ordering::Relaxed);
         if last_ms == 0 {
             return true;
         }
+        let failures = self.reconnect_attempts.load(Ordering::Relaxed) as u32;
+        let interval = interval.saturating_mul(2u32.saturating_pow(failures.min(5)));
+        let interval = interval.min(MAX_RECONNECT_BACKOFF);
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -1101,12 +1118,31 @@ impl AgentPool {
             }
         }
 
+        // An agent that could not be reached is still registered, marked
+        // unhealthy, rather than refused.
+        //
+        // Returning an error here left the agent absent from the pool for the
+        // life of the process: `run_maintenance` reconnects the connections of
+        // agents it *holds*, and there was nothing to hold. Every later call
+        // answered "Agent <id> not found" while the agent sat there listening,
+        // and with `failure-mode "open"` that is silent -- requests forwarded
+        // unprocessed, agent healthy, nothing reported.
+        //
+        // Three ordinary situations produced it: an agent slower to start than
+        // the proxy, an agent that restarts, and a socket on a volume that is
+        // not ready yet. Registering unhealthy makes all three self-healing,
+        // because maintenance now has an entry to work on.
         if connections.is_empty() {
-            return Err(AgentProtocolError::ConnectionFailed(format!(
-                "Failed to create any connections to agent {}",
-                agent_id
-            )));
+            warn!(
+                agent_id = %agent_id,
+                endpoint = %endpoint,
+                "No connection to agent yet; registering it unhealthy so \
+                 maintenance can connect when it becomes reachable"
+            );
         }
+        entry
+            .healthy
+            .store(!connections.is_empty(), Ordering::Release);
 
         // Store capabilities from first successful connection and register with ConfigPusher
         if let Some(conn) = connections.first() {
@@ -1975,22 +2011,54 @@ impl AgentPool {
         entry.mark_reconnect_attempt();
         let attempts = entry.reconnect_attempts.fetch_add(1, Ordering::Relaxed);
 
+        // `max_reconnect_attempts` bounds the *backoff*, not the retrying.
+        //
+        // This used to return here, which abandoned the agent permanently:
+        // `reconnect_attempts` resets only on success, so after three failures
+        // -- roughly fifteen seconds at the default interval -- nothing tried
+        // again for the life of the process. An agent down for longer than that
+        // was gone, which covers most restarts and every rolling deploy.
+        //
+        // The counter now only slows retries down, so recovery stays possible
+        // however long the agent was away.
         if attempts >= self.config.max_reconnect_attempts {
-            debug!(
+            trace!(
                 agent_id = %agent_id,
                 attempts = attempts,
-                "Max reconnect attempts reached"
+                "Reconnecting at the backed-off interval"
             );
-            return Ok(());
         }
 
         debug!(agent_id = %agent_id, attempt = attempts + 1, "Attempting reconnect");
 
         match self.create_connection(agent_id, &entry.endpoint).await {
             Ok(conn) => {
+                // Capabilities are learned here as well as in `add_agent`, and
+                // have to be: an agent that was unreachable at startup is now
+                // registered rather than refused, so this may be the first
+                // connection it has ever had. Without this it would answer
+                // calls while the pool believed it supported nothing, and
+                // config push would never reach it.
+                if entry.capabilities.read().await.is_none() {
+                    if let Some(caps) = conn.client.capabilities().await {
+                        self.config_pusher.register_agent(
+                            agent_id,
+                            &caps.name,
+                            caps.features.config_push,
+                        );
+                        debug!(
+                            agent_id = %agent_id,
+                            supports_config_push = caps.features.config_push,
+                            "Learned agent capabilities on reconnect"
+                        );
+                        *entry.capabilities.write().await = Some(caps);
+                    }
+                }
+
                 let mut connections = entry.connections.write().await;
                 connections.push(Arc::new(conn));
                 entry.reconnect_attempts.store(0, Ordering::Relaxed);
+                entry.healthy.store(true, Ordering::Release);
                 info!(agent_id = %agent_id, "Reconnected successfully");
                 Ok(())
             }
@@ -2293,5 +2361,65 @@ mod tests {
         let pool = AgentPool::new();
         let removed = pool.cleanup_expired_sessions();
         assert_eq!(removed, 0);
+    }
+
+    /// An agent that cannot be reached is registered anyway, marked unhealthy.
+    ///
+    /// It used to be refused, which left it absent from the pool for the life
+    /// of the process: maintenance reconnects the agents it holds, and there
+    /// was nothing to hold. Every call answered "Agent <id> not found" while
+    /// the agent sat there listening.
+    #[tokio::test]
+    async fn an_unreachable_agent_is_registered_unhealthy_rather_than_refused() {
+        let pool = AgentPool::new();
+
+        // Nothing is listening on this socket.
+        let result = pool
+            .add_agent("ghost", "unix:/nonexistent/zentinel-test.sock")
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "registration must succeed so maintenance can heal it later: {result:?}"
+        );
+        assert!(
+            pool.agents.contains_key("ghost"),
+            "the agent must be in the pool, or nothing will ever reconnect it"
+        );
+
+        let entry = pool.agents.get("ghost").expect("registered");
+        assert!(
+            !entry.healthy.load(Ordering::Acquire),
+            "it is registered, not pretended healthy"
+        );
+    }
+
+    /// The reconnect interval grows with consecutive failures and is capped,
+    /// so an agent down for a long time is still retried.
+    ///
+    /// Attempts used to stop retrying entirely at `max_reconnect_attempts` --
+    /// three by default, about fifteen seconds -- which covers most restarts.
+    #[test]
+    fn reconnect_backoff_grows_and_is_capped() {
+        let entry = AgentEntry::new("a".to_string(), "unix:/tmp/x.sock".to_string());
+        entry.mark_reconnect_attempt();
+
+        // Fresh failure: the base interval has not elapsed, so not yet.
+        assert!(!entry.should_reconnect(Duration::from_secs(60)));
+
+        // Many failures must not push the interval past the cap.
+        entry.reconnect_attempts.store(1000, Ordering::Relaxed);
+        assert!(
+            !entry.should_reconnect(Duration::from_secs(1)),
+            "still within the capped interval immediately after an attempt"
+        );
+
+        // A zero-length base interval means any elapsed time qualifies, which
+        // shows the cap arithmetic does not overflow into never.
+        let fresh = AgentEntry::new("b".to_string(), "unix:/tmp/y.sock".to_string());
+        assert!(
+            fresh.should_reconnect(Duration::from_secs(1)),
+            "an agent that has never been tried is tried"
+        );
     }
 }

@@ -157,6 +157,25 @@ impl AgentV2 {
 
         let start = Instant::now();
 
+        // Maintenance is spawned before registration, not after.
+        //
+        // It used to be after, behind a `?`, so a registration that failed took
+        // the maintenance loop with it -- the one thing that could have
+        // recovered the agent. The comment on the spawn already said "without
+        // this, a crashed-and-restarted agent would stay unreachable"; the
+        // early return made that true on exactly the path where it mattered.
+        {
+            let pool = Arc::clone(&self.pool);
+            let handle = tokio::spawn(async move { pool.run_maintenance().await });
+            let mut guard = self
+                .maintenance_handle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(old) = guard.replace(handle) {
+                old.abort();
+            }
+        }
+
         // Add agent to pool - pool will establish connections
         self.pool
             .add_agent(&self.config.id, &endpoint)
@@ -182,22 +201,6 @@ impl AgentV2 {
             connect_time_ms = start.elapsed().as_millis(),
             "V2 agent pool initialized"
         );
-
-        // Spawn pool maintenance: periodic health checks (with recovery of
-        // connections marked unhealthy), reconnection of failed connections,
-        // and cleanup of expired sticky sessions / correlation affinities.
-        // Without this, a crashed-and-restarted agent would stay unreachable.
-        {
-            let pool = Arc::clone(&self.pool);
-            let handle = tokio::spawn(async move { pool.run_maintenance().await });
-            let mut guard = self
-                .maintenance_handle
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(old) = guard.replace(handle) {
-                old.abort();
-            }
-        }
 
         // Send configuration if present
         if let Some(config_value) = &self.config.config {
