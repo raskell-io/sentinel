@@ -4030,7 +4030,20 @@ impl ZentinelProxy {
 
         let mut sessions = mux.sessions(client_session(session).as_deref());
 
-        let reply = if let Some(field) = listing::listed_field(&method) {
+        // Resources are not served here at all. They are identified by URI,
+        // which carries no upstream prefix, so a merged listing would advertise
+        // duplicate indistinguishable URIs that no subsequent read could be
+        // routed to -- worse than not offering them.
+        let reply = if !crate::agentic::multiplex::can_merge(&method) {
+            crate::agentic::gateway::error_response(
+                &id,
+                -32601,
+                &format!(
+                    "{method} is not available on a route that fronts several MCP servers: \
+                     resources are identified by URI and cannot be attributed to an upstream"
+                ),
+            )
+        } else if let Some(field) = listing::listed_field(&method) {
             let allowed: std::collections::HashSet<String> =
                 mcp.allowed_tools.iter().cloned().collect();
             let denied: std::collections::HashSet<String> =
