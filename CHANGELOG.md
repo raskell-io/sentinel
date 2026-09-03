@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.09_3](#26093---2026-09-03) | 0.6.40 | 2026-09-03 | **Agents in the container images could not create their sockets**, so agent routes silently failed open; one route can now also front several MCP servers as a single endpoint, merging their listings and routing calls by tool |
 | [26.09_2](#26092---2026-09-02) | 0.6.39 | 2026-09-02 | **Health checks never probed anything** — every `health-check` block in every configuration was inert, so failover was an appearance rather than a fact; MCP gateway: per-tool metrics, per-tool rate limiting, tool-list filtering, and an MCP-native health check |
 | [26.09_1](#26091---2026-09-01) | 0.6.38 | 2026-09-01 | Dependency updates only; the XML parser in the data-masking agent was ported to quick-xml 0.42 |
 | [26.08_14](#260814---2026-08-29) | 0.6.37 | 2026-08-29 | `zentinel` with no configuration starts instead of retrying port 9090 forever; `logging { timestamps }` is read |
@@ -80,6 +81,140 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.09_3] - 2026-09-03
+
+**Crate version:** 0.6.40
+
+### Added
+- **A route can front several MCP servers and present them as one endpoint.**
+  `tools/list` is answered by asking every upstream and merging the results,
+  with each tool carrying its upstream's prefix; a call is routed to the server
+  its prefix names, with the prefix stripped before the upstream sees it.
+
+  ```kdl
+  mcp {
+      upstreams {
+          upstream "docs" prefix="docs"
+          upstream "warehouse" prefix="warehouse" path="/mcp"
+      }
+      session-key "…64 hex chars…"
+  }
+  ```
+
+  Three things worth knowing before configuring it:
+
+  - **Prefixes are declared, never derived.** A tool's name is what a model
+    reasons about, so it must not change because an unrelated upstream was added
+    or an existing one renamed. Duplicate prefixes, and prefixes containing `.`,
+    are refused at load.
+
+  - **`session-key` is required with two or more upstreams, and must be
+    configured rather than generated.** A client session spans several upstream
+    sessions, and that mapping travels in an encrypted `Mcp-Session-Id` rather
+    than in the proxy. A key generated at startup would rotate on every reload
+    and drop every live session, and two Zentinel instances could not read each
+    other's tokens — which would force session affinity onto the load balancer.
+    Generate one with `openssl rand -hex 32`.
+
+  - **Policy applies to the name the client sees.** Write
+    `deny "warehouse.execute_sql"`, not `deny "execute_sql"`. Denied tools are
+    both hidden from the merged listing and refused when called.
+
+  Upstream sessions are opened lazily, the first time a call routes to that
+  upstream.
+
+  **When an upstream is down**, its tools are omitted from the merged listing
+  rather than the listing failing — one unreachable server costs its own tools
+  and no others — and a call routed to it fails fast with
+  `upstream is not reachable` rather than hanging. Measured with one of two
+  upstreams stopped: the listing came back in 58 ms, the call was refused in
+  17 ms.
+
+  Configuring an MCP health check on the upstreams improves this further, since
+  an upstream already known to be unhealthy is skipped rather than tried. That
+  matters most for a server that accepts connections but never answers, where
+  there is no refused connection to fail fast on.
+
+  There is no *failover* in the sense of retrying the call elsewhere: a tool
+  lives on one upstream, so there is nowhere else to send it. Telling a
+  connected client that the tool list changed, via
+  `notifications/tools/list_changed`, needs the server-to-client SSE channel
+  that Streamable HTTP defines and Zentinel does not implement yet.
+
+  These routes originate rather than forward — merging a listing is composition,
+  not proxying — so their upstream calls use neither the connection pool nor the
+  route's retry policy. They do go through the upstream's own load balancing,
+  service discovery and health checking.
+
+  **Resources are not served on a multiplexing route**, and `resources/*` is
+  refused there with a reason. They are identified by URI, and a URI cannot
+  carry an upstream prefix — `docs.file:///a.txt` is not a URI — so a merged
+  listing would show the same URI from two servers with no way to tell them
+  apart and no way to read either. Tools and prompts, which have bare names,
+  merge and route normally. A route with a single upstream is unaffected and
+  serves resources as before.
+
+### Fixed
+- **JSON-RPC response ids preserve their type.** A request with `"id": 42` was
+  answered with `"id": "42"`, because ids are normalised to strings internally
+  for policy and audit. The specification requires the response id to equal the
+  request id including its type, and a strict client is entitled to reject the
+  mismatch.
+
+- **Agents could not create their sockets in the container images.**
+  `/var/run/zentinel` — where agents place their listening sockets and where the
+  proxy looks for them — was not created in any image. Mounted there, a Docker
+  named volume is created **root-owned**, and the agent images run as
+  `nonroot`, so the bind failed. The proxy then had nothing to connect to and
+  every agent route silently failed open.
+
+  **If you run the published images with agents over a shared socket volume,
+  this affected you**, and the symptom was agents appearing to do nothing rather
+  than any error.
+
+  The images now create the directory, but that alone is not a reliable fix and
+  should not be relied on: both the Debian and distroless bases have `/var/run`
+  as a symlink to `/run`, so a directory placed at `/var/run/zentinel` is not
+  necessarily where Docker looks when initialising a volume mounted there, and
+  whichever container starts first decides whose layout is used. **If you write
+  your own Compose file, prepare the volume explicitly**, as the one shipped in
+  this repository now does:
+
+  ```yaml
+  socket-init:
+    image: busybox
+    user: "0:0"
+    command: ["sh", "-c", "mkdir -p /sockets && chmod 1777 /sockets"]
+    volumes:
+      - agent-sockets:/sockets
+  ```
+
+  and have the agents wait on it with
+  `condition: service_completed_successfully`. `1777` because the proxy and the
+  agents may run as different users, sticky so one agent cannot remove
+  another's socket.
+
+- **Start agents before the proxy.** The proxy registers each agent once, at
+  startup, and a registration that fails is not retried — the agent is then
+  absent for the life of the process, and every call to it answers
+  `Agent <id> not found` while the agent sits there listening. With
+  `failure-mode "open"` that is silent: traffic flows unprocessed.
+
+  The shipped Compose file now orders them. If you run your own, do the same.
+  The underlying behaviour is tracked in
+  [#465](https://github.com/zentinelproxy/zentinel/issues/465) — it also means
+  an agent that *restarts* is lost until the proxy restarts.
+
+- **The echo agent's integration tests can now fail, and can now pass.** One
+  asserted a request-only header against the response and could never pass,
+  skipping every run behind a message that blamed the environment; the other
+  matched a header the proxy adds regardless and passed with the agent stopped.
+  Between them they verified nothing, which is why the bug above survived: the
+  suite covering it could not report it. The suite now also captures the agent's
+  own container logs when the assertion fails.
 
 ---
 
