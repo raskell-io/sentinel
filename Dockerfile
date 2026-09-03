@@ -97,7 +97,11 @@ RUN cargo build --release --package zentinel-proxy --package zentinel-echo-agent
 # zentinelproxy/zentinel#255.
 ################################################################################
 FROM busybox:1.38 AS runtime-dirs
-RUN mkdir -p /var/log/zentinel /var/lib/zentinel
+# `/var/run/zentinel` is the shared agent-socket directory. 1777 because the
+# proxy and the agents may run as different users, sticky like /tmp so one agent
+# cannot remove another's socket.
+RUN mkdir -p /var/log/zentinel /var/lib/zentinel /var/run/zentinel \
+    && chmod 1777 /var/run/zentinel
 
 ################################################################################
 # Production image: Distroless (smallest, most secure)
@@ -247,7 +251,7 @@ CMD ["-c", "/etc/zentinel/zentinel.kdl"]
 FROM gcr.io/distroless/cc-debian12:nonroot AS echo-agent
 
 COPY --from=builder /app/target/release/zentinel-echo-agent /zentinel-echo-agent
-COPY --chmod=1777 docker/socket-dir /var/run/zentinel
+COPY --from=runtime-dirs --chmod=1777 /var/run/zentinel /var/run/zentinel
 
 # ECHO_AGENT_SOCKET, not SOCKET_PATH: the agent's argument parser reads the
 # former, so the latter was inert and the agent fell back to its hardcoded
@@ -266,7 +270,7 @@ CMD ["/zentinel-echo-agent"]
 FROM gcr.io/distroless/cc-debian12:nonroot AS echo-agent-prebuilt
 
 COPY zentinel-echo-agent /zentinel-echo-agent
-COPY --chmod=1777 docker/socket-dir /var/run/zentinel
+COPY --from=runtime-dirs --chmod=1777 /var/run/zentinel /var/run/zentinel
 
 LABEL org.opencontainers.image.title="Zentinel Echo Agent" \
       org.opencontainers.image.description="Echo agent for Zentinel proxy testing"
