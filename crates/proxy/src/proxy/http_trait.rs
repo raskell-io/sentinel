@@ -344,6 +344,48 @@ impl ProxyHttp for ZentinelProxy {
         session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>, Box<Error>> {
+        // A multiplexed tool call names its own upstream, decided from the
+        // request body in `request_filter`. It overrides the route's, because
+        // the route has one `upstream` and the whole point here is that several
+        // sit behind it.
+        if let Some(call) = ctx.mcp_proxied_call.clone() {
+            if let Some(pool) = self.upstream_pools.get(&call.upstream).await {
+                let selection_ctx = crate::upstream::RequestContext {
+                    client_ip: ctx.client_ip.parse().ok(),
+                    headers: std::collections::HashMap::new(),
+                    path: call.path.clone(),
+                    method: "POST".to_string(),
+                };
+                match pool.select_peer(Some(&selection_ctx)).await {
+                    Ok(peer) => {
+                        ctx.upstream = Some(call.upstream.clone());
+                        debug!(
+                            correlation_id = %ctx.trace_id,
+                            upstream = %call.upstream,
+                            "Proxying MCP tool call to the upstream its prefix names"
+                        );
+                        return Ok(Box::new(peer));
+                    }
+                    Err(e) => {
+                        warn!(
+                            correlation_id = %ctx.trace_id,
+                            upstream = %call.upstream,
+                            error = %e,
+                            "No healthy target for a multiplexed MCP upstream"
+                        );
+                        return Err(Error::explain(
+                            ErrorType::HTTPStatus(502),
+                            "MCP upstream has no healthy target",
+                        ));
+                    }
+                }
+            }
+            return Err(Error::explain(
+                ErrorType::HTTPStatus(502),
+                format!("MCP upstream '{}' is not configured", call.upstream),
+            ));
+        }
+
         // Cache global config once per request (avoids repeated Arc clones)
         if ctx.config.is_none() {
             ctx.config = Some(self.config_manager.current());
@@ -1722,6 +1764,33 @@ impl ProxyHttp for ZentinelProxy {
     ) -> Result<(), Box<Error>> {
         use zentinel_config::BodyStreamingMode;
 
+        // A proxied MCP tool call supplies its own body. The downstream body was
+        // read in `request_filter` to find out which upstream the call belongs
+        // to, so Pingora has nothing left to forward and arrives here once with
+        // `None` and end-of-stream set. Handing it the rewritten body then is
+        // what actually sends it: `upstream_end_of_body` is already true, and
+        // the guard that drops empty writes only applies before end of stream.
+        //
+        // Policy has already run on this request in `request_filter`, on the
+        // body as the client sent it, so it is deliberately not re-run here
+        // against the rewritten one.
+        if let Some(call) = ctx.mcp_proxied_call.as_ref() {
+            trace!(
+                correlation_id = %ctx.trace_id,
+                end_of_stream = end_of_stream,
+                "Substituting the body of a proxied MCP tool call"
+            );
+            // Replace whatever the retry buffer holds -- that is the body as
+            // the client sent it, still carrying the prefix the upstream does
+            // not know.
+            if end_of_stream {
+                *body = Some(Bytes::from(call.body.clone()));
+            } else {
+                *body = None;
+            }
+            return Ok(());
+        }
+
         // MCP / A2A policy. Runs before agent inspection because it decides
         // whether the request may be made at all, from data already in hand;
         // agents decide whether its contents are safe.
@@ -1979,6 +2048,36 @@ impl ProxyHttp for ZentinelProxy {
                     .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
                     .unwrap_or_else(|| period_reset.to_string());
                 upstream_response.insert_header("X-Budget-Period-Reset", reset_datetime)?;
+            }
+        }
+
+        // A proxied MCP tool call answers with the upstream's own session, which
+        // is both meaningless to the client and not the client's to hold: it
+        // names one server behind an endpoint that fronts several. Swap it for
+        // the gateway's token, updated with any session the upstream just
+        // issued, so the next call can reuse it rather than initialising again.
+        if let Some(call) = ctx.mcp_proxied_call.clone() {
+            let issued = upstream_response
+                .headers
+                .get("mcp-session-id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+
+            let mut sessions = call.sessions.clone();
+            if let Some(s) = issued {
+                sessions.insert(call.prefix.clone(), s);
+            }
+
+            upstream_response.remove_header("mcp-session-id");
+
+            if let Some(mcp) = ctx.route_config.as_ref().and_then(|r| r.mcp.as_ref()) {
+                if let Ok(Some(mux)) = crate::agentic::multiplex::Multiplexer::from_config(mcp) {
+                    if let Ok(token) = mux.token(&sessions) {
+                        upstream_response
+                            .insert_header(crate::agentic::gateway::SESSION_HEADER, token)
+                            .ok();
+                    }
+                }
             }
         }
 
@@ -2393,6 +2492,33 @@ impl ProxyHttp for ZentinelProxy {
             route_id = ctx.route_id.as_deref().unwrap_or("unknown"),
             "Applying upstream request modifications"
         );
+
+        // A proxied MCP tool call goes to its upstream's own path, carries that
+        // upstream's session rather than the client's, and announces the length
+        // of the rewritten body -- which is shorter, the prefix having been
+        // stripped from the tool name.
+        if let Some(call) = ctx.mcp_proxied_call.as_ref() {
+            upstream_request.set_uri(
+                call.path
+                    .parse()
+                    .unwrap_or_else(|_| "/".parse().expect("valid uri")),
+            );
+            upstream_request
+                .insert_header("Content-Length", call.body.len().to_string())
+                .ok();
+            upstream_request.remove_header("transfer-encoding");
+            match call.session.as_deref() {
+                Some(s) => {
+                    upstream_request
+                        .insert_header(crate::agentic::gateway::SESSION_HEADER, s)
+                        .ok();
+                }
+                // The client's own token is meaningless to an upstream.
+                None => {
+                    upstream_request.remove_header("mcp-session-id");
+                }
+            }
+        }
 
         // Add trace ID header for upstream correlation
         upstream_request
@@ -3948,6 +4074,16 @@ impl ZentinelProxy {
             }
         };
 
+        // Buffer the body as it is read.
+        //
+        // Draining it here would otherwise leave Pingora with nothing to
+        // forward *and* no reason to try: its body loop only runs when the
+        // retry buffer exists or the request had no body, so a proxied call
+        // would send headers promising a Content-Length and never send it.
+        // With buffering on, the loop runs and `request_body_filter` gets the
+        // chance to substitute the rewritten body.
+        session.enable_retry_buffering();
+
         // Read the whole envelope before deciding anything. Nothing has been
         // forwarded at this point, so a refusal here costs the client one
         // response and no upstream any work.
@@ -4073,8 +4209,26 @@ impl ZentinelProxy {
                 },
             })
         } else if let Some(target) = envelope.target.as_deref() {
-            self.mcp_route_call(&mux, target, &body, &id, &mut sessions, ctx)
+            // A tool call goes to exactly one upstream, so it can be proxied
+            // rather than originated — which is what gets it the connection
+            // pool, the retry policy and the upstream's TLS settings. Only a
+            // listing genuinely has to be composed here.
+            match self
+                .mcp_prepare_proxied_call(&mux, target, &body, &sessions, ctx)
                 .await
+            {
+                Ok(Some(call)) => {
+                    ctx.mcp_proxied_call = Some(call);
+                    // Not answered here: fall through to the proxy path.
+                    return Ok(false);
+                }
+                Ok(None) => gateway::error_response(
+                    &id,
+                    -32602,
+                    &format!("\"{target}\" does not name a tool on this endpoint"),
+                ),
+                Err(reason) => gateway::error_response(&id, -32603, &reason),
+            }
         } else {
             gateway::error_response(
                 &id,
@@ -4160,6 +4314,77 @@ impl ZentinelProxy {
         }
 
         multiplex::listing_response(id, field, merged)
+    }
+
+    /// Work out which upstream a call belongs to and prepare it for proxying.
+    ///
+    /// Returns `Ok(None)` when the name carries no known prefix — a refusal,
+    /// not a fallback, since picking an upstream would send the call somewhere
+    /// nobody configured.
+    ///
+    /// The `initialize` handshake still happens here rather than on the proxy
+    /// path, and has to: lazy initialisation needs a request *before* the
+    /// client's, and the proxy forwards exactly the one request it was given.
+    /// So the first call to an upstream costs one gateway-originated round trip
+    /// and every call after it is proxied.
+    async fn mcp_prepare_proxied_call(
+        &self,
+        mux: &crate::agentic::multiplex::Multiplexer,
+        target: &str,
+        body: &[u8],
+        sessions: &std::collections::BTreeMap<String, String>,
+        ctx: &RequestContext,
+    ) -> Result<Option<crate::agentic::multiplex::ProxiedCall>, String> {
+        use crate::agentic::{gateway, multiplex::ProxiedCall};
+
+        let Some((up, bare)) = mux.route(target) else {
+            return Ok(None);
+        };
+
+        // Rewrite the call to the name the upstream knows it by.
+        let mut outbound: serde_json::Value =
+            serde_json::from_slice(body).map_err(|e| e.to_string())?;
+        for field in ["name", "uri"] {
+            if let Some(params) = outbound.get_mut("params").and_then(|p| p.as_object_mut()) {
+                if params.get(field).and_then(|v| v.as_str()) == Some(target) {
+                    params.insert(field.to_string(), serde_json::Value::from(bare.clone()));
+                    break;
+                }
+            }
+        }
+
+        let mut sessions = sessions.clone();
+
+        if !sessions.contains_key(&up.prefix) {
+            let Some(url) = self.mcp_upstream_url(&up.upstream, &up.path, ctx).await else {
+                return Err("upstream is not reachable".to_string());
+            };
+            match gateway::call(&url, &gateway::initialize_body(), None).await {
+                Ok(reply) => {
+                    if let Some(s) = reply.session {
+                        sessions.insert(up.prefix.clone(), s);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        correlation_id = %ctx.trace_id,
+                        upstream = %up.upstream,
+                        error = %e,
+                        "MCP upstream could not be initialised"
+                    );
+                    return Err("upstream is not reachable".to_string());
+                }
+            }
+        }
+
+        Ok(Some(ProxiedCall {
+            session: sessions.get(&up.prefix).cloned(),
+            prefix: up.prefix.clone(),
+            upstream: up.upstream.clone(),
+            path: up.path.clone(),
+            body: serde_json::to_vec(&outbound).map_err(|e| e.to_string())?,
+            sessions,
+        }))
     }
 
     /// Route one call to the upstream its prefix names.

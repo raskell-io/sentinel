@@ -197,6 +197,15 @@ pub struct RequestContext {
     /// the whole body; for an event stream it holds only the event currently
     /// being assembled, so a stream that stays open is not withheld with it.
     pub(crate) mcp_listing_body: Vec<u8>,
+    /// A tool call on a multiplexing route that is being **proxied** rather
+    /// than answered by the gateway.
+    ///
+    /// Set in `request_filter` once the body has named the upstream, because
+    /// that is the last hook before a peer is chosen. Carries the body to send
+    /// on, with the upstream's prefix stripped from the tool name, since the
+    /// downstream body has been consumed by then and pingora has nothing left
+    /// to forward.
+    pub(crate) mcp_proxied_call: Option<crate::agentic::multiplex::ProxiedCall>,
 
     // === Body Decompression ===
     /// Whether decompression is enabled for body inspection
@@ -403,6 +412,7 @@ impl RequestContext {
             mcp_target: None,
             mcp_listing: None,
             mcp_listing_body: Vec::new(),
+            mcp_proxied_call: None,
             a2a_method: None,
             body_inspection_agents: Vec::new(),
             decompression_enabled: false,
