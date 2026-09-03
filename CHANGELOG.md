@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.09_4](#26094---2026-09-03) | 0.6.41 | 2026-09-03 | **An agent the proxy could not reach at startup was lost until the proxy restarted**, silently — including any agent that restarts; multiplexed MCP tool calls are now proxied rather than originated, so they use the connection pool and retry policy |
 | [26.09_3](#26093---2026-09-03) | 0.6.40 | 2026-09-03 | **Agents in the container images could not create their sockets**, so agent routes silently failed open; one route can now also front several MCP servers as a single endpoint, merging their listings and routing calls by tool |
 | [26.09_2](#26092---2026-09-02) | 0.6.39 | 2026-09-02 | **Health checks never probed anything** — every `health-check` block in every configuration was inert, so failover was an appearance rather than a fact; MCP gateway: per-tool metrics, per-tool rate limiting, tool-list filtering, and an MCP-native health check |
 | [26.09_1](#26091---2026-09-01) | 0.6.38 | 2026-09-01 | Dependency updates only; the XML parser in the data-masking agent was ported to quick-xml 0.42 |
@@ -81,6 +82,55 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.09_4] - 2026-09-03
+
+**Crate version:** 0.6.41
+
+> **If you run agents, upgrade.** An agent that restarts was lost until the
+> proxy restarted, and with `failure-mode "open"` nothing reported it.
+
+### Fixed
+- **An agent the proxy could not reach at startup was lost for the life of the
+  process.** With `failure-mode "open"` — the default in the shipped examples —
+  this was silent: requests were forwarded unprocessed, the agent process looked
+  healthy, and nothing anywhere reported it.
+
+  Three ordinary situations produced it: an agent slower to start than the
+  proxy, **an agent that restarts** (a crash, an upgrade, a rolling deploy), and
+  a socket on a volume that is not ready yet.
+
+  Four things had to change, each of which alone kept the agent dead:
+
+  - Registration **refused** an unreachable agent instead of recording it. The
+    pool reconnects the agents it holds, so one never added had nothing to
+    reconnect it. It is now registered and marked unhealthy.
+  - Pool maintenance was started **after** registration and behind it, so a
+    failed registration also took down the loop meant to recover it.
+  - Reconnection **gave up permanently** after three attempts — roughly fifteen
+    seconds — which covers most restarts. Attempts now bound the retry
+    *interval*, capped at two minutes, rather than stopping the retrying.
+  - Reconnection never learned the agent's capabilities, which the first three
+    hid; without it a recovered agent would answer calls while the proxy
+    believed it supported nothing, and configuration push would never reach it.
+
+  No configuration change is needed. If you added start-ordering to work around
+  this, it is no longer required — though ordering agents before the proxy is
+  still sensible.
+
+### Changed
+- **Multiplexed MCP tool calls are proxied rather than originated.** A route
+  fronting several MCP servers answered every request itself, so tool calls used
+  neither the connection pool, nor the route's retry policy, nor the upstream's
+  TLS settings. A tool call goes to exactly one upstream, so it now takes the
+  normal proxy path and gets all three.
+
+  Listings still cannot be: merging several answers into one is composition, not
+  proxying. Nor can the single `initialize` handshake per upstream, which
+  happens before the client's own request. So the first call to an upstream
+  costs one extra round trip and every call after it is proxied.
 
 ---
 
