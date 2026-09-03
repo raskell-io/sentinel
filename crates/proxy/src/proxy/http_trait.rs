@@ -1452,6 +1452,14 @@ impl ProxyHttp for ZentinelProxy {
             return Ok(true); // Filter handled request (e.g. CORS preflight)
         }
 
+        // A route fronting several MCP upstreams is answered here rather than
+        // forwarded: the upstream a call belongs to is named in the body, and a
+        // listing has to be merged from several answers. Costs nothing on any
+        // other route.
+        if self.serve_mcp_multiplex(session, ctx).await? {
+            return Ok(true);
+        }
+
         // Check for WebSocket upgrade requests
         let is_websocket_upgrade = session
             .req_header()
@@ -3874,6 +3882,16 @@ impl ProxyHttp for ZentinelProxy {
 // Helper methods for body streaming (not part of ProxyHttp trait)
 // =============================================================================
 
+/// The `Mcp-Session-Id` the client presented, if any.
+fn client_session(session: &Session) -> Option<String> {
+    session
+        .req_header()
+        .headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+}
+
 /// The response's media type: lowercased, without parameters.
 ///
 /// Compared exactly rather than by prefix, because `application/jsonl` and
@@ -3892,6 +3910,394 @@ fn response_mime(resp: &ResponseHeader) -> Option<String> {
 }
 
 impl ZentinelProxy {
+    /// Serve a route that fronts several MCP upstreams as one endpoint.
+    ///
+    /// Returns `Ok(true)` when the response has been written and the request
+    /// must not be forwarded. A route that does not multiplex returns
+    /// `Ok(false)` immediately and pays nothing.
+    ///
+    /// This runs in `request_filter`, before a peer is chosen, because the
+    /// upstream a call belongs to is named in the body and nowhere else. The
+    /// mirrored `Mcp-Name` header could be read earlier, and is not: a client
+    /// that could nominate its own upstream would be choosing which server
+    /// executes its call.
+    async fn serve_mcp_multiplex(
+        &self,
+        session: &mut Session,
+        ctx: &mut RequestContext,
+    ) -> Result<bool, Box<Error>> {
+        use crate::agentic::{gateway, jsonrpc, listing, multiplex::Multiplexer, namespace};
+
+        let Some(mcp) = ctx.route_config.as_ref().and_then(|r| r.mcp.as_ref()) else {
+            return Ok(false);
+        };
+        let mux = match Multiplexer::from_config(mcp) {
+            Ok(None) => return Ok(false),
+            Ok(Some(m)) => m,
+            Err(e) => {
+                // A route configured to multiplex but unable to is refused
+                // rather than quietly forwarded to its single `upstream`,
+                // which would apply none of the policy the operator wrote.
+                error!(
+                    correlation_id = %ctx.trace_id,
+                    route_id = ?ctx.route_id,
+                    error = %e,
+                    "MCP multiplexing route is misconfigured"
+                );
+                return Err(Error::explain(ErrorType::HTTPStatus(500), e.to_string()));
+            }
+        };
+
+        // Read the whole envelope before deciding anything. Nothing has been
+        // forwarded at this point, so a refusal here costs the client one
+        // response and no upstream any work.
+        let mut body = Vec::new();
+        while let Some(chunk) = session.read_request_body().await? {
+            if body.len() + chunk.len() > jsonrpc::MAX_ENVELOPE_BYTES {
+                return Err(Error::explain(
+                    ErrorType::HTTPStatus(413),
+                    "MCP request body is larger than this route will parse",
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        let envelope = match jsonrpc::parse(&body) {
+            Ok(e) => e,
+            Err(e) => {
+                return self
+                    .write_mcp_reply(
+                        session,
+                        ctx,
+                        &gateway::error_response(
+                            &serde_json::Value::Null,
+                            -32700,
+                            &format!("request is not a JSON-RPC message: {e:?}"),
+                        ),
+                        None,
+                    )
+                    .await
+            }
+        };
+
+        // The id is taken from the raw body, not from the envelope.
+        //
+        // `Envelope` normalises it to a String because policy and audit only
+        // need something to name the call by. JSON-RPC requires the response id
+        // to equal the request id *including its type*, so answering `42` with
+        // `"42"` is a protocol violation a strict client is entitled to reject.
+        let id = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("id").cloned())
+            .unwrap_or(serde_json::Value::Null);
+        let method = envelope.method.clone().unwrap_or_default();
+
+        // Enforce the route's MCP policy here, because this path never reaches
+        // `evaluate_agentic_policy` -- that runs in `request_body_filter`, and
+        // a multiplexing route answers before the body is ever forwarded.
+        //
+        // Without this the short-circuit would silently disable every policy an
+        // operator wrote on the route, which is the failure this module's
+        // neighbours exist to prevent.
+        let headers: Vec<(String, String)> = session
+            .req_header()
+            .headers
+            .iter()
+            .filter_map(|(k, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|v| (k.as_str().to_ascii_lowercase(), v.to_string()))
+            })
+            .collect();
+
+        if let crate::agentic::mcp::Decision::Deny { reason } =
+            crate::agentic::mcp::evaluate(&crate::agentic::mcp::Policy::from(mcp), &headers, &body)
+        {
+            warn!(
+                correlation_id = %ctx.trace_id,
+                route_id = ?ctx.route_id,
+                reason = %reason,
+                "MCP request denied on a multiplexing route"
+            );
+            self.metrics.record_blocked_request("mcp_policy");
+            let id = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("id").cloned())
+                .unwrap_or(serde_json::Value::Null);
+            let doc = crate::agentic::gateway::error_response(&id, -32600, &reason.to_string());
+            return self.write_mcp_reply(session, ctx, &doc, None).await;
+        }
+
+        let mut sessions = mux.sessions(client_session(session).as_deref());
+
+        let reply = if let Some(field) = listing::listed_field(&method) {
+            let allowed: std::collections::HashSet<String> =
+                mcp.allowed_tools.iter().cloned().collect();
+            let denied: std::collections::HashSet<String> =
+                mcp.denied_tools.iter().cloned().collect();
+            self.mcp_merged_listing(
+                &mux,
+                &method,
+                field,
+                &id,
+                &mut sessions,
+                &allowed,
+                &denied,
+                ctx,
+            )
+            .await
+        } else if method == "initialize" {
+            // Answered by the gateway itself. Fanning out here would open a
+            // session on every upstream for a client that may use one, which is
+            // what lazy initialisation exists to avoid.
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": gateway::PROTOCOL_VERSION,
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "zentinel-gateway", "version": "1.0" },
+                },
+            })
+        } else if let Some(target) = envelope.target.as_deref() {
+            self.mcp_route_call(&mux, target, &body, &id, &mut sessions, ctx)
+                .await
+        } else {
+            gateway::error_response(
+                &id,
+                -32601,
+                &format!("{method} is not supported on a multiplexing route"),
+            )
+        };
+
+        let token = mux.token(&sessions).ok();
+        self.write_mcp_reply(session, ctx, &reply, token.as_deref())
+            .await
+    }
+
+    /// Ask every upstream for its listing and merge the answers.
+    ///
+    /// An upstream that fails is logged and skipped rather than failing the
+    /// whole listing: one unreachable server should cost the client that
+    /// server's tools, not all of them.
+    async fn mcp_merged_listing(
+        &self,
+        mux: &crate::agentic::multiplex::Multiplexer,
+        method: &str,
+        field: &'static str,
+        id: &serde_json::Value,
+        sessions: &mut std::collections::BTreeMap<String, String>,
+        allowed: &std::collections::HashSet<String>,
+        denied: &std::collections::HashSet<String>,
+        ctx: &RequestContext,
+    ) -> serde_json::Value {
+        use crate::agentic::{gateway, multiplex};
+
+        let request = serde_json::json!({
+            "jsonrpc": "2.0", "id": "zentinel-list", "method": method,
+        });
+
+        let mut merged = Vec::new();
+        for up in mux.upstreams() {
+            let Some(url) = self.mcp_upstream_url(&up.upstream, &up.path, ctx).await else {
+                warn!(
+                    correlation_id = %ctx.trace_id,
+                    upstream = %up.upstream,
+                    "MCP upstream has no reachable target; its tools are omitted"
+                );
+                continue;
+            };
+
+            match gateway::call(&url, &request, sessions.get(&up.prefix).map(String::as_str)).await
+            {
+                Ok(reply) => {
+                    if let Some(s) = reply.session {
+                        sessions.insert(up.prefix.clone(), s);
+                    }
+                    if let Some(entries) = multiplex::entries_of(&reply.doc, field) {
+                        multiplex::merge_listing(&mut merged, entries, &up.prefix);
+                    }
+                }
+                Err(e) => warn!(
+                    correlation_id = %ctx.trace_id,
+                    upstream = %up.upstream,
+                    error = %e,
+                    "MCP upstream did not answer a listing; its tools are omitted"
+                ),
+            }
+        }
+
+        // The route's allow/deny lists apply to the merged, namespaced view --
+        // the names the client actually sees. Advertising a tool this route
+        // would refuse a call to is the defect #457 fixed for a single
+        // upstream; it must not come back on the multiplexed path.
+        let hidden = multiplex::filter_merged(&mut merged, allowed, denied);
+        if hidden > 0 {
+            debug!(
+                correlation_id = %ctx.trace_id,
+                route_id = ?ctx.route_id,
+                hidden = hidden,
+                "Hid merged MCP entries this route would refuse a call to"
+            );
+            self.metrics.record_mcp_listing_filtered(
+                ctx.route_id.as_deref().unwrap_or("unknown"),
+                method,
+                hidden as u64,
+            );
+        }
+
+        multiplex::listing_response(id, field, merged)
+    }
+
+    /// Route one call to the upstream its prefix names.
+    async fn mcp_route_call(
+        &self,
+        mux: &crate::agentic::multiplex::Multiplexer,
+        target: &str,
+        body: &[u8],
+        id: &serde_json::Value,
+        sessions: &mut std::collections::BTreeMap<String, String>,
+        ctx: &RequestContext,
+    ) -> serde_json::Value {
+        use crate::agentic::gateway;
+
+        let Some((up, bare)) = mux.route(target) else {
+            // Not a guess. Picking an upstream for an unqualified name would
+            // send the call somewhere nobody configured.
+            return gateway::error_response(
+                id,
+                -32602,
+                &format!("\"{target}\" does not name a tool on this endpoint"),
+            );
+        };
+
+        let Some(url) = self.mcp_upstream_url(&up.upstream, &up.path, ctx).await else {
+            return gateway::error_response(id, -32603, "upstream is not reachable");
+        };
+
+        // Rewrite the call to the name the upstream knows it by.
+        let mut outbound: serde_json::Value = match serde_json::from_slice(body) {
+            Ok(v) => v,
+            Err(e) => return gateway::error_response(id, -32700, &e.to_string()),
+        };
+        for field in ["name", "uri"] {
+            if let Some(params) = outbound.get_mut("params").and_then(|p| p.as_object_mut()) {
+                if params.get(field).and_then(|v| v.as_str()) == Some(target) {
+                    params.insert(field.to_string(), serde_json::Value::from(bare.clone()));
+                    break;
+                }
+            }
+        }
+
+        // Lazy initialisation: the session is opened the first time a call
+        // actually routes here, not when the client initialised.
+        if !sessions.contains_key(&up.prefix) {
+            match gateway::call(&url, &gateway::initialize_body(), None).await {
+                Ok(reply) => {
+                    if let Some(s) = reply.session {
+                        sessions.insert(up.prefix.clone(), s);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        correlation_id = %ctx.trace_id,
+                        upstream = %up.upstream,
+                        error = %e,
+                        "MCP upstream could not be initialised"
+                    );
+                    return gateway::error_response(id, -32603, "upstream is not reachable");
+                }
+            }
+        }
+
+        match gateway::call(
+            &url,
+            &outbound,
+            sessions.get(&up.prefix).map(String::as_str),
+        )
+        .await
+        {
+            Ok(reply) => {
+                if let Some(s) = reply.session {
+                    sessions.insert(up.prefix.clone(), s);
+                }
+                // The upstream answered the id it was given; the client is
+                // owed its own.
+                let mut doc = reply.doc;
+                if let Some(obj) = doc.as_object_mut() {
+                    obj.insert("id".to_string(), id.clone());
+                }
+                doc
+            }
+            Err(e) => {
+                warn!(
+                    correlation_id = %ctx.trace_id,
+                    upstream = %up.upstream,
+                    error = %e,
+                    "MCP upstream did not answer a call"
+                );
+                gateway::error_response(id, -32603, "upstream did not answer")
+            }
+        }
+    }
+
+    /// Resolve a named upstream to a URL for a gateway-originated call.
+    ///
+    /// Goes through the route's `UpstreamPool`, so load balancing, discovery
+    /// and health checking all still apply — a fan-out reaches the same targets
+    /// a proxied request would.
+    async fn mcp_upstream_url(
+        &self,
+        upstream: &str,
+        path: &str,
+        ctx: &RequestContext,
+    ) -> Option<String> {
+        let pool = self.upstream_pools.get(upstream).await?;
+
+        // Selection sees the client, so algorithms that key on it — ip_hash,
+        // sticky sessions — pick the same target a proxied request would rather
+        // than a different one for every fan-out.
+        let selection_ctx = crate::upstream::RequestContext {
+            client_ip: ctx.client_ip.parse().ok(),
+            headers: std::collections::HashMap::new(),
+            path: path.to_string(),
+            method: "POST".to_string(),
+        };
+        let peer = pool.select_peer(Some(&selection_ctx)).await.ok()?;
+        let scheme = if peer.is_tls() { "https" } else { "http" };
+        Some(format!("{scheme}://{}{path}", peer._address))
+    }
+
+    /// Write a JSON-RPC document as the response to this request.
+    async fn write_mcp_reply(
+        &self,
+        session: &mut Session,
+        ctx: &RequestContext,
+        doc: &serde_json::Value,
+        token: Option<&str>,
+    ) -> Result<bool, Box<Error>> {
+        use crate::agentic::gateway::SESSION_HEADER;
+
+        let body = serde_json::to_vec(doc).unwrap_or_else(|_| b"{}".to_vec());
+
+        let mut header = pingora::http::ResponseHeader::build(200, None)?;
+        header.insert_header("Content-Type", "application/json")?;
+        header.insert_header("Content-Length", body.len().to_string())?;
+        header.insert_header("X-Correlation-Id", ctx.trace_id.as_str())?;
+        if let Some(t) = token {
+            header.insert_header(SESSION_HEADER, t)?;
+        }
+
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session
+            .write_response_body(Some(Bytes::from(body)), true)
+            .await?;
+
+        Ok(true)
+    }
+
     /// Decide whether this response is an MCP listing that must be cut down to
     /// what the route permits, and prepare its headers if so.
     ///

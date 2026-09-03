@@ -8512,6 +8512,7 @@ dependencies = [
  "arc-swap",
  "async-memcached",
  "async-trait",
+ "aws-lc-rs",
  "base64 0.23.1",
  "brotli 8.0.4",
  "bytes",

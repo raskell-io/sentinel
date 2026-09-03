@@ -25,9 +25,13 @@
 //! contents are safe.
 
 pub mod a2a;
+pub mod gateway;
 pub mod jsonrpc;
 pub mod listing;
 pub mod mcp;
+pub mod multiplex;
+pub mod namespace;
+pub mod session;
 
 use zentinel_config::agentic::{
     A2aConfig, McpConfig, UninspectableBody as ConfigUninspectable, UnknownMethods as ConfigUnknown,
@@ -175,6 +179,8 @@ mod conversion_tests {
             // non-default here so that if it ever *is* added to `Policy`, this
             // test is already exercising the interesting value.
             filter_tool_list: false,
+            upstreams: Vec::new(),
+            session_key: None,
         };
         let p = mcp::Policy::from(&cfg);
 
