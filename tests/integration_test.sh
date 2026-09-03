@@ -401,6 +401,12 @@ test_echo_agent() {
         log_info "Shared socket volume:"
         docker compose -f docker-compose.yml run --rm --entrypoint sh socket-init \
             -c "ls -la /sockets" 2>&1 | sed 's/^/    /' || true
+        # The proxy's side of the conversation. Without this the agent can be
+        # seen listening and the headers seen missing, with nothing to say what
+        # happened in between.
+        log_info "Proxy agent activity:"
+        docker compose -f docker-compose.yml logs --tail 200 proxy 2>&1 \
+            | grep -iE "agent|echo" | tail -25 | sed 's/^/    /' || true
     fi
 
     log_test "Echo agent stamps its own correlation ID"
