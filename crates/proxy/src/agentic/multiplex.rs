@@ -157,6 +157,25 @@ pub fn merge_listing(into: &mut Vec<Value>, mut entries: Vec<Value>, prefix: &st
     into.append(&mut entries);
 }
 
+/// Whether this method's entries can be merged across upstreams.
+///
+/// Tools and prompts carry bare names, which [`super::namespace`] prefixes so a
+/// call can be routed back to the upstream it came from. **Resources cannot**:
+/// they are identified by URI, and a URI is not namespaced — prefixing one
+/// produces something that is not a URI at all.
+///
+/// Merging them anyway produces a listing that is actively wrong rather than
+/// merely incomplete: two upstreams serving `file:///a.txt` appear as two
+/// entries with the same URI and no way to tell them apart, and reading either
+/// is refused, because the URI carries no prefix to route on. That is the
+/// advertised-surface-disagrees-with-enforced-surface defect this proxy fixed
+/// for tools, arriving by a different door.
+///
+/// So a multiplexing route does not serve resources at all, and says so.
+pub fn can_merge(method: &str) -> bool {
+    !method.starts_with("resources/")
+}
+
 /// Remove from a merged listing the entries a call would be refused.
 ///
 /// The route's allow/deny lists name tools as the client sees them —
@@ -414,6 +433,19 @@ mod tests {
             0
         );
         assert_eq!(merged.len(), 1);
+    }
+
+    /// Tools and prompts namespace cleanly; resources do not, so they are not
+    /// merged rather than being merged into something unusable.
+    #[test]
+    fn resources_are_not_mergeable() {
+        assert!(can_merge("tools/list"));
+        assert!(can_merge("tools/call"));
+        assert!(can_merge("prompts/list"));
+        assert!(can_merge("prompts/get"));
+        assert!(!can_merge("resources/list"));
+        assert!(!can_merge("resources/read"));
+        assert!(!can_merge("resources/templates/list"));
     }
 
     #[test]
