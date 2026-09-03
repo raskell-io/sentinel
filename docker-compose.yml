@@ -21,8 +21,18 @@ services:
       ZENTINEL_CONFIG: /etc/zentinel/zentinel.kdl
     networks:
       - zentinel
+    # `echo` and `socket-init` are listed for a reason worth keeping: the proxy
+    # registers each agent once, at startup, and a registration that fails is
+    # never retried -- the agent is then absent from the pool for the life of
+    # the process, and every call to it answers "Agent <id> not found" while the
+    # agent sits there listening. So the agents must be up before the proxy is.
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+      socket-init:
+        condition: service_completed_successfully
+      echo:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
       interval: 10s
@@ -31,12 +41,40 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # Prepares the shared agent-socket volume.
+  #
+  # A Docker named volume is created root-owned unless the image supplies the
+  # directory with an owner, and the `/var/run` -> `/run` symlink in both the
+  # Debian and distroless bases makes that supply unreliable. The agents run as
+  # `nonroot` and so could not create their sockets: the bind failed with
+  # EACCES, the proxy had nothing to connect to, and every agent route silently
+  # failed open.
+  #
+  # Doing it explicitly here rather than relying on image layout is the whole
+  # point -- it does not depend on which container starts first, on how Docker
+  # resolves the mount path through a symlink, or on volume-initialisation
+  # semantics. 1777 because the proxy and the agents run as different users;
+  # sticky so one agent cannot remove another's socket.
+  socket-init:
+    image: busybox:latest
+    container_name: zentinel-socket-init
+    user: "0:0"
+    command: ["sh", "-c", "mkdir -p /sockets && chmod 1777 /sockets && ls -ld /sockets"]
+    volumes:
+      - agent-sockets:/sockets
+    networks:
+      - zentinel
+    restart: "no"
+
   # Echo agent (reference implementation for testing)
   echo:
     build:
       context: .
       target: echo-agent
     container_name: zentinel-echo
+    depends_on:
+      socket-init:
+        condition: service_completed_successfully
     volumes:
       - agent-sockets:/var/run/zentinel
     environment:

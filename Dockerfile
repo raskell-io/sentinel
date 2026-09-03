@@ -175,8 +175,21 @@ COPY --from=builder /app/target/release/zentinel /usr/local/bin/zentinel
 COPY config/docker/default.kdl /etc/zentinel/zentinel.kdl
 
 # Create directories with correct ownership
-RUN mkdir -p /var/lib/zentinel /var/log/zentinel && \
-    chown -R zentinel:zentinel /etc/zentinel /var/lib/zentinel /var/log/zentinel
+#
+# `/var/run/zentinel` is the shared agent-socket directory, and it is created
+# here for a reason worth writing down: a Docker named volume mounted at a path
+# the image does not contain is created **root-owned**. Agents run as `nonroot`
+# and so could not create their socket in it, the proxy therefore had nothing to
+# connect to, every agent route silently failed open, and the integration suite
+# reported it as "the agent may not be running" for months.
+#
+# 1777 rather than an owner, because the containers sharing this volume run as
+# different users -- the proxy as `zentinel`, the agents as `nonroot` -- and
+# whichever starts first initialises the volume. Sticky, like /tmp, so one agent
+# cannot remove another's socket.
+RUN mkdir -p /var/lib/zentinel /var/log/zentinel /var/run/zentinel && \
+    chown -R zentinel:zentinel /etc/zentinel /var/lib/zentinel /var/log/zentinel && \
+    chmod 1777 /var/run/zentinel
 
 # Environment variables
 ENV RUST_LOG=info,zentinel_proxy=info \
@@ -234,6 +247,7 @@ CMD ["-c", "/etc/zentinel/zentinel.kdl"]
 FROM gcr.io/distroless/cc-debian12:nonroot AS echo-agent
 
 COPY --from=builder /app/target/release/zentinel-echo-agent /zentinel-echo-agent
+COPY --chmod=1777 docker/socket-dir /var/run/zentinel
 
 # ECHO_AGENT_SOCKET, not SOCKET_PATH: the agent's argument parser reads the
 # former, so the latter was inert and the agent fell back to its hardcoded
@@ -252,6 +266,7 @@ CMD ["/zentinel-echo-agent"]
 FROM gcr.io/distroless/cc-debian12:nonroot AS echo-agent-prebuilt
 
 COPY zentinel-echo-agent /zentinel-echo-agent
+COPY --chmod=1777 docker/socket-dir /var/run/zentinel
 
 LABEL org.opencontainers.image.title="Zentinel Echo Agent" \
       org.opencontainers.image.description="Echo agent for Zentinel proxy testing"

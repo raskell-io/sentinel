@@ -355,25 +355,81 @@ test_health_endpoints() {
 }
 
 # Test echo agent
+# The echo agent, asserted on headers only it can produce.
+#
+# Both assertions here used to be unable to do their job, and had been that way
+# for as long as they existed:
+#
+#   grep -qi "X-.*Agent"   against the *response* headers. The agent's
+#                          `X-Echo-Agent` is a **request** header -- it is added
+#                          on the way to the upstream and never appears in a
+#                          response. The assertion could not pass, so it skipped
+#                          every run and read as "the agent may not be running".
+#
+#   grep -qi "Correlation" against the *response* headers. That matches
+#                          `X-Correlation-Id`, which the **proxy** adds to every
+#                          response whether an agent is involved or not. It
+#                          passed whether or not the agent ran, which is worse
+#                          than skipping: it reported a working agent path on
+#                          the strength of a header the agent had no part in.
+#
+# So the agent was working the whole time and neither test could tell you. They
+# now assert on `X-Echo-Response-*`, which nothing but this agent emits, and on
+# the request headers arriving at the upstream, which is the direction most of
+# the agent's work goes in.
 test_echo_agent() {
     log_section "Echo Agent Tests"
 
-    log_test "Echo agent adds headers"
-    local headers=$(curl -sI "http://${PROXY_HOST}:${PROXY_PORT}/echo/test" 2>/dev/null)
+    log_test "Echo agent adds response headers"
+    local headers
+    headers=$(curl -s -D - -o /dev/null "http://${PROXY_HOST}:${PROXY_PORT}/echo/test" 2>/dev/null)
 
-    if echo "$headers" | grep -qi "X-.*Agent"; then
-        log_success "Echo agent added agent headers"
+    if echo "$headers" | grep -qi "X-Echo-Response-Status"; then
+        log_success "Echo agent added X-Echo-Response-Status"
     else
-        log_skip "Echo agent headers not detected (agent may not be running)"
+        log_failure "X-Echo-Response-Status missing; the agent did not process the response"
+        # The suite dumps proxy logs on failure and never the agent's, which is
+        # why "agent may not be running" went undiagnosed for so long: the one
+        # process that could say why was the one nobody looked at.
+        log_info "Echo agent container logs:"
+        docker compose -f docker-compose.yml logs --tail 30 echo 2>&1 | sed 's/^/    /' || true
+        # Run through the socket-init service rather than `exec` into the
+        # proxy: the proxy and agent images are distroless and have no `ls`,
+        # which is how the first attempt at this diagnostic failed. Going via
+        # the service also avoids hardcoding the volume name, which Compose
+        # prefixes with the project.
+        log_info "Shared socket volume:"
+        docker compose -f docker-compose.yml run --rm --entrypoint sh socket-init \
+            -c "ls -la /sockets" 2>&1 | sed 's/^/    /' || true
+        # The proxy's side of the conversation. Without this the agent can be
+        # seen listening and the headers seen missing, with nothing to say what
+        # happened in between.
+        log_info "Proxy agent activity:"
+        docker compose -f docker-compose.yml logs --tail 200 proxy 2>&1 \
+            | grep -iE "agent|echo" | tail -25 | sed 's/^/    /' || true
     fi
 
-    log_test "Echo agent with correlation ID"
-    headers=$(curl -sI "http://${PROXY_HOST}:${PROXY_PORT}/echo/test" 2>/dev/null)
-
-    if echo "$headers" | grep -qi "Correlation"; then
-        log_success "Echo agent added correlation ID"
+    log_test "Echo agent stamps its own correlation ID"
+    # Deliberately the agent's own header, not a bare match on "Correlation":
+    # the proxy sets X-Correlation-Id regardless, so matching that proves
+    # nothing about the agent.
+    if echo "$headers" | grep -qi "X-Echo-Response-Correlation-Id"; then
+        log_success "Echo agent added X-Echo-Response-Correlation-Id"
     else
-        log_skip "Correlation ID not detected"
+        log_failure "X-Echo-Response-Correlation-Id missing"
+    fi
+
+    log_test "Echo agent request headers reach the upstream"
+    # httpbin's /anything echoes the request it received, so the agent's
+    # request-side headers are visible in the body. This is the half of the
+    # agent's work no response-header check can see.
+    local body
+    body=$(curl -s "http://${PROXY_HOST}:${PROXY_PORT}/echo/test" 2>/dev/null)
+
+    if echo "$body" | grep -qi "X-Echo-Agent"; then
+        log_success "Echo agent request headers arrived upstream"
+    else
+        log_failure "X-Echo-Agent not seen by the upstream; request-side agent processing did not happen"
     fi
 
     log_test "Echo agent request passes through"
