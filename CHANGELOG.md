@@ -18,6 +18,7 @@ for details.
 
 | CalVer | Crate Version | Date | Highlights |
 |--------|---------------|------|------------|
+| [26.09_5](#26095---2026-09-04) | 0.6.42 | 2026-09-04 | **`zentinel bundle install` failed for every non-root user**, so no agent could be installed by following the documented instructions |
 | [26.09_4](#26094---2026-09-03) | 0.6.41 | 2026-09-03 | **An agent the proxy could not reach at startup was lost until the proxy restarted**, silently — including any agent that restarts; multiplexed MCP tool calls are now proxied rather than originated, so they use the connection pool and retry policy |
 | [26.09_3](#26093---2026-09-03) | 0.6.40 | 2026-09-03 | **Agents in the container images could not create their sockets**, so agent routes silently failed open; one route can now also front several MCP servers as a single endpoint, merging their listings and routing calls by tool |
 | [26.09_2](#26092---2026-09-02) | 0.6.39 | 2026-09-02 | **Health checks never probed anything** — every `health-check` block in every configuration was inert, so failover was an appearance rather than a fact; MCP gateway: per-tool metrics, per-tool rate limiting, tool-list filtering, and an MCP-native health check |
@@ -82,6 +83,47 @@ for details.
 ## [Unreleased]
 
 _Nothing yet._
+
+---
+
+## [26.09_5] - 2026-09-04
+
+**Crate version:** 0.6.42
+
+> **If you install agents with `zentinel bundle install`, upgrade.** It could not
+> succeed for a non-root user on a standard Unix system.
+
+### Fixed
+- **`zentinel bundle install <agent>` failed for every non-root user**, which is
+  the documented first step for installing any agent:
+
+  ```
+  Install path:   /usr/local/bin
+  Mode:           system-wide (requires root)
+  Error: Failed to create installation directories
+  Caused by: Permission denied: /etc/zentinel/agents
+  ```
+
+  The writability check asked the wrong question. It used
+  `Permissions::readonly()`, which on Unix is `mode & 0o222 == 0` — *"can anyone
+  write here?"*, not *"can I?"*. `/usr/local/bin` is `root:wheel drwxr-xr-x` on a
+  standard install, so the owner's write bit made it look writable to every user
+  on the machine. The installer therefore chose a system-wide install for
+  everyone and then failed creating `/etc/zentinel/agents`, and the user-local
+  fallback beneath it was unreachable.
+
+  It now uses `access(2)`, and checks every directory the install creates rather
+  than only the binary one — a check narrower than the operation it guards is a
+  check that passes and then fails.
+
+  A user-local install places the binary in `~/.local/bin` and its configuration
+  in `~/.config/zentinel/agents/`. Use `--prefix` to choose somewhere else, or
+  run as root for the system-wide install.
+
+  Reported by [@alanorth](https://github.com/alanorth) at
+  [registry.zentinelproxy.io#3](https://github.com/zentinelproxy/registry.zentinelproxy.io/issues/3),
+  who also spotted that the registry pages named a path — `~/.zentinel/agents/` —
+  that the installer has never used. All 23 agent pages have been corrected.
 
 ---
 
