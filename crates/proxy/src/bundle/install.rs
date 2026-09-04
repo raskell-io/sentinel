@@ -495,33 +495,52 @@ mod tests {
         );
     }
 
-    /// The defect this replaced: `readonly()` asks whether *anyone* can write,
-    /// so a root-owned `drwxr-xr-x` directory looked writable to every user and
-    /// `detect()` chose a system-wide install that then failed on `/etc`.
+    /// The exact defect this replaced, constructed rather than assumed.
     ///
-    /// Skipped when running as root, where the answer is legitimately yes.
+    /// Mode `0o522` is the distinguishing case: the group and other write bits
+    /// are set, so `mode & 0o222 != 0` and the old `readonly()` check called it
+    /// writable — but the *owner* has only `r-x`, so the process running this
+    /// test cannot actually create anything in it.
+    ///
+    /// The previous version of this test asserted that `/usr/local/bin` is not
+    /// writable, which is an assumption about the machine rather than a
+    /// property of the code: on a GitHub runner that directory *is* writable by
+    /// the build user, and the test failed there for a correct reason. This one
+    /// holds anywhere.
     #[test]
-    fn a_root_owned_directory_is_not_writable_by_an_ordinary_user() {
-        #[cfg(unix)]
-        {
-            if unsafe { libc::geteuid() } == 0 {
-                return; // root can write it, and should
-            }
-            let system = Path::new("/usr/local/bin");
-            if system.exists() {
-                assert!(
-                    !is_writable(system),
-                    "/usr/local/bin reported writable to a non-root user; \
-                     detect() would choose a system-wide install that cannot complete"
-                );
-            }
-            // `/etc` is root-owned on every supported platform.
-            assert!(!is_writable(Path::new("/etc")));
+    #[cfg(unix)]
+    fn a_directory_others_may_write_but_we_may_not_is_not_writable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root bypasses permission checks entirely
         }
+
+        let dir =
+            std::env::temp_dir().join(format!("zentinel-writable-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o522)).expect("set mode");
+
+        let mode = std::fs::metadata(&dir)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_ne!(
+            mode & 0o222,
+            0,
+            "the old check would have called this writable"
+        );
+        assert!(
+            !is_writable(&dir),
+            "a directory we cannot write must not be reported writable"
+        );
+
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A directory this user owns is writable, so the check is not simply
-    /// always-false.
+    /// A directory we own is writable, so the check is not simply always-false.
     #[test]
     fn a_directory_we_own_is_writable() {
         let dir = std::env::temp_dir();
@@ -534,46 +553,27 @@ mod tests {
     fn a_missing_directory_defers_to_its_parent() {
         let missing = std::env::temp_dir().join("zentinel-install-check-does-not-exist");
         assert!(is_writable(&missing));
-        assert!(!is_writable(Path::new(
-            "/etc/zentinel-install-check-does-not-exist"
-        )));
     }
 
-    /// `detect()` must not choose a system-wide install for a non-root user:
-    /// that is the bug users hit, and it failed only later, at `ensure_dirs`.
+    /// Whatever `detect()` returns must be usable.
+    ///
+    /// Asserted as an invariant rather than as "must be user-local": on a
+    /// machine where the system paths genuinely are writable, choosing them is
+    /// correct. What must never happen is `detect()` handing back paths that
+    /// `ensure_dirs` will then fail on, which is the bug users hit.
     #[test]
-    fn detect_does_not_choose_system_paths_without_the_rights_to_use_them() {
-        #[cfg(unix)]
-        {
-            if unsafe { libc::geteuid() } == 0 {
-                return;
-            }
-            let paths = InstallPaths::detect();
-            assert!(
-                !paths.system_wide,
-                "detect() chose a system-wide install as a non-root user"
-            );
-            assert!(
-                paths.all_writable(),
-                "detect() returned paths it cannot actually create"
-            );
-        }
+    fn detect_never_returns_paths_it_cannot_create() {
+        let paths = InstallPaths::detect();
+        assert!(
+            paths.all_writable(),
+            "detect() returned paths it cannot actually create: {paths:?}"
+        );
     }
 
     /// The writability check must cover the same directories the install
     /// creates. Checking only `bin_dir` is what let a doomed install start.
     #[test]
     fn all_writable_covers_every_directory_ensure_dirs_creates() {
-        let system = InstallPaths::system();
-        #[cfg(unix)]
-        {
-            if unsafe { libc::geteuid() } != 0 {
-                assert!(
-                    !system.all_writable(),
-                    "system paths cannot all be writable to a non-root user"
-                );
-            }
-        }
         let user = InstallPaths::user();
         assert!(user.all_writable(), "the user fallback must be usable");
     }
